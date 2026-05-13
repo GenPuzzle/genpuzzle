@@ -1,0 +1,8 @@
+.next
+node_modules
+.DS_Store
+.claude
+
+# local env files
+.env*
+!.env.example
