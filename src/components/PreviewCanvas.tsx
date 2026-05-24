@@ -2,8 +2,10 @@
 
 import React, { useRef, useMemo } from 'react';
 import { useApp } from '@/lib/app-context';
+import { getMergedSettingsForPage } from '@/lib/page-settings';
 import {
   WordSearchGrid,
+  WordSearchPagePreview,
   SudokuGrid,
   CrosswordGrid,
   CryptogramDisplay,
@@ -15,8 +17,17 @@ import {
 import { Eye, EyeOff, ZoomIn, ZoomOut, Save, Download, RotateCw, ChevronLeft, ChevronRight, FileText } from 'lucide-react';
 import { Button } from './ui/button';
 import { generatePuzzlePDF, downloadPDF } from '@/lib/pdf-export';
+// PPT export is dynamically imported to avoid bundling pptxgenjs (which uses node:fs)
 import { WordSearchPuzzle } from '@/lib/puzzles/types';
-import { calculateLayout, calculateHighlights, formatWords, LayoutResult } from '@/lib/puzzle-layout';
+import {
+  calculateLayout,
+  calculateHighlights,
+  formatWords,
+  getPageDimensionsInches,
+  getSolutionGridFontSize,
+  LayoutResult,
+} from '@/lib/puzzle-layout';
+import { layoutPtToCss } from '@/lib/word-search-page-layout';
 
 export function PreviewCanvas() {
   const {
@@ -34,13 +45,29 @@ export function PreviewCanvas() {
     bookSettings,
     previewZoom,
     setPreviewZoom,
+    puzzleGridScale,
     triggerStylingUpdate,
+    pageOverrides,
+    applyMode,
+    titleToAnswerGap,
+    pageMargin,
   } = useApp();
 
   const canvasRef = useRef<HTMLDivElement>(null);
 
-  const handleZoomIn = () => setPreviewZoom((z) => Math.min(z + 25, 200));
-  const handleZoomOut = () => setPreviewZoom((z) => Math.max(z - 25, 50));
+  // Enable WordSearchGrid debug logging in browser devtools to trace opacity
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        (window as any).__WORDSEARCH_DEBUG_OPACITY__ = true;
+      } catch (e) {
+        // ignore
+      }
+    }
+  }, []);
+
+  const handleZoomIn = () => setPreviewZoom(Math.min(previewZoom + 25, 200));
+  const handleZoomOut = () => setPreviewZoom(Math.max(previewZoom - 25, 50));
 
   const handleSave = () => {
     const name = `${titleWords.title || currentPuzzleType} - ${new Date().toLocaleDateString()}`;
@@ -56,12 +83,21 @@ export function PreviewCanvas() {
     if (currentPuzzleType === 'word-search' && batchPuzzles.length > 0) {
       try {
         console.log('Generating PDF with batch puzzles...');
+        console.log('Solution highlight alpha (settings):', wordSearchSettings?.colors?.answerPage?.solutionHighlightAlpha);
         const pdfData = await generatePuzzlePDF({
-          bookSettings,
+          bookSettings: {
+            ...bookSettings,
+            ...wordSearchSettings.bookCanvas,
+          },
           titleWords,
           wordSearchSettings,
           puzzles: batchPuzzles,
           includeSolution: bookSettings.includeSolution,
+          puzzleGridScale,
+          titleToAnswerGap,
+          pageMargin,
+          pageOverrides,
+          applyMode,
         });
         console.log('PDF generated, downloading...');
         const filename = `${titleWords.title || 'word-search'}-${Date.now()}.pdf`;
@@ -77,11 +113,19 @@ export function PreviewCanvas() {
       try {
         console.log('Generating PDF with single puzzle...');
         const pdfData = await generatePuzzlePDF({
-          bookSettings,
+          bookSettings: {
+            ...bookSettings,
+            ...wordSearchSettings.bookCanvas,
+          },
           titleWords,
           wordSearchSettings,
           puzzles: [currentPuzzle as WordSearchPuzzle],
           includeSolution: bookSettings.includeSolution,
+          puzzleGridScale,
+          titleToAnswerGap,
+          pageMargin,
+          pageOverrides,
+          applyMode,
         });
         console.log('PDF generated, downloading...');
         const filename = `${titleWords.title || 'puzzle'}-${Date.now()}.pdf`;
@@ -97,55 +141,145 @@ export function PreviewCanvas() {
     }
   };
 
+  const handleExportPPT = async () => {
+    console.log('Starting PPT export...');
+    // Dynamic import to avoid bundling pptxgenjs (uses node:fs) on the client
+    const { generatePuzzlePPT } = await import('@/lib/ppt-export');
+    if (currentPuzzleType === 'word-search' && batchPuzzles.length > 0) {
+      try {
+        await generatePuzzlePPT({
+          bookSettings: {
+            ...bookSettings,
+            ...wordSearchSettings.bookCanvas,
+          },
+          titleWords,
+          wordSearchSettings,
+          puzzles: batchPuzzles,
+          includeSolution: bookSettings.includeSolution,
+          pageOverrides,
+          applyMode,
+        });
+      } catch (error) {
+        console.error('PPT export failed:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        alert(`Failed to export PowerPoint: ${errorMessage}`);
+      }
+    } else if (currentPuzzle) {
+      try {
+        await generatePuzzlePPT({
+          bookSettings: {
+            ...bookSettings,
+            ...wordSearchSettings.bookCanvas,
+          },
+          titleWords,
+          wordSearchSettings,
+          puzzles: [currentPuzzle as WordSearchPuzzle],
+          includeSolution: bookSettings.includeSolution,
+          pageOverrides,
+          applyMode,
+        });
+      } catch (error) {
+        console.error('PPT export failed:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        alert(`Failed to export PowerPoint: ${errorMessage}`);
+      }
+    } else {
+      alert('No puzzles to export. Please generate puzzles first.');
+    }
+  };
+
   const handlePrevPage = () => {
-    if (currentBatchIndex > 0) {
+    if (showSolution) {
+      setCurrentBatchIndex(Math.max(0, currentBatchIndex - answersPerPage));
+    } else if (currentBatchIndex > 0) {
       setCurrentBatchIndex(currentBatchIndex - 1);
     }
   };
 
   const handleNextPage = () => {
-    if (currentBatchIndex < batchPuzzles.length - 1) {
+    if (showSolution) {
+      setCurrentBatchIndex(Math.min(batchPuzzles.length - 1, currentBatchIndex + answersPerPage));
+    } else if (currentBatchIndex < batchPuzzles.length - 1) {
       setCurrentBatchIndex(currentBatchIndex + 1);
     }
   };
 
   // Get current puzzle based on type
-  const currentWsPuzzle = currentPuzzleType === 'word-search' && batchPuzzles.length > 0
-    ? batchPuzzles[currentBatchIndex]
+  const isWordSearch = currentPuzzleType === 'word-search';
+  const globalWordSearchSettings = isWordSearch ? wordSearchSettings : null;
+
+  const answersPerPage = globalWordSearchSettings?.bookCanvas.answersPerPage || 1;
+  const solutionPageIndex = Math.floor(currentBatchIndex / answersPerPage);
+  const pageIndex = showSolution ? solutionPageIndex : currentBatchIndex;
+  const settings = isWordSearch
+    ? getMergedSettingsForPage(wordSearchSettings, pageOverrides, applyMode, pageIndex)
     : null;
 
-  const settings = currentPuzzleType === 'word-search' ? wordSearchSettings : null;
+  const solutionPageCount = isWordSearch && batchPuzzles.length > 0 ? Math.ceil(batchPuzzles.length / answersPerPage) : 1;
+  const solutionPageStartIndex = solutionPageIndex * answersPerPage;
+  const solutionPagePuzzles = isWordSearch ? batchPuzzles.slice(solutionPageStartIndex, solutionPageStartIndex + answersPerPage) : [];
+  const currentWsPuzzle = isWordSearch && batchPuzzles.length > 0 ? batchPuzzles[currentBatchIndex] : null;
 
-  // Calculate shared layout for canvas and PDF consistency
+  const previewSolutionLayout = useMemo(() => {
+    if (answersPerPage === 4) return { columns: 2, rows: 2 };
+    if (answersPerPage === 2) return { columns: 1, rows: 2 };
+    return { columns: 1, rows: 1 };
+  }, [answersPerPage]);
+
+  const getSolutionCardCellSize = (puzzle: WordSearchPuzzle) => {
+    const previewPageWidthInches = settings?.bookCanvas.useCustomTrim ? settings.bookCanvas.customWidth : 8.5;
+    const previewPageHeightInches = settings?.bookCanvas.useCustomTrim ? settings.bookCanvas.customHeight : 11;
+    const previewPageWidthPx = previewPageWidthInches * 96;
+    const previewPageHeightPx = previewPageHeightInches * 96;
+    const pagePaddingPx = 48; // 0.5in padding
+    const gapPx = 16;
+    const cardWidth = (previewPageWidthPx - pagePaddingPx * 2 - gapPx * (previewSolutionLayout.columns - 1)) / previewSolutionLayout.columns;
+    const cardHeight = (previewPageHeightPx - pagePaddingPx * 2 - gapPx * (previewSolutionLayout.rows - 1)) / previewSolutionLayout.rows;
+    const innerPaddingPx = 16;
+    const titleHeight = 28;
+    const availableWidth = cardWidth - innerPaddingPx * 2;
+    const availableHeight = cardHeight - innerPaddingPx * 2 - titleHeight;
+    return Math.max(10, Math.floor(Math.min(availableWidth / puzzle.grid[0].length, availableHeight / puzzle.grid.length, 22)));
+  };
+
+  // Shared layout engine (same inputs as PDF export)
   const layout = useMemo((): LayoutResult | null => {
     if (!settings || !currentWsPuzzle) return null;
-
-    // Use standard page size for preview (8.5 x 11 inches)
+    const pageDims = getPageDimensionsInches(settings);
     return calculateLayout(
       currentWsPuzzle,
       settings,
       titleWords,
-      8.5, // pageWidthInches
-      11,  // pageHeightInches
-      showSolution
+      pageDims.width,
+      pageDims.height,
+      showSolution,
+      puzzleGridScale
     );
-  }, [settings, currentWsPuzzle, titleWords, showSolution, triggerStylingUpdate]);
+  }, [settings, currentWsPuzzle, titleWords, showSolution, puzzleGridScale, triggerStylingUpdate]);
 
   // Generate display title based on settings
   const displayTitle = useMemo(() => {
-    if (!settings) return titleWords.title || 'Puzzle';
+    if (!settings) return titleWords.title || 'Word Search';
+    if (showSolution) return '';
 
     const { selectTitleOption, titleText } = settings.typography;
 
     if (selectTitleOption === 'none') return '';
-    if (selectTitleOption === 'custom') return titleText;
+    if (selectTitleOption === 'custom') {
+      const lines = (titleText || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const puzzleNum = currentWsPuzzle?.puzzleNumber || 1;
+      return lines.length > 0 ? (lines[puzzleNum - 1] ?? lines[lines.length - 1]) : '';
+    }
     if (selectTitleOption === 'puzzle-number') {
       const puzzleNum = currentWsPuzzle?.puzzleNumber || 1;
       return `${titleText} #${puzzleNum}`;
     }
     return titleWords.title || 'Word Search';
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings?.typography.selectTitleOption, settings?.typography.titleText, titleWords.title, currentWsPuzzle?.puzzleNumber, triggerStylingUpdate]);
+  }, [settings?.typography.selectTitleOption, settings?.typography.titleText, titleWords.title, currentWsPuzzle?.puzzleNumber, triggerStylingUpdate, showSolution]);
 
   // Get subtitle
   const displaySubtitle = useMemo(() => {
@@ -154,16 +288,43 @@ export function PreviewCanvas() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.typography.includeSubtitle, settings?.typography.subtitleText, triggerStylingUpdate]);
 
+  type PreviewColors = {
+    backgroundColor: string;
+    titleColor: string;
+    subtitleColor: string;
+    boxColor: string;
+    puzzleColor: string;
+  };
+
   // Get colors based on mode (puzzle vs answer)
-  const currentColors = useMemo(() => {
+  const currentColors = useMemo<PreviewColors>(() => {
     if (!settings) {
       return {
-        background: '#ffffff',
-        title: '#1f2937',
-        grid: '#1f2937',
+        backgroundColor: '#ffffff',
+        titleColor: '#1f2937',
+        subtitleColor: '#6b7280',
+        boxColor: '#1f2937',
+        puzzleColor: '#1f2937',
       };
     }
-    return showSolution ? settings.colors.answerPage : settings.colors.puzzlePage;
+
+    if (showSolution) {
+      return {
+        backgroundColor: settings.colors.answerPage.backgroundColor,
+        titleColor: settings.colors.answerPage.titleColor,
+        subtitleColor: settings.colors.puzzlePage.subtitleColor,
+        boxColor: settings.colors.answerPage.boxColor,
+        puzzleColor: settings.colors.answerPage.lettersInSolutionColor,
+      };
+    }
+
+    return {
+      backgroundColor: settings.colors.puzzlePage.backgroundColor,
+      titleColor: settings.colors.puzzlePage.titleColor,
+      subtitleColor: settings.colors.puzzlePage.subtitleColor,
+      boxColor: settings.colors.puzzlePage.boxColor,
+      puzzleColor: settings.colors.puzzlePage.puzzleColor,
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.colors, showSolution, triggerStylingUpdate]);
 
@@ -180,18 +341,6 @@ export function PreviewCanvas() {
     return calculateHighlights(currentWsPuzzle, layout, 0); // Use 0 padding for tighter frames
   }, [layout, currentWsPuzzle, showSolution]);
 
-  // Calculate cell size for canvas (scaled from PDF points to pixels)
-  const canvasCellSize = useMemo(() => {
-    if (!layout) return 28;
-    // Convert PDF points to pixels (72 points = 1 inch, and 1 inch = 96 CSS pixels)
-    // But we need to scale based on the canvas display
-    const pdfCellSize = layout.cellSize;
-    const pdfPageWidth = layout.pageWidth;
-    const canvasPageWidth = 8.5 * 96; // 8.5 inches * 96 pixels per inch
-    const scale = canvasPageWidth / pdfPageWidth;
-    return Math.round(pdfCellSize * scale);
-  }, [layout]);
-
   const renderPuzzle = () => {
     if (currentPuzzleType === 'word-search') {
       if (batchPuzzles.length === 0) {
@@ -207,66 +356,80 @@ export function PreviewCanvas() {
       }
 
       const ws = settings;
-      const wsPuzzle = currentWsPuzzle as WordSearchPuzzle;
-      if (!wsPuzzle) return null;
+      if (!ws) return null;
 
-      return (
-        <div className="flex flex-col items-center gap-6">
-          {/* Puzzle Grid with box */}
-          <div
-            className={`${ws?.core.noBoxAroundPuzzle ? '' : 'border-2'}`}
-            style={{
-              borderColor: currentColors.boxColor,
-              borderRadius: '8px',
-              padding: ws?.core.noBoxAroundPuzzle ? 0 : 8,
-              position: 'relative',
-              backgroundColor: '#fafafa',
-              boxShadow: showSolution ? '0 4px 12px rgba(0, 0, 0, 0.08)' : 'none',
-            }}
-          >
-            <WordSearchGrid
-              puzzle={wsPuzzle}
-              showSolution={showSolution}
-              cellSize={canvasCellSize}
-              gridLines={ws?.core.addGridLines || false}
-              puzzleColor={showSolution ? currentColors.puzzleColor : currentColors.puzzleColor || '#1f2937'}
-              boxColor={currentColors.boxColor || '#1f2937'}
-              solutionStrokeColor={settings?.colors.answerPage.solutionFrameColor || '#000000'}
-              solutionStrokeThickness={settings?.colors.answerPage.solutionStrokeThickness || 1}
-              solutionStrokePadding={settings?.colors.answerPage.solutionStrokePadding || 0}
-              solutionFrameStyle={settings?.colors.answerPage.solutionFrameStyle || 'rounded'}
-              solutionFrameRadius={settings?.colors.answerPage.solutionFrameRadius || 6}
-              onlyHighlightWordListWords={showSolution ? false : (settings?.colors.answerPage.onlyHighlightWordListWords ?? true)}
-              wordList={formattedWords}
-            />
-          </div>
-
-          {/* Word List - hidden in solution mode */}
-          {!showSolution && !settings?.wordList.hideWordList && formattedWords.length > 0 && (
+      if (showSolution) {
+        return (
+          <div className="flex flex-col items-center gap-6 w-full">
             <div
-              className="mt-4"
+              className="grid w-full"
               style={{
-                fontFamily: settings?.wordList.wordListFontFamily || 'Inter',
-                fontSize: settings?.wordList.wordListFontSize || 12,
-                color: currentColors.wordListColor || '#4b5563',
-                columnCount: settings?.wordList.wordListColumns || 2,
-                columnGap: '1rem',
-                columnRule: settings?.wordList.wordListColumns > 1 ? '1px solid #e5e7eb' : 'none',
-                paddingLeft: settings?.wordList.wordListColumns > 1 ? '1rem' : 0,
+                gridTemplateColumns: `repeat(${previewSolutionLayout.columns}, minmax(0, 1fr))`,
+                gap: '16px',
+                padding: `${pageMargin * 0.75}px`,
               }}
             >
-              {formattedWords.map((word, idx) => (
-                <div key={idx} className="flex items-center gap-1 mb-1">
-                  {settings?.wordList.addCheckboxes && (
-                    <span className="w-4 h-4 border border-gray-400 rounded flex-shrink-0" />
-                  )}
-                  <span>{word}</span>
-                </div>
-              ))}
+              {solutionPagePuzzles.map((puzzle, index) => {
+                const cardCellSize = getSolutionCardCellSize(puzzle);
+                const titleText = `${ws.colors.answerPage.answerTitlePrefix || 'Solution'}${ws.colors.answerPage.showAnswerNumber ? ` ${puzzle.puzzleNumber || solutionPageStartIndex + index + 1}` : ''}`;
+
+                return (
+                  <div
+                    key={`solution-${puzzle.puzzleNumber || index}`}
+                    className="border border-gray-200 rounded-3xl bg-white p-4"
+                    style={{ minHeight: '100%' }}
+                  >
+                    <div
+                      className="text-center font-semibold"
+                      style={{
+                        color: ws.colors.answerPage.titleColor || '#1f2937',
+                        fontFamily: ws.colors.answerPage.answerTitleFontFamily || 'Inter',
+                        fontSize: `${ws.colors.answerPage.answerTitleFontSize || 20}px`,
+                        marginBottom: `${titleToAnswerGap}px`,
+                      }}
+                    >
+                      {titleText}
+                    </div>
+                    <div className="flex items-center justify-center">
+                      <WordSearchGrid
+                        puzzle={puzzle}
+                        showSolution={showSolution}
+                        cellSize={cardCellSize}
+                        noBoxAroundPuzzle={ws.core.noBoxAroundPuzzle || false}
+                        borderStrokeThickness={layoutPtToCss(ws.core.borderStrokeThickness || 2)}
+                        puzzleColor="#000000"
+                        boxColor={currentColors.boxColor || '#1f2937'}
+                        innerGridOpacity={ws.core.innerGridOpacity ?? 0}
+                        gridLinesStrokeThickness={layoutPtToCss(ws.core.gridLinesStrokeThickness || 1)}
+                        uiOffsetX={ws.typography.uiOffsetX ?? 0}
+                        uiOffsetY={ws.typography.uiOffsetY ?? 0}
+                        solutionStrokeColor={ws.colors.answerPage.solutionFrameColor || '#000000'}
+                        solutionStrokeThickness={ws.colors.answerPage.solutionStrokeThickness || 12}
+                        solutionStrokePadding={ws.colors.answerPage.solutionStrokePadding || 0}
+                        solutionFrameStyle={ws.colors.answerPage.solutionFrameStyle || 'rounded'}
+                        solutionFrameRadius={ws.colors.answerPage.solutionFrameRadius || 6}
+                        solutionHighlightAlpha={ws.colors.answerPage.solutionHighlightAlpha ?? 30}
+                        onlyHighlightWordListWords={false}
+                        wordList={formattedWords}
+                        	puzzleGridFontSize={ws.typography.puzzleGridFontSize || 18}
+                        	puzzleGridFontFamily={ws.typography.puzzleGridFontFamily || 'Inter'}
+                        	answerGridFontSize={getSolutionGridFontSize(ws.typography)}
+                        	answerGridFontFamily={
+                            ws.typography.setFontForAnswerPages
+                              ? ws.typography.answerGridFontFamily
+                              : undefined
+                          }
+                      />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          )}
-        </div>
-      );
+          </div>
+        );
+      }
+
+      return null;
     }
 
     // Non-word-search puzzles
@@ -301,48 +464,32 @@ export function PreviewCanvas() {
     }
   };
 
-  // Get page dimensions
   const pageWidth = settings?.bookCanvas.useCustomTrim
-    ? settings.bookCanvas.customWidth
-    : currentPuzzleType === 'word-search'
-    ? 8.5
+    ? settings.bookCanvas.customWidth ?? 8.5
     : 8.5;
   const pageHeight = settings?.bookCanvas.useCustomTrim
-    ? settings.bookCanvas.customHeight
-    : currentPuzzleType === 'word-search'
-    ? 11
+    ? settings.bookCanvas.customHeight ?? 11
     : 11;
 
-  const isWordSearch = currentPuzzleType === 'word-search';
-  const hasMultiplePuzzles = isWordSearch && batchPuzzles.length > 1;
-
-  // Title style based on layout
-  const titleStyle = showSolution ? {
-    color: settings?.colors.answerPage.titleColor || '#000000',
-    fontFamily: settings?.colors.answerPage.answerTitleFontFamily || 'Inter',
-    fontSize: `${settings?.colors.answerPage.answerTitleFontSize || 20}px`,
-    marginTop: settings?.typography.titleStartAt || 0,
-    textAlign: settings?.colors.answerPage.answerTitleAlignment || 'center',
-  } : {
-    color: currentColors.titleColor,
-    fontFamily: settings?.typography.puzzleTitleFontFamily || 'Inter',
-    fontSize: `${settings?.typography.puzzleTitleFontSize || 24}px`,
-    marginTop: settings?.typography.titleStartAt || 0,
-    textAlign: 'center' as const,
-  };
+  const hasMultiplePuzzles = currentPuzzleType === 'word-search' && batchPuzzles.length > 1;
+  const useUnifiedPagePreview =
+    currentPuzzleType === 'word-search' &&
+    !!settings &&
+    !!currentWsPuzzle &&
+    !(showSolution && answersPerPage > 1);
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-gray-50">
+    <div className="flex-1 flex flex-col h-full bg-gray-50 relative">
       {/* Toolbar */}
       <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200">
         <div className="flex items-center gap-4">
           <h2 className="font-semibold text-gray-900">
             {displayTitle || 'Puzzle Preview'}
             {hasMultiplePuzzles && (
-              <span className="ml-2 text-sm font-normal text-gray-500">
-                ({currentBatchIndex + 1} of {batchPuzzles.length})
-              </span>
-            )}
+            <span className="ml-2 text-sm font-normal text-gray-500">
+              ({showSolution ? solutionPageIndex + 1 : currentBatchIndex + 1} of {showSolution ? solutionPageCount : batchPuzzles.length})
+            </span>
+          )}
           </h2>
 
           {/* Pagination for batch puzzles */}
@@ -357,13 +504,13 @@ export function PreviewCanvas() {
                 <ChevronLeft className="w-4 h-4" />
               </Button>
               <span className="px-2 text-sm font-medium min-w-[80px] text-center">
-                {currentBatchIndex + 1} / {batchPuzzles.length}
+                {showSolution ? solutionPageIndex + 1 : currentBatchIndex + 1} / {showSolution ? solutionPageCount : batchPuzzles.length}
               </span>
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={handleNextPage}
-                disabled={currentBatchIndex === batchPuzzles.length - 1}
+                disabled={showSolution ? currentBatchIndex + answersPerPage >= batchPuzzles.length : currentBatchIndex === batchPuzzles.length - 1}
               >
                 <ChevronRight className="w-4 h-4" />
               </Button>
@@ -400,72 +547,53 @@ export function PreviewCanvas() {
             <Download className="w-4 h-4 mr-1" />
             Export PDF
           </Button>
+          <Button size="sm" onClick={handleExportPPT}>
+            <FileText className="w-4 h-4 mr-1" />
+            Export PPT
+          </Button>
         </div>
       </div>
 
-      {/* Preview Area */}
+      {/* Preview Area — fixed paper aspect ratio, scaled uniformly (WYSIWYG) */}
       <div className="flex-1 overflow-auto p-8 flex justify-center items-start">
         <div
           ref={canvasRef}
-          className="bg-white shadow-lg overflow-hidden"
           style={{
             transform: `scale(${previewZoom / 100})`,
             transformOrigin: 'top center',
-            backgroundColor: layout?.backgroundColor || currentColors.backgroundColor || '#ffffff',
-            width: `${pageWidth}in`,
-            minHeight: `${pageHeight}in`,
-            padding: '0.5in',
-            fontFamily: settings?.typography.puzzleTitleFontFamily || 'Inter',
           }}
         >
-      {/* Title */}
-          {showSolution ? (
-            settings?.colors.answerPage.answerTitlePrefix && (
-              <div className="text-center mb-6">
-                <h1 className="font-bold" style={titleStyle}>
-                  {settings.colors.answerPage.answerTitlePrefix}
-                  {settings.colors.answerPage.showAnswerNumber && currentWsPuzzle && ` ${currentWsPuzzle.puzzleNumber || 1}`}
-                </h1>
-                {settings?.colors.answerPage.answerSubtitle && (
-                  <p
-                    className="text-sm mt-2"
-                    style={{
-                      color: settings?.colors.answerPage.subtitleColor || '#6b7280',
-                    }}
-                  >
-                    {settings.colors.answerPage.answerSubtitle}
-                  </p>
-                )}
-              </div>
-            )
-          ) : (
-            displayTitle && (
-              <h1 className="mb-2 font-bold" style={titleStyle}>
-                {displayTitle}
-              </h1>
-            )
-          )}
-
-          {/* Subtitle (only on puzzle page) */}
-          {!showSolution && displaySubtitle && (
-            <p
-              className="text-center mb-4"
+          {useUnifiedPagePreview ? (
+            <WordSearchPagePreview
+              puzzle={currentWsPuzzle as WordSearchPuzzle}
+              settings={settings!}
+              titleWords={titleWords}
+              showSolution={showSolution}
+              puzzleGridScale={puzzleGridScale}
+              className="shadow-xl ring-1 ring-gray-200/80 rounded-sm"
+            />
+          ) : currentPuzzleType === 'word-search' && settings ? (
+            <div
+              className="bg-white shadow-xl ring-1 ring-gray-200/80 rounded-sm"
               style={{
-                color: currentColors.subtitleColor || '#6b7280',
-                fontSize: `${(settings?.typography.puzzleTitleFontSize || 24) - 6}px`,
+                width: `${pageWidth}in`,
+                minHeight: `${pageHeight}in`,
+                padding: '0.5in',
               }}
             >
-              {displaySubtitle}
-            </p>
+              {renderPuzzle()}
+            </div>
+          ) : (
+            <div
+              className="bg-white shadow-xl ring-1 ring-gray-200/80 rounded-sm p-8"
+              style={{
+                width: `${pageWidth}in`,
+                minHeight: `${pageHeight}in`,
+              }}
+            >
+              {renderPuzzle()}
+            </div>
           )}
-
-          {/* Space between title and puzzle */}
-          <div style={{ height: settings?.typography.spaceBetweenTitleAndPuzzle || 20 }} />
-
-          {/* Puzzle Content */}
-          <div className="flex items-center justify-center">
-            {renderPuzzle()}
-          </div>
         </div>
       </div>
     </div>

@@ -98,7 +98,31 @@ interface AppContextType {
   // Preview zoom
   previewZoom: number;
   setPreviewZoom: (zoom: number) => void;
+
+  // Puzzle grid scale (1-200%)
+  puzzleGridScale: number;
+  setPuzzleGridScale: (scale: number) => void;
+
+  // Title to Answer Gap (points between solution title and grids)
+  titleToAnswerGap: number;
+  setTitleToAnswerGap: (gap: number) => void;
+
+  // Page Margins (points from page edges, for KDP safety)
+  pageMargin: number;
+  setPageMargin: (margin: number) => void;
+
+  // Visual Page Editor: Page-level overrides (local edits for specific pages)
+  pageOverrides: Map<number, Partial<WordSearchSettings>>;
+  setPageOverrides: (overrides: Map<number, Partial<WordSearchSettings>>) => void;
+  updatePageOverride: (pageIndex: number, updates: Partial<WordSearchSettings>) => void;
+  clearPageOverride: (pageIndex: number) => void;
+
+  // Apply mode: whether changes apply to all pages (true) or current page only (false)
+  applyMode: Map<string, boolean>; // key: setting category (e.g., 'grid', 'wordList', 'typography', 'colors'), value: true = global, false = local
+  setApplyMode: (category: string, isGlobal: boolean) => void;
 }
+
+const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const defaultBookSettings: BookSettings = {
   trimSize: '8.5x11',
@@ -114,7 +138,7 @@ const defaultPuzzleSettings: PuzzleSettings = {
 };
 
 const defaultTitleWords: TitleWordsSettings = {
-  title: 'Puzzle',
+  title: 'Word Search',
   fontFamily: 'Inter',
   fontSize: 24,
   words: [],
@@ -136,8 +160,13 @@ const defaultColorSettings: ColorSettings = {
     boxColor: '#1f2937',
     lettersInSolutionColor: '#22c55e',
     lettersNotInSolutionColor: '#d1d5db',
-    solutionStrokeThickness: 2,
+    solutionStrokeThickness: 12,
     solutionStrokePadding: 2,
+    solutionFrameColor: '#22c55e',
+    solutionFrameStyle: 'rounded',
+    solutionFrameRadius: 6,
+    solutionHighlightAlpha: 30,
+    onlyHighlightWordListWords: false,
     answerTitlePrefix: 'Solution',
     answerTitleFontFamily: 'Inter',
     answerTitleFontSize: 20,
@@ -145,8 +174,6 @@ const defaultColorSettings: ColorSettings = {
     showAnswerNumber: true,
   },
 };
-
-const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [currentPuzzleType, setCurrentPuzzleType] = useState<PuzzleType>('word-search');
@@ -161,6 +188,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [cryptogramText, setCryptogramText] = useState('');
   const [savedPuzzles, setSavedPuzzles] = useState<SavedPuzzle[]>([]);
   const [previewZoom, setPreviewZoom] = useState(100);
+  const [puzzleGridScale, setPuzzleGridScale] = useState(70);
+  const [titleToAnswerGap, setTitleToAnswerGap] = useState(20);
+  const [pageMargin, setPageMargin] = useState(40);
 
   // Batch puzzles for word search
   const [batchPuzzles, setBatchPuzzles] = useState<WordSearchPuzzle[]>([]);
@@ -174,6 +204,52 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Word Search Settings
   const [wordSearchSettings, setWordSearchSettings] = useState<WordSearchSettings>(getDefaultWordSearchSettings());
+
+  // Visual Page Editor: Page-level overrides (local edits for specific pages)
+  const [pageOverrides, setPageOverrides] = useState<Map<number, Partial<WordSearchSettings>>>(new Map());
+
+  // Apply mode: whether changes apply to all pages (true) or current page only (false)
+  const [applyMode, setApplyModeState] = useState<Map<string, boolean>>(
+    new Map([
+      ['grid', true],      // Default: global
+      ['wordList', true],
+      ['typography', true],
+      ['colors', true],
+    ])
+  );
+
+  const setApplyMode = useCallback((category: string, isGlobal: boolean) => {
+    setApplyModeState(prev => new Map(prev).set(category, isGlobal));
+  }, []);
+
+  const updatePageOverride = useCallback((pageIndex: number, updates: Partial<WordSearchSettings>) => {
+    setPageOverrides(prev => {
+      const newMap = new Map(prev);
+      const current = newMap.get(pageIndex) || {};
+      newMap.set(pageIndex, {
+        ...current,
+        ...updates,
+        bookCanvas: { ...current.bookCanvas, ...updates.bookCanvas },
+        core: { ...current.core, ...updates.core },
+        typography: { ...current.typography, ...updates.typography },
+        wordList: { ...current.wordList, ...updates.wordList },
+        colors: { ...current.colors, ...updates.colors },
+      });
+      return newMap;
+    });
+    setStylingTrigger(t => t + 1);
+  }, []);
+
+  const clearPageOverride = useCallback((pageIndex: number) => {
+    setPageOverrides(prev => {
+      const newMap = new Map(prev);
+      newMap.delete(pageIndex);
+      return newMap;
+    });
+    setStylingTrigger(t => t + 1);
+  }, []);
+
+
 
   const updateWordSearchSettings = useCallback((updates: Partial<WordSearchSettings>) => {
     setWordSearchSettings(prev => ({
@@ -419,6 +495,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setCryptogramText,
         previewZoom,
         setPreviewZoom,
+        puzzleGridScale,
+        setPuzzleGridScale,
+        titleToAnswerGap,
+        setTitleToAnswerGap,
+        pageMargin,
+        setPageMargin,
+        pageOverrides,
+        setPageOverrides,
+        updatePageOverride,
+        clearPageOverride,
+        applyMode,
+        setApplyMode,
       }}
     >
       {children}

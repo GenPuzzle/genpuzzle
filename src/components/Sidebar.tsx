@@ -6,24 +6,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { Slider } from '@/components/ui/slider';
+import { SliderField } from '@/components/ui/slider-field';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Book, Settings, Type, Palette, Grid3X3, RotateCw } from 'lucide-react';
 import { useApp } from '@/lib/app-context';
 import { TRIM_SIZES, TrimSize, Direction } from '@/lib/puzzles/types';
 import { getCategories, getQuotesByCategory, getRandomQuote } from '@/lib/puzzles/cryptogram';
-
-const GOOGLE_FONTS = [
-  'Inter',
-  'Merriweather',
-  'Playfair Display',
-  'Montserrat',
-  'Lora',
-  'Roboto',
-  'Open Sans',
-  'Poppins',
-];
+import { PUBLISHING_FONTS } from '@/lib/publishing-fonts';
 
 const DIRECTION_OPTIONS: { value: Direction; label: string }[] = [
   { value: 'horizontal', label: '→' },
@@ -60,13 +50,13 @@ export function Sidebar() {
   const [quoteCategory, setQuoteCategory] = useState<string>('all');
   const [directionToggles, setDirectionToggles] = useState<Record<Direction, boolean>>({
     horizontal: true,
-    horizontal_reverse: false,
+    'horizontal-reverse': false,
     vertical: true,
-    vertical_reverse: false,
-    diagonal_down: true,
-    diagonal_down_reverse: false,
-    diagonal_up: true,
-    diagonal_up_reverse: false,
+    'vertical-reverse': false,
+    'diagonal-down': true,
+    'diagonal-down-reverse': false,
+    'diagonal-up': true,
+    'diagonal-up-reverse': false,
   });
 
   const handleDirectionToggle = (dir: Direction) => {
@@ -98,8 +88,8 @@ export function Sidebar() {
   };
 
   return (
-    <div className="w-80 h-screen bg-white border-r border-gray-200 overflow-y-auto">
-      <Tabs defaultValue="book" className="w-full">
+    <div className="w-80 h-screen bg-white border-r border-gray-200 flex flex-col">
+      <Tabs defaultValue="book" className="w-full flex-1 overflow-y-auto">
         <TabsList className="w-full grid grid-cols-4">
           <TabsTrigger value="book" title="Book Settings">
             <Book className="w-4 h-4" />
@@ -158,38 +148,35 @@ export function Sidebar() {
             />
           </div>
 
-          <div>
-            <Label className="text-sm font-medium">Puzzles Per Page: {bookSettings.puzzlesPerPage}</Label>
-            <Slider
-              value={[bookSettings.puzzlesPerPage]}
-              min={1}
-              max={4}
-              step={1}
-              onValueChange={([value]) =>
-                setBookSettings({ ...bookSettings, puzzlesPerPage: value })
-              }
-              className="mt-2"
-            />
-          </div>
+          <SliderField
+            label="Puzzles Per Page"
+            value={bookSettings.puzzlesPerPage}
+            onValueChange={(value) =>
+              setBookSettings({ ...bookSettings, puzzlesPerPage: value })
+            }
+            min={1}
+            max={4}
+            step={1}
+            labelClassName="text-sm text-gray-900 font-medium"
+          />
         </TabsContent>
 
         {/* Puzzle Settings */}
         <TabsContent value="puzzle" className="p-4 space-y-4">
           {/* Grid Size (for applicable puzzles) */}
           {['word-search', 'crossword'].includes(currentPuzzleType) && (
-            <div>
-              <Label className="text-sm font-medium">Grid Size: {puzzleSettings.gridSize}x{puzzleSettings.gridSize}</Label>
-              <Slider
-                value={[puzzleSettings.gridSize]}
-                min={10}
-                max={25}
-                step={1}
-                onValueChange={([value]) =>
-                  setPuzzleSettings({ ...puzzleSettings, gridSize: value })
-                }
-                className="mt-2"
-              />
-            </div>
+            <SliderField
+              label="Grid Size"
+              value={puzzleSettings.gridSize}
+              onValueChange={(value) =>
+                setPuzzleSettings({ ...puzzleSettings, gridSize: value })
+              }
+              min={10}
+              max={25}
+              step={1}
+              formatValue={(v) => `${v}×${v}`}
+              labelClassName="text-sm text-gray-900 font-medium"
+            />
           )}
 
           {/* Word Placement Directions */}
@@ -279,10 +266,6 @@ export function Sidebar() {
             </div>
           )}
 
-          <Button onClick={handleGenerate} className="w-full mt-4">
-            <Grid3X3 className="w-4 h-4 mr-2" />
-            Generate Puzzle
-          </Button>
         </TabsContent>
 
         {/* Title/Words Settings */}
@@ -309,8 +292,8 @@ export function Sidebar() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {GOOGLE_FONTS.map((font) => (
-                  <SelectItem key={font} value={font}>
+                {PUBLISHING_FONTS.map((font) => (
+                  <SelectItem key={font} value={font} style={{ fontFamily: font }}>
                     {font}
                   </SelectItem>
                 ))}
@@ -318,19 +301,18 @@ export function Sidebar() {
             </Select>
           </div>
 
-          <div>
-            <Label className="text-sm font-medium">Font Size: {titleWords.fontSize}px</Label>
-            <Slider
-              value={[titleWords.fontSize]}
-              min={12}
-              max={48}
-              step={2}
-              onValueChange={([value]) =>
-                setTitleWords({ ...titleWords, fontSize: value })
-              }
-              className="mt-2"
-            />
-          </div>
+          <SliderField
+            label="Font Size"
+            value={titleWords.fontSize}
+            onValueChange={(value) =>
+              setTitleWords({ ...titleWords, fontSize: value })
+            }
+            min={12}
+            max={48}
+            step={2}
+            format="px"
+            labelClassName="text-sm text-gray-900 font-medium"
+          />
 
           {/* Word List */}
           <div>
@@ -367,16 +349,22 @@ export function Sidebar() {
             <div className="flex items-center gap-2 mt-1">
               <Input
                 type="color"
-                value={colorSettings.background}
+                value={colorSettings.puzzlePage.backgroundColor}
                 onChange={(e) =>
-                  setColorSettings({ ...colorSettings, background: e.target.value })
+                  setColorSettings({
+                    ...colorSettings,
+                    puzzlePage: { ...colorSettings.puzzlePage, backgroundColor: e.target.value },
+                  })
                 }
                 className="w-12 h-10 p-1 cursor-pointer"
               />
               <Input
-                value={colorSettings.background}
+                value={colorSettings.puzzlePage.backgroundColor}
                 onChange={(e) =>
-                  setColorSettings({ ...colorSettings, background: e.target.value })
+                  setColorSettings({
+                    ...colorSettings,
+                    puzzlePage: { ...colorSettings.puzzlePage, backgroundColor: e.target.value },
+                  })
                 }
                 className="flex-1 font-mono text-sm"
               />
@@ -388,16 +376,22 @@ export function Sidebar() {
             <div className="flex items-center gap-2 mt-1">
               <Input
                 type="color"
-                value={colorSettings.title}
+                value={colorSettings.puzzlePage.titleColor}
                 onChange={(e) =>
-                  setColorSettings({ ...colorSettings, title: e.target.value })
+                  setColorSettings({
+                    ...colorSettings,
+                    puzzlePage: { ...colorSettings.puzzlePage, titleColor: e.target.value },
+                  })
                 }
                 className="w-12 h-10 p-1 cursor-pointer"
               />
               <Input
-                value={colorSettings.title}
+                value={colorSettings.puzzlePage.titleColor}
                 onChange={(e) =>
-                  setColorSettings({ ...colorSettings, title: e.target.value })
+                  setColorSettings({
+                    ...colorSettings,
+                    puzzlePage: { ...colorSettings.puzzlePage, titleColor: e.target.value },
+                  })
                 }
                 className="flex-1 font-mono text-sm"
               />
@@ -409,16 +403,22 @@ export function Sidebar() {
             <div className="flex items-center gap-2 mt-1">
               <Input
                 type="color"
-                value={colorSettings.gridLines}
+                value={colorSettings.puzzlePage.boxColor}
                 onChange={(e) =>
-                  setColorSettings({ ...colorSettings, gridLines: e.target.value })
+                  setColorSettings({
+                    ...colorSettings,
+                    puzzlePage: { ...colorSettings.puzzlePage, boxColor: e.target.value },
+                  })
                 }
                 className="w-12 h-10 p-1 cursor-pointer"
               />
               <Input
-                value={colorSettings.gridLines}
+                value={colorSettings.puzzlePage.boxColor}
                 onChange={(e) =>
-                  setColorSettings({ ...colorSettings, gridLines: e.target.value })
+                  setColorSettings({
+                    ...colorSettings,
+                    puzzlePage: { ...colorSettings.puzzlePage, boxColor: e.target.value },
+                  })
                 }
                 className="flex-1 font-mono text-sm"
               />
@@ -430,16 +430,22 @@ export function Sidebar() {
             <div className="flex items-center gap-2 mt-1">
               <Input
                 type="color"
-                value={colorSettings.solution}
+                value={colorSettings.answerPage.solutionFrameColor}
                 onChange={(e) =>
-                  setColorSettings({ ...colorSettings, solution: e.target.value })
+                  setColorSettings({
+                    ...colorSettings,
+                    answerPage: { ...colorSettings.answerPage, solutionFrameColor: e.target.value },
+                  })
                 }
                 className="w-12 h-10 p-1 cursor-pointer"
               />
               <Input
-                value={colorSettings.solution}
+                value={colorSettings.answerPage.solutionFrameColor}
                 onChange={(e) =>
-                  setColorSettings({ ...colorSettings, solution: e.target.value })
+                  setColorSettings({
+                    ...colorSettings,
+                    answerPage: { ...colorSettings.answerPage, solutionFrameColor: e.target.value },
+                  })
                 }
                 className="flex-1 font-mono text-sm"
               />
@@ -450,11 +456,34 @@ export function Sidebar() {
             variant="outline"
             onClick={() =>
               setColorSettings({
-                background: '#ffffff',
-                title: '#1f2937',
-                gridLines: '#1f2937',
-                answer: '#059669',
-                solution: '#22c55e',
+                puzzlePage: {
+                  backgroundColor: '#ffffff',
+                  titleColor: '#1f2937',
+                  subtitleColor: '#6b7280',
+                  boxColor: '#1f2937',
+                  puzzleColor: '#1f2937',
+                  wordListTitleColor: '#374151',
+                  wordListColor: '#4b5563',
+                },
+                answerPage: {
+                  backgroundColor: '#ffffff',
+                  titleColor: '#1f2937',
+                  boxColor: '#1f2937',
+                  lettersInSolutionColor: '#22c55e',
+                  lettersNotInSolutionColor: '#d1d5db',
+                  solutionStrokeThickness: 12,
+                  solutionStrokePadding: 2,
+                  solutionFrameColor: '#22c55e',
+                  solutionFrameStyle: 'rounded',
+                  solutionFrameRadius: 6,
+                  solutionHighlightAlpha: 30,
+                  onlyHighlightWordListWords: false,
+                  answerTitlePrefix: 'Solution',
+                  answerTitleFontFamily: 'Inter',
+                  answerTitleFontSize: 20,
+                  answerTitleAlignment: 'center',
+                  showAnswerNumber: true,
+                },
               })
             }
             className="w-full"
@@ -463,6 +492,14 @@ export function Sidebar() {
           </Button>
         </TabsContent>
       </Tabs>
+      
+      {/* Fixed Generate Button at Bottom */}
+      <div className="border-t border-gray-200 p-4 bg-white">
+        <Button onClick={handleGenerate} className="w-full">
+          <Grid3X3 className="w-4 h-4 mr-2" />
+          Generate {currentPuzzleType === 'cryptogram' ? 'Cryptogram' : currentPuzzleType === 'sudoku' ? 'Sudoku' : 'Puzzle'}
+        </Button>
+      </div>
     </div>
   );
 }

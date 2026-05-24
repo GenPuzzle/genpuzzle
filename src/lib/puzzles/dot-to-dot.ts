@@ -7,7 +7,7 @@ export function generateDotToDot(words: string[]): DotToDotPuzzle {
     .slice(0, 26); // Max 26 for A-Z
 
   if (cleanWords.length === 0) {
-    return { points: [], labels: [], connections: [] };
+    return { type: 'dot-to-dot', points: [], labels: [], connections: [] };
   }
 
   const points: Position[] = [];

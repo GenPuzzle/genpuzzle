@@ -8,80 +8,15 @@ import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
+import { SliderField } from '@/components/ui/slider-field';
 import { AlertCircle, CheckCircle } from 'lucide-react';
 import { useApp } from '@/lib/app-context';
-
-const GOOGLE_FONTS = [
-  'Inter',
-  'Merriweather',
-  'Playfair Display',
-  'Montserrat',
-  'Lora',
-  'Roboto',
-  'Open Sans',
-  'Poppins',
-];
+import { PUBLISHING_FONTS } from '@/lib/publishing-fonts';
 
 const LANGUAGES = ['English', 'Spanish', 'French', 'German', 'Italian', 'Portuguese'];
 const AGE_LEVELS = ['Children (6-8)', 'Children (9-12)', 'Teen', 'Adult', 'Senior'];
 
-// Helper for number inputs - text input, no React control during typing
-const NumberInput = ({
-  value,
-  onChange,
-  placeholder,
-  min,
-  max,
-}: {
-  value: number;
-  onChange: (val: number) => void;
-  placeholder?: string;
-  min?: number;
-  max?: number;
-}) => {
-  const inputRef = React.useRef<HTMLInputElement>(null);
-
-  // Update display only when not focused
-  React.useEffect(() => {
-    if (inputRef.current && document.activeElement !== inputRef.current) {
-      inputRef.current.value = String(value);
-    }
-  }, [value]);
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // Let user type freely - update on blur only
-  };
-
-  const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
-    const val = e.target.value.trim();
-    if (val === '') {
-      e.target.value = String(min ?? 0);
-      onChange(min ?? 0);
-      return;
-    }
-    let num = parseInt(val, 10);
-    if (isNaN(num)) {
-      num = min ?? 0;
-    }
-    if (min !== undefined && num < min) num = min;
-    if (max !== undefined && num > max) num = max;
-    e.target.value = String(num);
-    onChange(num);
-  };
-
-  return (
-    <input
-      ref={inputRef}
-      type="text"
-      inputMode="numeric"
-      defaultValue={value}
-      onChange={handleChange}
-      onBlur={handleBlur}
-      placeholder={placeholder}
-      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-    />
-  );
-};
+// Numeric inputs are provided as sliders for smoother UI control
 
 // Helper for decimal number inputs (for trim size) - text input, no React control during typing
 const DecimalInput = ({
@@ -147,6 +82,78 @@ const DecimalInput = ({
   );
 };
 
+/** Integer input — defers min/max clamping until blur so values like "10" can be typed. */
+const IntegerInput = ({
+  value,
+  onChange,
+  min,
+  max,
+  className,
+}: {
+  value: number;
+  onChange: (val: number) => void;
+  min?: number;
+  max?: number;
+  className?: string;
+}) => {
+  const [localValue, setLocalValue] = React.useState(String(value ?? ''));
+  const isFocused = React.useRef(false);
+
+  React.useEffect(() => {
+    if (!isFocused.current) {
+      setLocalValue(String(value ?? ''));
+    }
+  }, [value]);
+
+  const commitValue = (raw: string) => {
+    const trimmed = raw.trim();
+    const fallback = min ?? 0;
+    if (trimmed === '') {
+      const next = fallback;
+      setLocalValue(String(next));
+      onChange(next);
+      return;
+    }
+    let num = parseInt(trimmed, 10);
+    if (Number.isNaN(num)) {
+      num = fallback;
+    }
+    if (min !== undefined && num < min) num = min;
+    if (max !== undefined && num > max) num = max;
+    setLocalValue(String(num));
+    onChange(num);
+  };
+
+  return (
+    <Input
+      type="text"
+      inputMode="numeric"
+      value={localValue}
+      className={className}
+      onFocus={() => {
+        isFocused.current = true;
+      }}
+      onChange={(e) => {
+        const next = e.target.value;
+        if (next === '' || /^\d+$/.test(next)) {
+          setLocalValue(next);
+        }
+      }}
+      onBlur={(e) => {
+        isFocused.current = false;
+        commitValue(e.target.value);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          isFocused.current = false;
+          commitValue((e.target as HTMLInputElement).value);
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+    />
+  );
+};
+
 function ColorInput({
   label,
   value,
@@ -207,6 +214,12 @@ export function WordSearchSidebar() {
     setTitleWords,
     generatePuzzle,
     validationError,
+    puzzleGridScale,
+    setPuzzleGridScale,
+    titleToAnswerGap,
+    setTitleToAnswerGap,
+    pageMargin,
+    setPageMargin,
   } = useApp();
 
   const { bookCanvas, core, typography, wordList, colors } = wordSearchSettings;
@@ -278,45 +291,73 @@ export function WordSearchSidebar() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label className="text-xs text-gray-500">Number of Puzzles</Label>
-                  <NumberInput
-                    value={core.numberOfPuzzles}
-                    onChange={(val) => updateCore({ numberOfPuzzles: val })}
+                  <Input
+                    type="number"
+                    value={String(core.numberOfPuzzles)}
+                    onChange={(e) => updateCore({ numberOfPuzzles: Math.max(1, parseInt(e.target.value || '1')) })}
                     min={1}
                     max={100}
                   />
                 </div>
                 <div>
                   <Label className="text-xs text-gray-500">Starting Number</Label>
-                  <NumberInput
-                    value={core.puzzlesStartingNumber}
-                    onChange={(val) => updateCore({ puzzlesStartingNumber: val })}
+                  <Input
+                    type="number"
+                    value={String(core.puzzlesStartingNumber)}
+                    onChange={(e) => updateCore({ puzzlesStartingNumber: Math.max(1, parseInt(e.target.value || '1')) })}
                     min={1}
                   />
                 </div>
               </div>
             </div>
 
-            {/* Grid Structure */}
+            {/* Grid Size */}
             <div className="space-y-3">
-              <Label className="text-sm font-medium">Grid Size</Label>
+              <div className="flex items-center justify-between">
+                <Label className="text-sm font-medium">Grid Size</Label>
+                <span className="text-sm text-gray-600">{core.lettersAcross} x {core.lettersDown}</span>
+              </div>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-xs text-gray-500">Letters Across</Label>
-                  <NumberInput
-                    value={core.lettersAcross}
-                    onChange={(val) => updateCore({ lettersAcross: val })}
-                    min={10}
-                    max={30}
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Letters Down</Label>
-                  <NumberInput
-                    value={core.lettersDown}
-                    onChange={(val) => updateCore({ lettersDown: val })}
-                    min={10}
-                    max={30}
-                  />
+                <SliderField
+                  label="Letters Across"
+                  value={core.lettersAcross}
+                  onValueChange={(v) => updateCore({ lettersAcross: v })}
+                  min={8}
+                  max={30}
+                  step={1}
+                />
+                <SliderField
+                  label="Letters Down"
+                  value={core.lettersDown}
+                  onValueChange={(v) => updateCore({ lettersDown: v })}
+                  min={8}
+                  max={30}
+                  step={1}
+                />
+              </div>
+              {/* Puzzle Grid Scale Controls */}
+              <div className="border-t pt-3">
+                <Label className="text-xs text-gray-500 mb-2 block">Puzzle Grid Scale</Label>
+                <div className="flex items-center gap-1 border border-gray-200 rounded-md">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setPuzzleGridScale(Math.max(puzzleGridScale - 10, 50))}
+                    title="Shrink Grid"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><circle cx="11" cy="11" r="8"></circle><line x1="21" x2="16.65" y1="21" y2="16.65"></line><line x1="8" x2="14" y1="11" y2="11"></line></svg>
+                  </Button>
+                  <span className="px-2 text-sm font-medium min-w-[70px] text-center" title="Puzzle Grid Scale">
+                    Grid: {puzzleGridScale}%
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setPuzzleGridScale(Math.min(puzzleGridScale + 10, 200))}
+                    title="Enlarge Grid"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><circle cx="11" cy="11" r="8"></circle><line x1="21" x2="16.65" y1="21" y2="16.65"></line><line x1="11" x2="11" y1="8" y2="14"></line><line x1="8" x2="14" y1="11" y2="11"></line></svg>
+                  </Button>
                 </div>
               </div>
             </div>
@@ -341,17 +382,100 @@ export function WordSearchSidebar() {
               <Label className="text-sm font-medium">Grid Options</Label>
               <div className="space-y-2">
                 <CheckboxItem label="No Box Around Puzzle" checked={core.noBoxAroundPuzzle} onCheckedChange={(v) => updateCore({ noBoxAroundPuzzle: v })} />
-                <CheckboxItem label="Add Grid Lines" checked={core.addGridLines} onCheckedChange={(v) => updateCore({ addGridLines: v })} />
-                <CheckboxItem label="Allow Numbers in Grid" checked={core.allowNumbersInGrid} onCheckedChange={(v) => updateCore({ allowNumbersInGrid: v })} />
-                <CheckboxItem label="Two Page Puzzles" checked={core.twoPagePuzzles} onCheckedChange={(v) => updateCore({ twoPagePuzzles: v })} />
+                <SliderField
+                  label="Border Stroke Thickness"
+                  value={core.borderStrokeThickness}
+                  onValueChange={(v) => updateCore({ borderStrokeThickness: v })}
+                  min={1}
+                  max={10}
+                  step={1}
+                  format="px"
+                />
+                <SliderField
+                  label="Inner Grid Transparency"
+                  value={core.innerGridOpacity ?? 0}
+                  onValueChange={(v) => updateCore({ innerGridOpacity: v })}
+                  min={0}
+                  max={100}
+                  step={1}
+                  format="percent"
+                />
               </div>
             </div>
 
-            {/* Custom Letters */}
-            <div className="space-y-2">
-              <Label className="text-sm font-medium">Custom Letters</Label>
-              <Input value={core.customLetters} onChange={(e) => updateCore({ customLetters: e.target.value })} placeholder="Additional letters..." />
-              <p className="text-xs text-gray-500">Force these letters to appear in the grid</p>
+            {/* Grid Letters */}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">Grid Letters</Label>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <Label className="text-xs text-gray-500">Font</Label>
+                  <Select value={typography.puzzleGridFontFamily} onValueChange={(value) => updateTypography({ puzzleGridFontFamily: value })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {PUBLISHING_FONTS.map((font) => <SelectItem key={font} value={font} style={{ fontFamily: font }}>{font}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <SliderField
+                  label="Puzzle Font Size"
+                  value={typography.puzzleGridFontSize}
+                  onValueChange={(v) => updateTypography({ puzzleGridFontSize: v })}
+                  min={8}
+                  max={50}
+                  step={1}
+                  format="px"
+                />
+                <SliderField
+                  label="Solution Font Size"
+                  value={typography.answerGridFontSize}
+                  onValueChange={(v) => updateTypography({ answerGridFontSize: v, setFontSizeForAnswerPages: true })}
+                  min={8}
+                  max={50}
+                  step={1}
+                  format="px"
+                />
+              </div>
+            </div>
+
+            {/* Custom Letters removed per request */}
+
+            {/* Answers Per Page */}
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Answers Per Page</Label>
+              <Select value={bookCanvas.answersPerPage.toString()} onValueChange={(value) => updateBookCanvas({ answersPerPage: parseInt(value) })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {[1, 2, 4].map((n) => <SelectItem key={n} value={n.toString()}>{n} Solution{n > 1 ? 's' : ''}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Solution Marking Style */}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">Solution Marking</Label>
+              <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
+                <ColorInput label="Highlight Color" value={colors.answerPage.solutionFrameColor} onChange={(v) => updateAnswerPageColors({ solutionFrameColor: v })} />
+                <div className="grid grid-cols-2 gap-3">
+                  <SliderField
+                    label="Thickness"
+                    value={colors.answerPage.solutionStrokeThickness}
+                    onValueChange={(v) => updateAnswerPageColors({ solutionStrokeThickness: v })}
+                    min={1}
+                    max={15}
+                    step={1}
+                    format="px"
+                  />
+                  <SliderField
+                    label="Transparency"
+                    value={colors.answerPage.solutionHighlightAlpha ?? 30}
+                    onValueChange={(v) => updateAnswerPageColors({ solutionHighlightAlpha: v })}
+                    min={0}
+                    max={100}
+                    step={1}
+                    format="percent"
+                  />
+                </div>
+              </div>
             </div>
           </div>
         </TabsContent>
@@ -374,11 +498,19 @@ export function WordSearchSidebar() {
               </Select>
 
               {typography.selectTitleOption === 'custom' && (
-                <Input value={typography.titleText} onChange={(e) => updateTypography({ titleText: e.target.value })} placeholder="Enter custom title..." />
+                <div className="space-y-2">
+                  <Textarea
+                    value={typography.titleText}
+                    onChange={(e) => updateTypography({ titleText: e.target.value })}
+                    placeholder="Enter one title per line..."
+                    className="h-28"
+                  />
+                  <p className="text-xs text-gray-500">Enter one title per line. The first line is for Puzzle 1, the second for Puzzle 2, etc.</p>
+                </div>
               )}
 
               <div className="flex items-center space-x-2">
-                <Checkbox id="includeSubtitle" checked={typography.includeSubtitle} onCheckedChange={(checked) => updateTypography({ includeSubtitle: checked })} />
+                <Checkbox id="includeSubtitle" checked={typography.includeSubtitle} onCheckedChange={(checked) => updateTypography({ includeSubtitle: checked === true })} />
                 <Label htmlFor="includeSubtitle" className="text-sm font-normal">Include Subtitle</Label>
               </div>
 
@@ -395,16 +527,7 @@ export function WordSearchSidebar() {
                 <Select value={typography.puzzleTitleFontFamily} onValueChange={(value) => updateTypography({ puzzleTitleFontFamily: value })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {GOOGLE_FONTS.map((font) => <SelectItem key={font} value={font}>{font}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-xs text-gray-500">Grid Font</Label>
-                <Select value={typography.puzzleGridFontFamily} onValueChange={(value) => updateTypography({ puzzleGridFontFamily: value })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {GOOGLE_FONTS.map((font) => <SelectItem key={font} value={font}>{font}</SelectItem>)}
+                    {PUBLISHING_FONTS.map((font) => <SelectItem key={font} value={font} style={{ fontFamily: font }}>{font}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -414,22 +537,16 @@ export function WordSearchSidebar() {
             <div className="space-y-3">
               <Label className="text-sm font-medium">Font Sizes</Label>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-xs text-gray-500">Title Size (px)</Label>
-                  <NumberInput value={typography.puzzleTitleFontSize} onChange={(val) => updateTypography({ puzzleTitleFontSize: val })} min={10} max={72} />
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Grid Size (px)</Label>
-                  <NumberInput value={typography.puzzleGridFontSize} onChange={(val) => updateTypography({ puzzleGridFontSize: val })} min={8} max={24} />
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Answer Title Size (px)</Label>
-                  <NumberInput value={typography.answerTitleFontSize} onChange={(val) => updateTypography({ answerTitleFontSize: val })} min={10} max={72} />
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Answer Grid Size (px)</Label>
-                  <NumberInput value={typography.answerGridFontSize} onChange={(val) => updateTypography({ answerGridFontSize: val })} min={8} max={24} />
-                </div>
+                <SliderField
+                  label="Title Size"
+                  value={typography.puzzleTitleFontSize}
+                  onValueChange={(v) => updateTypography({ puzzleTitleFontSize: v })}
+                  min={8}
+                  max={50}
+                  step={1}
+                  format="px"
+                />
+                
               </div>
             </div>
 
@@ -449,40 +566,129 @@ export function WordSearchSidebar() {
             <div className="space-y-3">
               <Label className="text-sm font-medium">Spacing</Label>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-xs text-gray-500">Title Start At (px)</Label>
-                  <NumberInput value={typography.titleStartAt} onChange={(val) => updateTypography({ titleStartAt: val })} min={0} max={200} />
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Title to Puzzle (px)</Label>
-                  <NumberInput value={typography.spaceBetweenTitleAndPuzzle} onChange={(val) => updateTypography({ spaceBetweenTitleAndPuzzle: val })} min={0} max={100} />
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Puzzle to Word List (px)</Label>
-                  <NumberInput value={typography.spaceBetweenPuzzleAndWordList} onChange={(val) => updateTypography({ spaceBetweenPuzzleAndWordList: val })} min={0} max={100} />
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Title to Answer (px)</Label>
-                  <NumberInput value={typography.spaceBetweenTitleAndAnswer} onChange={(val) => updateTypography({ spaceBetweenTitleAndAnswer: val })} min={0} max={100} />
-                </div>
+                <SliderField
+                  label="Title Start At"
+                  value={typography.titleStartAt}
+                  onValueChange={(v) => updateTypography({ titleStartAt: v })}
+                  min={0}
+                  max={200}
+                  step={1}
+                  format="px"
+                />
+                <SliderField
+                  label="Title to Puzzle"
+                  value={typography.spaceBetweenTitleAndPuzzle}
+                  onValueChange={(v) => updateTypography({ spaceBetweenTitleAndPuzzle: v })}
+                  min={0}
+                  max={100}
+                  step={1}
+                  format="px"
+                />
+                <SliderField
+                  label="Puzzle to Word List"
+                  value={typography.spaceBetweenPuzzleAndWordList}
+                  onValueChange={(v) => updateTypography({ spaceBetweenPuzzleAndWordList: v })}
+                  min={0}
+                  max={100}
+                  step={1}
+                  format="px"
+                />
+                <SliderField
+                  label="Title to Answer"
+                  value={typography.spaceBetweenTitleAndAnswer}
+                  onValueChange={(v) => updateTypography({ spaceBetweenTitleAndAnswer: v })}
+                  min={0}
+                  max={100}
+                  step={1}
+                  format="px"
+                />
               </div>
+            </div>
+
+            {/* Layout Margins */}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">Page Layout</Label>
+              <div className="grid grid-cols-2 gap-3">
+                <SliderField
+                  label="Title to Answer Gap"
+                  value={titleToAnswerGap}
+                  onValueChange={setTitleToAnswerGap}
+                  min={0}
+                  max={100}
+                  step={1}
+                  format="px"
+                />
+                <SliderField
+                  label="Page Margin"
+                  value={pageMargin}
+                  onValueChange={setPageMargin}
+                  min={10}
+                  max={100}
+                  step={5}
+                  format="px"
+                />
+              </div>
+              <p className="text-xs text-gray-500">Page Margin controls distance from page edges (KDP safe zone).</p>
             </div>
 
             {/* Answer Page Fonts */}
             <div className="space-y-3">
               <Label className="text-sm font-medium">Answer Page Fonts</Label>
               <div className="flex items-center space-x-2">
-                <Checkbox id="setAnswerFont" checked={typography.setFontForAnswerPages} onCheckedChange={(checked) => updateTypography({ setFontForAnswerPages: checked })} />
+                <Checkbox id="setAnswerFont" checked={typography.setFontForAnswerPages} onCheckedChange={(checked) => updateTypography({ setFontForAnswerPages: checked === true })} />
                 <Label htmlFor="setAnswerFont" className="text-sm font-normal">Custom Font</Label>
               </div>
               {typography.setFontForAnswerPages && (
                 <Select value={typography.answerGridFontFamily} onValueChange={(value) => updateTypography({ answerGridFontFamily: value })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {GOOGLE_FONTS.map((font) => <SelectItem key={font} value={font}>{font}</SelectItem>)}
+                    {PUBLISHING_FONTS.map((font) => <SelectItem key={font} value={font} style={{ fontFamily: font }}>{font}</SelectItem>)}
                   </SelectContent>
                 </Select>
               )}
+            </div>
+
+            {/* Answer Page Title */}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">Answer Page Title</Label>
+              <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
+                <div>
+                  <Label className="text-xs text-gray-500">Title Prefix</Label>
+                  <Input value={colors.answerPage.answerTitlePrefix} onChange={(e) => updateAnswerPageColors({ answerTitlePrefix: e.target.value })} placeholder="Solution" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs text-gray-500">Font</Label>
+                    <Select value={colors.answerPage.answerTitleFontFamily} onValueChange={(value) => updateAnswerPageColors({ answerTitleFontFamily: value })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {PUBLISHING_FONTS.map((font) => <SelectItem key={font} value={font} style={{ fontFamily: font }}>{font}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <SliderField
+                    label="Size"
+                    value={colors.answerPage.answerTitleFontSize}
+                    onValueChange={(v) => updateAnswerPageColors({ answerTitleFontSize: v })}
+                    min={8}
+                    max={50}
+                    step={1}
+                    format="px"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-gray-500">Alignment</Label>
+                  <Select value={colors.answerPage.answerTitleAlignment} onValueChange={(value) => updateAnswerPageColors({ answerTitleAlignment: value as any })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="left">Left</SelectItem>
+                      <SelectItem value="center">Center</SelectItem>
+                      <SelectItem value="right">Right</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <CheckboxItem label="Show Puzzle Number" checked={colors.answerPage.showAnswerNumber} onCheckedChange={(v) => updateAnswerPageColors({ showAnswerNumber: v })} />
+              </div>
             </div>
           </div>
         </TabsContent>
@@ -495,7 +701,12 @@ export function WordSearchSidebar() {
             {/* Words Per Puzzle */}
             <div className="space-y-2">
               <Label className="text-sm font-medium">Words Per Puzzle</Label>
-              <NumberInput value={wordList.wordsPerPuzzle} onChange={(val) => updateWordListSettings({ wordsPerPuzzle: val })} min={3} max={50} />
+              <IntegerInput
+                value={wordList.wordsPerPuzzle}
+                onChange={(v) => updateWordListSettings({ wordsPerPuzzle: v })}
+                min={3}
+                max={50}
+              />
               <p className="text-xs text-gray-500">
                 Total needed: {requiredWords} ({core.numberOfPuzzles} x {wordList.wordsPerPuzzle})
               </p>
@@ -503,7 +714,7 @@ export function WordSearchSidebar() {
 
             {/* Visibility */}
             <div className="flex items-center space-x-2">
-              <Checkbox id="hideWordList" checked={wordList.hideWordList} onCheckedChange={(checked) => updateWordListSettings({ hideWordList: checked })} />
+              <Checkbox id="hideWordList" checked={wordList.hideWordList} onCheckedChange={(checked) => updateWordListSettings({ hideWordList: checked === true })} />
               <Label htmlFor="hideWordList" className="text-sm font-normal">Hide Word List</Label>
             </div>
 
@@ -551,10 +762,14 @@ export function WordSearchSidebar() {
                           </SelectContent>
                         </Select>
                       </div>
-                      <div>
-                        <Label className="text-xs text-gray-500">Max Length</Label>
-                        <NumberInput value={wordList.aiMaxWordLength} onChange={(val) => updateWordListSettings({ aiMaxWordLength: val })} min={3} max={15} />
-                      </div>
+                      <SliderField
+                        label="Max Length"
+                        value={wordList.aiMaxWordLength}
+                        onValueChange={(v) => updateWordListSettings({ aiMaxWordLength: v })}
+                        min={3}
+                        max={15}
+                        step={1}
+                      />
                     </div>
                   </div>
                 )}
@@ -593,14 +808,19 @@ export function WordSearchSidebar() {
                       <Select value={wordList.wordListFontFamily} onValueChange={(value) => updateWordListSettings({ wordListFontFamily: value })}>
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          {GOOGLE_FONTS.map((font) => <SelectItem key={font} value={font}>{font}</SelectItem>)}
+                          {PUBLISHING_FONTS.map((font) => <SelectItem key={font} value={font} style={{ fontFamily: font }}>{font}</SelectItem>)}
                         </SelectContent>
                       </Select>
                     </div>
-                    <div>
-                      <Label className="text-xs text-gray-500">Font Size</Label>
-                      <NumberInput value={wordList.wordListFontSize} onChange={(val) => updateWordListSettings({ wordListFontSize: val })} min={8} max={24} />
-                    </div>
+                    <SliderField
+                      label="Font Size"
+                      value={wordList.wordListFontSize}
+                      onValueChange={(v) => updateWordListSettings({ wordListFontSize: v })}
+                      min={8}
+                      max={50}
+                      step={1}
+                      format="px"
+                    />
                     <div>
                       <Label className="text-xs text-gray-500">Case</Label>
                       <Select value={wordList.wordListCase} onValueChange={(value) => updateWordListSettings({ wordListCase: value as any })}>
@@ -638,6 +858,24 @@ export function WordSearchSidebar() {
                         </SelectContent>
                       </Select>
                     </div>
+                    <SliderField
+                      label="Spaces Between Words Horizontally"
+                      value={wordList.wordSpacingHorizontal ?? wordList.wordListGap ?? 50}
+                      onValueChange={(v) => updateWordListSettings({ wordSpacingHorizontal: v })}
+                      min={0}
+                      max={100}
+                      step={1}
+                      format="px"
+                    />
+                    <SliderField
+                      label="Spaces Between Words Vertically"
+                      value={wordList.wordSpacingVertical ?? wordList.wordListGap ?? 8}
+                      onValueChange={(v) => updateWordListSettings({ wordSpacingVertical: v })}
+                      min={0}
+                      max={40}
+                      step={1}
+                      format="px"
+                    />
                   </div>
                 </div>
 
@@ -698,65 +936,9 @@ export function WordSearchSidebar() {
               </div>
             </div>
 
-            {/* Solution Highlight Settings */}
-            <div className="space-y-3">
-              <Label className="text-sm font-medium">Solution Highlight</Label>
-              <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
-                <ColorInput label="Stroke Color" value={colors.answerPage.lettersInSolutionColor} onChange={(v) => updateAnswerPageColors({ lettersInSolutionColor: v })} />
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label className="text-xs text-gray-500">Stroke Thickness (px)</Label>
-                    <NumberInput value={colors.answerPage.solutionStrokeThickness} onChange={(val) => updateAnswerPageColors({ solutionStrokeThickness: val })} min={1} max={5} />
-                  </div>
-                  <div>
-                    <Label className="text-xs text-gray-500">Stroke Padding (px)</Label>
-                    <NumberInput value={colors.answerPage.solutionStrokePadding} onChange={(val) => updateAnswerPageColors({ solutionStrokePadding: val })} min={0} max={5} />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Answer Page Title Settings */}
-            <div className="space-y-3">
-              <Label className="text-sm font-medium">Answer Page Title</Label>
-              <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
-                <div>
-                  <Label className="text-xs text-gray-500">Title Prefix</Label>
-                  <Input value={colors.answerPage.answerTitlePrefix} onChange={(e) => updateAnswerPageColors({ answerTitlePrefix: e.target.value })} placeholder="Solution" />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label className="text-xs text-gray-500">Font</Label>
-                    <Select value={colors.answerPage.answerTitleFontFamily} onValueChange={(value) => updateAnswerPageColors({ answerTitleFontFamily: value })}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {GOOGLE_FONTS.map((font) => <SelectItem key={font} value={font}>{font}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label className="text-xs text-gray-500">Size (px)</Label>
-                    <NumberInput value={colors.answerPage.answerTitleFontSize} onChange={(val) => updateAnswerPageColors({ answerTitleFontSize: val })} min={10} max={48} />
-                  </div>
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Alignment</Label>
-                  <Select value={colors.answerPage.answerTitleAlignment} onValueChange={(value) => updateAnswerPageColors({ answerTitleAlignment: value as any })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="left">Left</SelectItem>
-                      <SelectItem value="center">Center</SelectItem>
-                      <SelectItem value="right">Right</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <CheckboxItem label="Show Puzzle Number" checked={colors.answerPage.showAnswerNumber} onCheckedChange={(v) => updateAnswerPageColors({ showAnswerNumber: v })} />
-              </div>
-            </div>
-
             <Button variant="outline" onClick={() => updateColors({
               puzzlePage: { backgroundColor: '#ffffff', titleColor: '#1f2937', subtitleColor: '#6b7280', boxColor: '#1f2937', puzzleColor: '#1f2937', wordListTitleColor: '#374151', wordListColor: '#4b5563' },
-              answerPage: { backgroundColor: '#ffffff', titleColor: '#1f2937', boxColor: '#1f2937', lettersInSolutionColor: '#22c55e', lettersNotInSolutionColor: '#d1d5db', solutionStrokeThickness: 2, solutionStrokePadding: 2, answerTitlePrefix: 'Solution', answerTitleFontFamily: 'Inter', answerTitleFontSize: 20, answerTitleAlignment: 'center', showAnswerNumber: true },
+              answerPage: { backgroundColor: '#ffffff', titleColor: '#1f2937', boxColor: '#1f2937', lettersInSolutionColor: '#22c55e', lettersNotInSolutionColor: '#d1d5db', solutionStrokeThickness: 12, solutionStrokePadding: 2, solutionFrameColor: '#22c55e', solutionFrameStyle: 'rounded', solutionFrameRadius: 6, solutionHighlightAlpha: 30, onlyHighlightWordListWords: false, answerTitlePrefix: 'Solution', answerTitleFontFamily: 'Inter', answerTitleFontSize: 20, answerTitleAlignment: 'center', showAnswerNumber: true }
             })} className="w-full">
               Reset Colors
             </Button>
@@ -771,7 +953,7 @@ export function WordSearchSidebar() {
             {/* Custom Trim Size */}
             <div className="space-y-2">
               <div className="flex items-center space-x-2">
-                <Checkbox id="useCustomTrim" checked={bookCanvas.useCustomTrim} onCheckedChange={(checked) => updateBookCanvas({ useCustomTrim: checked })} />
+                <Checkbox id="useCustomTrim" checked={bookCanvas.useCustomTrim} onCheckedChange={(checked) => updateBookCanvas({ useCustomTrim: checked === true })} />
                 <Label htmlFor="useCustomTrim" className="text-sm font-normal">Custom Trim Size</Label>
               </div>
 
@@ -800,20 +982,9 @@ export function WordSearchSidebar() {
               </Select>
             </div>
 
-            {/* Answers Per Page */}
-            <div className="space-y-1">
-              <Label className="text-sm font-medium">Answers Per Page</Label>
-              <Select value={bookCanvas.answersPerPage.toString()} onValueChange={(value) => updateBookCanvas({ answersPerPage: parseInt(value) })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {[1, 2, 4].map((n) => <SelectItem key={n} value={n.toString()}>{n} Solution{n > 1 ? 's' : ''}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
             {/* Page Structure */}
             <div className="flex items-center space-x-2">
-              <Checkbox id="includePageBetween" checked={bookCanvas.includePageBetweenPuzzleAndSolutions} onCheckedChange={(checked) => updateBookCanvas({ includePageBetweenPuzzleAndSolutions: checked })} />
+              <Checkbox id="includePageBetween" checked={bookCanvas.includePageBetweenPuzzleAndSolutions} onCheckedChange={(checked) => updateBookCanvas({ includePageBetweenPuzzleAndSolutions: checked === true })} />
               <Label htmlFor="includePageBetween" className="text-sm font-normal">Blank page between puzzle and solutions</Label>
             </div>
           </div>

@@ -19,7 +19,7 @@ export function generateWordMatch(
     .slice(0, 50); // Limit to 50 words
 
   if (cleanWords.length === 0) {
-    return { leftColumn: [], rightColumn: [] };
+    return { type: 'word-match', leftColumn: [], rightColumn: [] };
   }
 
   // Shuffle for right column

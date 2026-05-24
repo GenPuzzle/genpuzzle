@@ -22,6 +22,7 @@ export interface WordPlacement {
   start: Position;
   direction: Direction;
   end: Position;
+  color?: string; // Optional per-word color for multi-color line highlights
 }
 
 export type Direction =
@@ -38,7 +39,8 @@ export type Direction =
 
 // Book/Canvas Settings
 export interface BookCanvasSettings {
-  // Custom Trim
+  // Bleed and trim
+  includeBleed: boolean;
   useCustomTrim: boolean;
   customWidth: number;
   customHeight: number;
@@ -76,11 +78,10 @@ export interface WordSearchCoreSettings {
   // Grid Modifiers
   noBoxAroundPuzzle: boolean;
   addGridLines: boolean;
-  allowNumbersInGrid: boolean;
-  twoPagePuzzles: boolean;
+  borderStrokeThickness: number;
+  gridLinesStrokeThickness: number;
+  innerGridOpacity: number; // 0-100, 0 = invisible inner grid lines, 100 = fully opaque
 
-  // Custom Letters
-  customLetters: string;
 }
 
 // Typography & Spacing Settings
@@ -105,6 +106,12 @@ export interface TypographySpacingSettings {
   puzzleGridCase: 'upper' | 'lower';
   puzzleGridFontFamily: string;
   puzzleGridFontSize: number;
+
+  // Manual Letter Calibration Offsets (for perfect centering)
+  uiOffsetX: number;
+  uiOffsetY: number;
+  pdfOffsetX: number;
+  pdfOffsetY: number;
 
   // Answer Page Grid
   setFontForAnswerPages: boolean;
@@ -141,6 +148,10 @@ export interface WordListSettings {
   // Layout
   wordListDirection: 'vertical' | 'horizontal';
   wordListColumns: number;
+  wordSpacingHorizontal: number;
+  wordSpacingVertical: number;
+  /** @deprecated Migrated to wordSpacingHorizontal / wordSpacingVertical */
+  wordListGap?: number;
 
   // Modifiers
   dontAlphabetize: boolean;
@@ -167,13 +178,19 @@ export interface AnswerPageColors {
   lettersInSolutionColor: string;
   lettersNotInSolutionColor: string;
 
+  // Solution Display Mode (fixed to line-highlight)
+  
   // Solution Stroke/Frame Settings
-  solutionStrokeThickness: number; // 1-5px
+  solutionStrokeThickness: number; // 1-15px
   solutionStrokePadding: number; // padding between letters and stroke
-  solutionFrameColor: string; // color of the highlight frame
+  solutionFrameColor: string; // default color of the highlight frame (overridable per word)
   solutionFrameStyle: 'rounded' | 'square' | 'circle'; // style of the frame
   solutionFrameRadius: number; // border radius for rounded style (0-50)
+  // Highlight mode fixed to box-frame, Line caps fixed to round (rounded ends)
   onlyHighlightWordListWords: boolean; // only highlight words that are in the word list
+
+  // Line highlight transparency (0-100). 100 = opaque, 0 = invisible. Default: 30
+  solutionHighlightAlpha: number;
 
   // Answer Page Title
   answerTitlePrefix: string; // e.g., "Solution", "Key:", "Answer"
@@ -345,11 +362,12 @@ export interface SavedPuzzle {
 export function getDefaultWordSearchSettings(): WordSearchSettings {
   return {
     bookCanvas: {
+      includeBleed: false,
       useCustomTrim: false,
       customWidth: 8.5,
       customHeight: 11,
       puzzleType: 'word-search',
-      answersPerPage: 1,
+      answersPerPage: 4,
       includePageBetweenPuzzleAndSolutions: false,
     },
     core: {
@@ -366,10 +384,11 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
       allowDiagonalUpReverse: false,
       allowDiagonalDownReverse: false,
       noBoxAroundPuzzle: false,
-      addGridLines: false,
-      allowNumbersInGrid: false,
-      twoPagePuzzles: false,
-      customLetters: '',
+      addGridLines: true,
+      borderStrokeThickness: 2,
+      gridLinesStrokeThickness: 1,
+      innerGridOpacity: 0,
+        // customLetters removed
     },
     typography: {
       selectTitleOption: 'puzzle-number',
@@ -384,7 +403,12 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
       spaceBetweenTitleAndAnswer: 20,
       puzzleGridCase: 'upper',
       puzzleGridFontFamily: 'Inter',
-      puzzleGridFontSize: 14,
+        puzzleGridFontSize: 18,
+      // Manual Letter Calibration Offsets
+      uiOffsetX: 0,
+      uiOffsetY: 0,
+      pdfOffsetX: 0,
+      pdfOffsetY: 0,
       setFontForAnswerPages: false,
       answerGridFontFamily: 'Inter',
       setFontSizeForAnswerPages: false,
@@ -400,10 +424,12 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
       aiAgeLevel: 'Adult',
       aiMaxWordLength: 10,
       wordListFontFamily: 'Inter',
-      wordListFontSize: 12,
+      wordListFontSize: 18,
       wordListCase: 'upper',
       wordListDirection: 'vertical',
       wordListColumns: 2,
+      wordSpacingHorizontal: 50,
+      wordSpacingVertical: 8,
       dontAlphabetize: false,
       addCheckboxes: false,
       addSpaceForGraphics: false,
@@ -425,11 +451,12 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
         boxColor: '#1f2937',
         lettersInSolutionColor: '#000000',
         lettersNotInSolutionColor: '#000000',
-        solutionStrokeThickness: 2,
+        solutionStrokeThickness: 12,
         solutionStrokePadding: 0,
         solutionFrameColor: '#000000',
         solutionFrameStyle: 'rounded',
         solutionFrameRadius: 4,
+        solutionHighlightAlpha: 30,
         onlyHighlightWordListWords: true,
         answerTitlePrefix: 'Solution',
         answerTitleFontFamily: 'Inter',

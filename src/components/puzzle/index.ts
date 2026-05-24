@@ -1,4 +1,6 @@
 export { WordSearchGrid } from './WordSearchGrid';
+export { WordSearchPagePreview } from './WordSearchPagePreview';
+export { WordSearchSolutionPage } from './WordSearchSolutionPage';
 export { SudokuGrid } from './SudokuGrid';
 export { CrosswordGrid } from './CrosswordGrid';
 export { CryptogramDisplay } from './CryptogramDisplay';

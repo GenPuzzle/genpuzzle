@@ -3,7 +3,6 @@
 import React, { useState } from 'react';
 import { AppProvider } from '@/lib/app-context';
 import { WordSearchSidebar } from '@/components/WordSearchSidebar';
-import { PuzzleDashboard } from '@/components/PuzzleDashboard';
 import { PreviewCanvas } from '@/components/PreviewCanvas';
 import { SavedPuzzlesLibrary } from '@/components/SavedPuzzlesLibrary';
 import { Button } from '@/components/ui/button';
@@ -56,9 +55,8 @@ function PuzzleGeneratorApp() {
           </Button>
         </header>
 
-        {/* Dashboard & Preview */}
+        {/* Preview */}
         <div className="flex-1 overflow-auto p-6">
-          <PuzzleDashboard />
           <PreviewCanvas />
         </div>
       </div>

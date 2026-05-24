@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/sonner";
 import GlobalClientEffects from "@/components/GlobalClientEffects";
 
 import "./globals.css";
+import { PUBLISHING_FONTS_GOOGLE_CSS_URL } from "@/lib/publishing-fonts";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -35,6 +36,9 @@ export default function RootLayout({
 
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <link rel="stylesheet" href={PUBLISHING_FONTS_GOOGLE_CSS_URL} />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased `}
       >
