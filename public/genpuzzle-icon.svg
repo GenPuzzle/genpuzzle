@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 512 512" role="img">
+  <title>GenPuzzle icon</title>
+  <g fill="#000000">
+    <path d="M256 32c-33 0-64 17-82 44l-32 48h228l-32-48c-18-27-49-44-82-44z"/>
+    <path d="M96 128v288c0 18 14 32 32 32h256c18 0 32-14 32-32V128H96zM192 208h128v192H192z"/>
+  </g>
+</svg>
