@@ -85,6 +85,12 @@ const nextConfig: NextConfig = {
         hostname: "cdn.chat2db-ai.com",
       }
     ],
+    localPatterns: [
+      {
+        pathname: '/**',
+        search: '',
+      },
+    ],
   },
 };
 
