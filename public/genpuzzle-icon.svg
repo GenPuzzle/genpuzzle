@@ -1,7 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 512 512" role="img">
-  <title>GenPuzzle icon</title>
-  <g fill="#000000">
-    <path d="M256 32c-33 0-64 17-82 44l-32 48h228l-32-48c-18-27-49-44-82-44z"/>
-    <path d="M96 128v288c0 18 14 32 32 32h256c18 0 32-14 32-32V128H96zM192 208h128v192H192z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 600" width="64" height="64" role="img">
+  <title>GenPuzzle Icon</title>
+  <defs>
+    <style>
+      .book-spine { stroke: #000; stroke-width: 35; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .book-pages { stroke: #000; stroke-width: 28; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .pen-body { stroke: #000; stroke-width: 25; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .pen-tip { fill: #000; }
+    </style>
+  </defs>
+  
+  <!-- Book Left Pages -->
+  <path class="book-spine" d="M 80 80 L 80 520 Q 80 560 120 560 L 280 560 Q 320 560 320 520 L 320 80 Q 320 40 280 40 L 120 40 Q 80 40 80 80" />
+  <path class="book-pages" d="M 130 110 L 130 520 Q 130 530 140 530 L 270 530 Q 280 530 280 520 L 280 110 Q 280 100 270 100 L 140 100 Q 130 100 130 110" />
+  
+  <!-- Book Right Pages (with pen) -->
+  <path class="book-spine" d="M 430 80 L 430 520 Q 430 560 470 560 L 630 560 Q 670 560 670 520 L 670 80 Q 670 40 630 40 L 470 40 Q 430 40 430 80" />
+  <path class="book-pages" d="M 480 110 L 480 520 Q 480 530 490 530 L 620 530 Q 630 530 630 520 L 630 110 Q 630 100 620 100 L 490 100 Q 480 100 480 110" />
+  
+  <!-- Pen/Pencil on right page -->
+  <g transform="translate(520, 200)">
+    <line class="pen-body" x1="20" y1="10" x2="120" y2="110" />
+    <polygon class="pen-tip" points="120,110 130,100 110,90" />
+    <circle class="pen-tip" cx="135" cy="115" r="8" />
   </g>
+  
+  <!-- Curved flourish at bottom -->
+  <path d="M 150 520 Q 250 560 350 540 Q 450 520 550 540" stroke="#000" stroke-width="18" fill="none" stroke-linecap="round" />
 </svg>

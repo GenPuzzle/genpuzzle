@@ -34,10 +34,10 @@ export default function RootLayout({
 }>) {
   const content = (
     <>
-      <header style={{display: 'flex', alignItems: 'center', gap: 12, padding: '12px 20px'}}>
-        <a href="/" style={{display: 'flex', alignItems: 'center', gap: 12, textDecoration: 'none', color: 'inherit'}}>
-          <img src="/genpuzzle-logo.svg" alt="GenPuzzle" style={{height: 40}} />
-          <span style={{fontWeight: 700, fontSize: 18}}>GenPuzzle</span>
+      <header style={{display: 'flex', alignItems: 'center', gap: 12, padding: '12px 20px', borderBottom: '1px solid #e5e7eb'}}>
+        <a href="/" style={{display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit'}}>
+          <img src="/genpuzzle-logo.svg" alt="GenPuzzle" style={{height: 32, width: 'auto'}} />
+          <span style={{fontWeight: 700, fontSize: 18, letterSpacing: '-0.5px'}}>GenPuzzle</span>
         </a>
       </header>
       {children}
