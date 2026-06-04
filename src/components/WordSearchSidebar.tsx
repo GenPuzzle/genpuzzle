@@ -359,7 +359,7 @@ export function WordSearchSidebar() {
         }
         
         button[role="tab"][data-state="active"] {
-          background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+          background: linear-gradient(135deg, #7D8183 0%, #5a5f61 100%);
           color: white;
           border-color: #4f46e5;
           box-shadow: 0 8px 16px rgba(79, 70, 229, 0.3);

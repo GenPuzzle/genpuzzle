@@ -50,8 +50,8 @@ export function DotToDotDisplay({ puzzle, showSolution = false }: DotToDotDispla
                 cx={coords.x}
                 cy={coords.y}
                 r={6}
-                fill="#6366f1"
-                stroke="#4f46e5"
+                fill="#7D8183"
+                stroke="#5a5f61"
                 strokeWidth={2}
               />
               <text

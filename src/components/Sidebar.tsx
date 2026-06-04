@@ -442,7 +442,7 @@ export function Sidebar() {
                       puzzlePage: { ...colorSettings.puzzlePage, titleColor: e.target.value },
                     })
                   }
-                  className="w-14 h-12 p-1 cursor-pointer border-2 border-purple-300 dark:border-slate-500 rounded-lg hover:shadow-lg transition-shadow duration-200"
+                  className="w-14 h-12 p-1 cursor-pointer border-2 rounded-lg hover:shadow-lg transition-shadow duration-200" style={{borderColor: '#7D8183'}}
                 />rounded-lg hover:shadow-lg transition-shadow duration-200" style={{borderColor: `rgba(34, 118, 180, 0.3)`}}
                 <Input
                   value={colorSettings.puzzlePage.titleColor}
@@ -452,7 +452,7 @@ export function Sidebar() {
                       puzzlePage: { ...colorSettings.puzzlePage, titleColor: e.target.value },
                     })
                   }
-                  className="flex-1 font-mono text-sm border-gray-300 dark:border-slate-600 focus:border-purple-400 focus:ring-purple-400/20"
+                  className="flex-1 font-mono text-sm border-gray-300 dark:border-slate-600" style={{borderColor: '#7D8183'}} onFocus={(e) => {e.target.style.borderColor = '#2276B4'; e.target.style.boxShadow = '0 0 0 3px rgba(34, 118, 180, 0.1)'}} onBlur={(e) => {e.target.style.borderColor = '#7D8183'; e.target.style.boxShadow = 'none'}}
                 />transition-colors duration-200" style={{borderColor: `#7D8183`, "--focus-border": `#2276B4`, "--focus-ring": `rgba(34, 118, 180, 0.2)`} as React.CSSProperties}
               </div>
             </div>
