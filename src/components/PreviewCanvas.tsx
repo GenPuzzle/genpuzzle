@@ -307,53 +307,51 @@ export function PreviewCanvas() {
   return (
     <div className="flex-1 flex flex-col h-full bg-gray-50 relative">
       {/* Performance Mode Controls */}
-      <div className="px-4 py-3 bg-white border-b border-gray-200">
-        <div className="flex items-center gap-4 flex-wrap">
-          {/* Preview Range Mode Toggle - Custom Radio Buttons */}
+      <div className="px-6 py-4 bg-gradient-to-r from-gray-50 to-blue-50 border-b border-blue-100">
+        <div className="flex items-center gap-6 flex-wrap">
+          {/* Preview Range Mode Toggle - Modern Neumorphic Radio Buttons */}
           <div className="flex items-center gap-4">
-            <span className="text-sm font-medium text-gray-700">Preview Range:</span>
-            <div className="radio-buttons-container">
-              <label className="radio-button">
+            <span className="text-sm font-semibold text-gray-700">Preview Range:</span>
+            <div className="radio-inputs" style={{ width: 'auto' }}>
+              <div className="radio">
                 <input
                   type="radio"
+                  id="preview-range-sample"
                   name="preview-range"
-                  className="radio-button__input"
                   checked={previewRangeMode === 'sample'}
                   onChange={() => setPreviewRangeMode('sample')}
                   disabled={isGeneratingPdf}
                 />
-                <span className="radio-button__label">
+                <label htmlFor="preview-range-sample" className="name">
                   Sample Pages (Fast)
-                  <span className="radio-button__custom" />
-                </span>
-              </label>
-              <label className="radio-button">
+                </label>
+              </div>
+              <div className="radio">
                 <input
                   type="radio"
+                  id="preview-range-all"
                   name="preview-range"
-                  className="radio-button__input"
                   checked={previewRangeMode === 'all'}
                   onChange={handleToggleFullPageMode}
                   disabled={isGeneratingPdf || isGenerating}
                 />
-                <span className="radio-button__label">
+                <label htmlFor="preview-range-all" className="name">
                   All Pages (Full)
-                  <span className="radio-button__custom" />
-                </span>
-              </label>
+                </label>
+              </div>
             </div>
           </div>
 
           {/* Preview Content Tabs */}
           <Tabs value={activePreviewTab} onValueChange={(v) => handleSwitchPreviewTab(v as 'puzzles' | 'solutions')}>
-            <TabsList>
-              <TabsTrigger value="puzzles" className="text-xs">Puzzle Sheets</TabsTrigger>
-              <TabsTrigger value="solutions" className="text-xs">Solution Sheets</TabsTrigger>
+            <TabsList className="modern-tabs-list">
+              <TabsTrigger value="puzzles" className="modern-tabs-trigger text-xs">Puzzle Sheets</TabsTrigger>
+              <TabsTrigger value="solutions" className="modern-tabs-trigger text-xs">Solution Sheets</TabsTrigger>
             </TabsList>
           </Tabs>
 
           {/* Info Text */}
-          <div className="text-xs text-gray-500">
+          <div className="text-xs font-medium text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg">
             {previewRangeMode === 'sample' ? (
               <span>Showing first puzzle only • Instant updates for fast editing</span>
             ) : (
