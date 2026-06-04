@@ -27,27 +27,97 @@ function normalizeHexColor(color: string | undefined, fallback: string) {
 }
 
 function createTitleText(puzzle: WordSearchPuzzle, settings: WordSearchSettings, titleWords: TitleWordsSettings, showSolution: boolean) {
+  const puzzleNum = puzzle.puzzleNumber || 1;
+
   if (showSolution) {
-    const prefix = settings.colors.answerPage.answerTitlePrefix || 'Solution';
-    const number = settings.colors.answerPage.showAnswerNumber ? ` ${puzzle.puzzleNumber || ''}` : '';
-    return `${prefix}${number}`.trim();
+    // Solution title logic
+    let baseTitle = '';
+    let numberingStyle = 'none';
+    
+    if (settings.typography.solutionTitleStyle === 'same_as_puzzle') {
+      // Use the same base title and numbering style as the puzzle page
+      switch (settings.typography.selectTitleOption) {
+        case 'puzzle-number':
+        case 'one-custom-title':
+          baseTitle = settings.typography.titleText || titleWords.title || 'Word Search';
+          break;
+        case 'custom': {
+          const lines = (settings.typography.titleText || '')
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+          baseTitle = lines.length > 0 ? (lines[puzzleNum - 1] ?? lines[lines.length - 1]) : '';
+          break;
+        }
+        default:
+          baseTitle = titleWords.title || 'Word Search';
+      }
+      // Use the SAME numbering style as puzzle
+      numberingStyle = settings.typography.puzzleNumberingStyle || 'none';
+    } else {
+      // Use custom solution title with its own numbering style
+      baseTitle = settings.typography.customSolutionTitle || 'Solution';
+      numberingStyle = settings.typography.solutionNumberingStyle || 'none';
+    }
+
+    // Apply numbering style to solution title
+    if (baseTitle && numberingStyle !== 'none') {
+      if (numberingStyle === 'prefix') {
+        baseTitle = `${puzzleNum}. ${baseTitle}`;
+      } else if (numberingStyle === 'suffix') {
+        baseTitle = `${baseTitle} #${puzzleNum}`;
+      }
+    }
+
+    return baseTitle;
   }
 
-  if (settings.typography.selectTitleOption === 'custom') {
+  // Puzzle title logic (non-solution)
+  let baseTitle = '';
+
+  if (settings.typography.selectTitleOption === 'puzzle-number') {
+    // For puzzle-number mode, get just the title without default # suffix
+    baseTitle = settings.typography.titleText || titleWords.title || 'Word Search';
+  } else if (settings.typography.selectTitleOption === 'one-custom-title') {
+    baseTitle = settings.typography.titleText || titleWords.title || 'Word Search';
+  } else if (settings.typography.selectTitleOption === 'custom') {
     const lines = (settings.typography.titleText || '')
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean);
-    const puzzleNum = puzzle.puzzleNumber || 1;
-    return lines.length > 0 ? (lines[puzzleNum - 1] ?? lines[lines.length - 1]) : '';
+    baseTitle = lines.length > 0 ? (lines[puzzleNum - 1] ?? lines[lines.length - 1]) : '';
+  } else {
+    baseTitle = titleWords.title || 'Word Search';
   }
 
-  if (settings.typography.selectTitleOption === 'puzzle-number') {
-    const puzzleNum = puzzle.puzzleNumber || 1;
-    return `${settings.typography.titleText || titleWords.title || 'Word Search'} #${puzzleNum}`;
+  // ALWAYS apply puzzle numbering style formatting based on user selection
+  const numberingStyle = settings.typography.puzzleNumberingStyle || 'none';
+  
+  if (baseTitle && numberingStyle !== 'none') {
+    if (numberingStyle === 'prefix') {
+      baseTitle = `${puzzleNum}. ${baseTitle}`;
+    } else if (numberingStyle === 'suffix') {
+      baseTitle = `${baseTitle} #${puzzleNum}`;
+    }
   }
 
-  return titleWords.title || 'Word Search';
+  return baseTitle;
+}
+
+function createFunFactText(puzzle: WordSearchPuzzle, settings: WordSearchSettings) {
+  if (!settings.typography.includeFunFacts) return '';
+  
+  const funFactsText = settings.typography.funFactsText || '';
+  if (!funFactsText) return '';
+  
+  const lines = funFactsText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  
+  const puzzleNum = puzzle.puzzleNumber || 1;
+  return lines.length > 0 ? (lines[puzzleNum - 1] ?? '') : '';
+}
 }
 
 function buildGridText(puzzle: WordSearchPuzzle) {
@@ -73,8 +143,8 @@ export async function generatePuzzlePPT(options: ExportOptions): Promise<void> {
     applyMode = new Map(),
   } = options;
 
-  const pageWidthInches = bookSettings.useCustomTrim && bookSettings.customWidth ? bookSettings.customWidth : 8.5;
-  const pageHeightInches = bookSettings.useCustomTrim && bookSettings.customHeight ? bookSettings.customHeight : 11;
+  const pageWidthInches = bookSettings.customWidth || 8.5;
+  const pageHeightInches = bookSettings.customHeight || 11;
 
   const PptxGenJS = (await import('pptxgenjs')).default;
   const pptx = new PptxGenJS();
@@ -104,20 +174,25 @@ export async function generatePuzzlePPT(options: ExportOptions): Promise<void> {
       bold: true,
     });
 
-    if (settings.typography.includeSubtitle && settings.typography.subtitleText) {
-      slide.addText(settings.typography.subtitleText, {
+    const funFactText = createFunFactText(puzzle, settings);
+    const subtitleToTitleGapInches = (settings.typography.subtitleToTitleGap ?? 10) / 72;
+    const subtitleToPuzzleGapInches = (settings.typography.subtitleToPuzzleGap ?? 10) / 72;
+    
+    if (funFactText) {
+      slide.addText(funFactText, {
         x: 0.5,
-        y: titleY + 0.6,
+        y: titleY + 0.8 + subtitleToTitleGapInches,
         w: pageWidthInches - 1,
-        h: 0.5,
-        fontSize: (settings.typography.puzzleTitleFontSize || 24) - 6,
+        h: 0.8, // Increased height to accommodate wrapped text
+        fontSize: settings.typography.subtitleFontSize || 14,
         fontFace: settings.typography.puzzleTitleFontFamily || 'Inter',
         color: normalizeHexColor(settings.colors.puzzlePage.subtitleColor, '6B7280'),
         align: 'center',
+        wrap: true, // Enable text wrapping in PowerPoint
       });
     }
 
-    const titleBlockHeight = 0.8 + (settings.typography.includeSubtitle && settings.typography.subtitleText ? 0.5 : 0);
+    const titleBlockHeight = 0.8 + (funFactText ? (0.8 + subtitleToTitleGapInches + subtitleToPuzzleGapInches) : 0);
     const gridStartY = titleY + titleBlockHeight + ((settings.typography.spaceBetweenTitleAndPuzzle !== undefined && settings.typography.spaceBetweenTitleAndPuzzle !== null) ? settings.typography.spaceBetweenTitleAndPuzzle : 20) / 72;
     const gridText = buildGridText(puzzle);
     const gridFontSize = settings.typography.puzzleGridFontSize || 18;

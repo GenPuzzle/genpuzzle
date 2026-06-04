@@ -23,7 +23,6 @@ export function getPageDimensionsInches(settings: WordSearchSettings): {
   height: number;
 } {
   if (
-    settings.bookCanvas.useCustomTrim &&
     settings.bookCanvas.customWidth &&
     settings.bookCanvas.customHeight
   ) {
@@ -41,6 +40,85 @@ export function getPageMarginInches(settings: WordSearchSettings): number {
 
 /** Gap between title baseline block and grid (matches calculateLayout). */
 export const TITLE_TO_GRID_GAP_PT = 10;
+
+/**
+ * Text wrapping utility for long subtitles/fun facts.
+ * Splits text into lines that fit within maxWidth, accounting for font metrics.
+ * 
+ * @param text - The text to wrap
+ * @param maxWidth - Maximum width available (in points or pixels, depending on context)
+ * @param charWidthEstimate - Average character width (0.5 = 50% of font size in points is typical for proportional fonts)
+ * @returns Array of wrapped lines
+ */
+export function wrapText(
+  text: string,
+  maxWidth: number,
+  charWidthEstimate: number = 0.5
+): string[] {
+  if (!text || maxWidth <= 0) return [];
+  
+  const words = text.split(/\s+/);
+  const lines: string[] = [];
+  let currentLine = '';
+  
+  for (const word of words) {
+    // Rough estimation: each character takes charWidthEstimate * fontSize width
+    // For a more accurate approach with pdf-lib, measure actual glyph widths
+    const testLine = currentLine ? `${currentLine} ${word}` : word;
+    const estimatedWidth = testLine.length * charWidthEstimate * 12; // 12pt baseline for estimation
+    
+    if (estimatedWidth <= maxWidth) {
+      currentLine = testLine;
+    } else {
+      if (currentLine) {
+        lines.push(currentLine);
+      }
+      currentLine = word;
+    }
+  }
+  
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+  
+  return lines.length > 0 ? lines : [text];
+}
+
+/**
+ * Measure text width using canvas context (for Canvas preview).
+ * Returns wrapped lines that fit within maxWidth.
+ */
+export function wrapTextCanvas(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+): string[] {
+  if (!text || maxWidth <= 0) return [];
+  
+  const words = text.split(/\s+/);
+  const lines: string[] = [];
+  let currentLine = '';
+  
+  for (const word of words) {
+    const testLine = currentLine ? `${currentLine} ${word}` : word;
+    const metrics = ctx.measureText(testLine);
+    
+    if (metrics.width <= maxWidth) {
+      currentLine = testLine;
+    } else {
+      if (currentLine) {
+        lines.push(currentLine);
+      }
+      currentLine = word;
+    }
+  }
+  
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+  
+  return lines.length > 0 ? lines : [text];
+}
 
 export interface LayoutResult {
   // Page dimensions (in points for PDF, or derived values for canvas)
@@ -270,10 +348,13 @@ export function getWordListSpacing(wordList: WordSearchSettings['wordList']): {
 
 /** Solution grid font size — respects "custom size for answer pages" toggle. */
 export function getSolutionGridFontSize(typography: WordSearchSettings['typography']): number {
-  if (typography.setFontSizeForAnswerPages) {
-    return typography.answerGridFontSize || typography.puzzleGridFontSize || 12;
+  // FIX: Completely isolate from puzzleGridFontSize
+  // Use answerGridFontSize ONLY if explicitly enabled and set
+  if (typography.setFontSizeForAnswerPages && typography.answerGridFontSize !== undefined && typography.answerGridFontSize !== null && typography.answerGridFontSize !== 0) {
+    return typography.answerGridFontSize;
   }
-  return typography.puzzleGridFontSize || 12;
+  // Strict hardcoded default for solutions (never fallback to puzzleGridFontSize)
+  return 18;
 }
 
 // Shared word list styling configuration used by both preview and PDF export

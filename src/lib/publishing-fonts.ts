@@ -14,6 +14,7 @@ export const PUBLISHING_FONTS = [
   'Fredoka',
   'Patrick Hand',
   'Playfair Display',
+  'Arabic Typesetting',
 ] as const;
 
 export type PublishingFont = (typeof PUBLISHING_FONTS)[number];
@@ -101,6 +102,10 @@ export const FONT_REGISTRY: Record<PublishingFont, PublishingFontConfig> = {
         'https://fonts.gstatic.com/s/playfairdisplay/v40/nuFvD-vYSZviVYUb_rj3ij__anPXJzDwcbmjWBN2PKdFvUDQ.ttf',
       bold: 'https://fonts.gstatic.com/s/playfairdisplay/v40/nuFvD-vYSZviVYUb_rj3ij__anPXJzDwcbmjWBN2PKeiukDQ.ttf',
     },
+  },
+  'Arabic Typesetting': {
+    windows: { regular: 'arabtype.ttf', bold: 'arabtype.ttf' },
+    alwaysBold: false,
   },
 };
 

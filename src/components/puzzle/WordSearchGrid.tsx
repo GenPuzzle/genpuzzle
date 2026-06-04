@@ -305,8 +305,11 @@ export function WordSearchGrid({
               const isHighlighted = showSolution && isInPlacement(rowIndex, colIndex) !== null;
               // Calculate rounded radius proportional to cell size
               const borderRadius = Math.max(cellSize * 0.15, 3);
+              // FIX: Completely isolate from puzzleFontSize
               const letterFontSize = showSolution
-                ? answerGridFontSize || puzzleGridFontSize
+                ? (answerGridFontSize !== undefined && answerGridFontSize !== null && answerGridFontSize !== 0)
+                  ? answerGridFontSize
+                  : 18 // Strict hardcoded default for solution grid (initial state)
                 : puzzleGridFontSize;
               const letterFontFamily = showSolution
                 ? answerGridFontFamily || puzzleGridFontFamily

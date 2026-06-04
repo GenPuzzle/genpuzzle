@@ -9,11 +9,12 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { SliderField } from '@/components/ui/slider-field';
-import { AlertCircle, CheckCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle, Save } from 'lucide-react';
 import { useApp } from '@/lib/app-context';
 import { PUBLISHING_FONTS } from '@/lib/publishing-fonts';
+import { cn } from '@/lib/utils';
 
-const LANGUAGES = ['English', 'Spanish', 'French', 'German', 'Italian', 'Portuguese'];
+const LANGUAGES = ['English', 'Spanish', 'French', 'German', 'Italian', 'Portuguese', 'Arabic'];
 const AGE_LEVELS = ['Children (6-8)', 'Children (9-12)', 'Teen', 'Adult', 'Senior'];
 
 // Numeric inputs are provided as sliders for smoother UI control
@@ -158,27 +159,31 @@ function ColorInput({
   label,
   value,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className={cn('flex items-center gap-2', disabled && 'opacity-50 pointer-events-none')}>
       <div className="flex-1">
-        <Label className="text-xs text-gray-500">{label}</Label>
+        <Label className={cn('text-xs', disabled ? 'text-gray-400' : 'text-gray-500')}>{label}</Label>
         <div className="flex items-center gap-2">
           <Input
             type="color"
             value={value}
             onChange={(e) => onChange(e.target.value)}
             className="w-10 h-8 p-1 cursor-pointer"
+            disabled={disabled}
           />
           <Input
             value={value}
             onChange={(e) => onChange(e.target.value)}
             className="flex-1 font-mono text-sm"
             placeholder="#000000"
+            disabled={disabled}
           />
         </div>
       </div>
@@ -206,13 +211,69 @@ function Sparkles({ className }: { className?: string }) {
   return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>;
 }
 
+/** Bulletproof Word List Textarea: Handles Space and Enter keys even with global event listeners */
+function WordListTextarea({ 
+  value, 
+  onChange 
+}: { 
+  value: string; 
+  onChange: (value: string) => void;
+}) {
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const [displayValue, setDisplayValue] = React.useState(value);
+
+  React.useEffect(() => {
+    setDisplayValue(value);
+    if (textareaRef.current && document.activeElement !== textareaRef.current) {
+      // Only update textarea value if it's not currently being edited
+      textareaRef.current.value = value;
+    }
+  }, [value]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      // CRITICAL: stop propagation to prevent global event listeners from interfering
+      e.stopPropagation();
+      // NOTE: Do NOT call preventDefault() - we want the browser to insert the character
+      
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+
+      // Also prevent the event from bubbling to parent containers
+      e.nativeEvent.stopImmediatePropagation?.();
+    }
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newValue = e.target.value;
+    setDisplayValue(newValue);
+    onChange(newValue);
+  };
+
+  return (
+    <div className="space-y-2">
+      <Label className="text-sm font-medium">Your Words</Label>
+      <Textarea
+        ref={textareaRef}
+        value={displayValue}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        placeholder="Enter one word per line..."
+        className="h-28"
+      />
+    </div>
+  );
+}
+
 export function WordSearchSidebar() {
+
   const {
     wordSearchSettings,
     updateWordSearchSettings,
     titleWords,
     setTitleWords,
     generatePuzzle,
+    savePuzzle,
     validationError,
     puzzleGridScale,
     setPuzzleGridScale,
@@ -256,59 +317,43 @@ export function WordSearchSidebar() {
     });
   };
 
+  const handleSave = () => {
+    const name = `${titleWords.title || 'word-search'} - ${new Date().toLocaleDateString()}`;
+    savePuzzle(name);
+  };
+
   const requiredWords = core.numberOfPuzzles * wordList.wordsPerPuzzle;
   const wordCount = titleWords.words.length;
 
   return (
     <div className="w-96 h-screen bg-white border-r border-gray-200 overflow-y-auto">
-      <Tabs defaultValue="puzzle" className="w-full">
+      <Tabs defaultValue="book" className="w-full">
         <TabsList className="w-full grid grid-cols-5">
-          <TabsTrigger value="puzzle" title="Puzzle">
-            <Grid3X3 className="w-4 h-4" />
-          </TabsTrigger>
-          <TabsTrigger value="design" title="Design">
-            <Type className="w-4 h-4" />
+          <TabsTrigger value="book" title="Book">
+            <Book className="w-4 h-4" />
           </TabsTrigger>
           <TabsTrigger value="words" title="Words">
             <List className="w-4 h-4" />
           </TabsTrigger>
+          <TabsTrigger value="design" title="Design">
+            <Type className="w-4 h-4" />
+          </TabsTrigger>
           <TabsTrigger value="colors" title="Colors">
             <Palette className="w-4 h-4" />
           </TabsTrigger>
-          <TabsTrigger value="book" title="Book">
-            <Book className="w-4 h-4" />
+          <TabsTrigger value="puzzle" title="Puzzle">
+            <Grid3X3 className="w-4 h-4" />
           </TabsTrigger>
         </TabsList>
 
         {/* ==================== PUZZLE SETTINGS ==================== */}
         <TabsContent value="puzzle" className="p-4 space-y-6">
           <div className="space-y-4">
-            <h3 className="font-semibold text-gray-900">Puzzle Settings</h3>
-
-            {/* Quantity */}
-            <div className="space-y-3">
-              <Label className="text-sm font-medium">Quantity</Label>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-xs text-gray-500">Number of Puzzles</Label>
-                  <Input
-                    type="number"
-                    value={String(core.numberOfPuzzles)}
-                    onChange={(e) => updateCore({ numberOfPuzzles: Math.max(1, parseInt(e.target.value || '1')) })}
-                    min={1}
-                    max={100}
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Starting Number</Label>
-                  <Input
-                    type="number"
-                    value={String(core.puzzlesStartingNumber)}
-                    onChange={(e) => updateCore({ puzzlesStartingNumber: Math.max(1, parseInt(e.target.value || '1')) })}
-                    min={1}
-                  />
-                </div>
-              </div>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-semibold text-gray-900">Puzzle Settings</h3>
+              <Button variant="outline" size="sm" onClick={handleSave}>
+                <Save className="w-4 h-4 mr-2" />Save
+              </Button>
             </div>
 
             {/* Grid Size */}
@@ -391,15 +436,6 @@ export function WordSearchSidebar() {
                   step={1}
                   format="px"
                 />
-                <SliderField
-                  label="Inner Grid Transparency"
-                  value={core.innerGridOpacity ?? 0}
-                  onValueChange={(v) => updateCore({ innerGridOpacity: v })}
-                  min={0}
-                  max={100}
-                  step={1}
-                  format="percent"
-                />
               </div>
             </div>
 
@@ -439,17 +475,6 @@ export function WordSearchSidebar() {
 
             {/* Custom Letters removed per request */}
 
-            {/* Answers Per Page */}
-            <div className="space-y-1">
-              <Label className="text-sm font-medium">Answers Per Page</Label>
-              <Select value={bookCanvas.answersPerPage.toString()} onValueChange={(value) => updateBookCanvas({ answersPerPage: parseInt(value) })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {[1, 2, 4].map((n) => <SelectItem key={n} value={n.toString()}>{n} Solution{n > 1 ? 's' : ''}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
             {/* Solution Marking Style */}
             <div className="space-y-3">
               <Label className="text-sm font-medium">Solution Marking</Label>
@@ -483,19 +508,54 @@ export function WordSearchSidebar() {
         {/* ==================== DESIGN SETTINGS ==================== */}
         <TabsContent value="design" className="p-4 space-y-6">
           <div className="space-y-4">
-            <h3 className="font-semibold text-gray-900">Design Settings</h3>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-semibold text-gray-900">Design Settings</h3>
+              <Button variant="outline" size="sm" onClick={handleSave}>
+                <Save className="w-4 h-4 mr-2" />Save
+              </Button>
+            </div>
 
             {/* Title Options */}
             <div className="space-y-3">
               <Label className="text-sm font-medium">Title</Label>
-              <Select value={typography.selectTitleOption} onValueChange={(value) => updateTypography({ selectTitleOption: value as any })}>
+              <Select 
+                value={typography.selectTitleOption} 
+                onValueChange={(value) => {
+                  const updates: any = { selectTitleOption: value as any };
+                  
+                  // When switching to "one-custom-title", extract only the first line
+                  if (value === 'one-custom-title' && typography.titleText) {
+                    const firstLine = typography.titleText.split('\n')[0] || 'Word Search';
+                    updates.titleText = firstLine;
+                  }
+                  
+                  // When switching to "custom", keep multiline text as-is
+                  // When switching to "none", clear the title text
+                  if (value === 'none') {
+                    updates.titleText = '';
+                  }
+                  
+                  updateTypography(updates);
+                }}
+              >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="puzzle-number">Use Puzzle Number</SelectItem>
-                  <SelectItem value="custom">Custom Title</SelectItem>
+                  <SelectItem value="one-custom-title">One Custom Title</SelectItem>
+                  <SelectItem value="custom">Custom Title Per Puzzle</SelectItem>
                   <SelectItem value="none">No Title</SelectItem>
                 </SelectContent>
               </Select>
+
+              {typography.selectTitleOption === 'one-custom-title' && (
+                <div className="space-y-2">
+                  <Input
+                    value={typography.titleText}
+                    onChange={(e) => updateTypography({ titleText: e.target.value })}
+                    placeholder="Enter the master title for all puzzles..."
+                  />
+                  <p className="text-xs text-gray-500">This title will be used for all puzzle pages.</p>
+                </div>
+              )}
 
               {typography.selectTitleOption === 'custom' && (
                 <div className="space-y-2">
@@ -509,14 +569,40 @@ export function WordSearchSidebar() {
                 </div>
               )}
 
-              <div className="flex items-center space-x-2">
-                <Checkbox id="includeSubtitle" checked={typography.includeSubtitle} onCheckedChange={(checked) => updateTypography({ includeSubtitle: checked === true })} />
-                <Label htmlFor="includeSubtitle" className="text-sm font-normal">Include Subtitle</Label>
-              </div>
-
-              {typography.includeSubtitle && (
-                <Input value={typography.subtitleText} onChange={(e) => updateTypography({ subtitleText: e.target.value })} placeholder="Enter subtitle..." />
+              {typography.selectTitleOption !== 'none' && (
+                <div className="space-y-2 pt-2 border-t">
+                  <Label className="text-sm font-medium">Puzzle Numbering Style</Label>
+                  <Select value={typography.puzzleNumberingStyle} onValueChange={(value) => updateTypography({ puzzleNumberingStyle: value as any })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None</SelectItem>
+                      <SelectItem value="prefix">Prefix (1. Title)</SelectItem>
+                      <SelectItem value="suffix">Suffix (Title #1)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-gray-500">Choose how to display puzzle numbers with titles.</p>
+                </div>
               )}
+
+              {/* Fun Facts / Quotes Section */}
+              <div className="space-y-2 pt-2 border-t">
+                <div className="flex items-center space-x-2">
+                  <Checkbox id="includeFunFacts" checked={typography.includeFunFacts} onCheckedChange={(checked) => updateTypography({ includeFunFacts: checked === true })} />
+                  <Label htmlFor="includeFunFacts" className="text-sm font-medium">Add Fun Facts / Quotes</Label>
+                </div>
+
+                {typography.includeFunFacts && (
+                  <>
+                    <Textarea
+                      value={typography.funFactsText}
+                      onChange={(e) => updateTypography({ funFactsText: e.target.value })}
+                      placeholder="Enter one fun fact or quote per line..."
+                      className="h-28"
+                    />
+                    <p className="text-xs text-gray-500">Enter one fun fact or quote per line. Each line appears under the corresponding puzzle (Line 1 under Puzzle 1, Line 2 under Puzzle 2, etc.)</p>
+                  </>
+                )}
+              </div>
             </div>
 
             {/* Fonts */}
@@ -546,7 +632,16 @@ export function WordSearchSidebar() {
                   step={1}
                   format="px"
                 />
-                
+                <SliderField
+                  label="Subtitle Size"
+                  value={typography.subtitleFontSize}
+                  onValueChange={(v) => updateTypography({ subtitleFontSize: v })}
+                  min={10}
+                  max={24}
+                  step={1}
+                  format="px"
+                  disabled={!typography.includeFunFacts}
+                />
               </div>
             </div>
 
@@ -576,6 +671,16 @@ export function WordSearchSidebar() {
                   format="px"
                 />
                 <SliderField
+                  label="Title to Subtitle"
+                  value={typography.subtitleToTitleGap}
+                  onValueChange={(v) => updateTypography({ subtitleToTitleGap: v })}
+                  min={0}
+                  max={100}
+                  step={1}
+                  format="px"
+                  disabled={!typography.includeFunFacts}
+                />
+                <SliderField
                   label="Title to Puzzle"
                   value={typography.spaceBetweenTitleAndPuzzle}
                   onValueChange={(v) => updateTypography({ spaceBetweenTitleAndPuzzle: v })}
@@ -583,6 +688,17 @@ export function WordSearchSidebar() {
                   max={100}
                   step={1}
                   format="px"
+                  disabled={typography.includeFunFacts}
+                />
+                <SliderField
+                  label="Subtitle to Puzzle"
+                  value={typography.subtitleToPuzzleGap}
+                  onValueChange={(v) => updateTypography({ subtitleToPuzzleGap: v })}
+                  min={0}
+                  max={100}
+                  step={1}
+                  format="px"
+                  disabled={!typography.includeFunFacts}
                 />
                 <SliderField
                   label="Puzzle to Word List"
@@ -593,15 +709,7 @@ export function WordSearchSidebar() {
                   step={1}
                   format="px"
                 />
-                <SliderField
-                  label="Title to Answer"
-                  value={typography.spaceBetweenTitleAndAnswer}
-                  onValueChange={(v) => updateTypography({ spaceBetweenTitleAndAnswer: v })}
-                  min={0}
-                  max={100}
-                  step={1}
-                  format="px"
-                />
+
               </div>
             </div>
 
@@ -610,7 +718,7 @@ export function WordSearchSidebar() {
               <Label className="text-sm font-medium">Page Layout</Label>
               <div className="grid grid-cols-2 gap-3">
                 <SliderField
-                  label="Title to Answer Gap"
+                  label="Title to Answer"
                   value={titleToAnswerGap}
                   onValueChange={setTitleToAnswerGap}
                   min={0}
@@ -687,16 +795,75 @@ export function WordSearchSidebar() {
                     </SelectContent>
                   </Select>
                 </div>
-                <CheckboxItem label="Show Puzzle Number" checked={colors.answerPage.showAnswerNumber} onCheckedChange={(v) => updateAnswerPageColors({ showAnswerNumber: v })} />
+
+                {/* Solution Title Style */}
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">Solution Title Style</Label>
+                  <Select value={typography.solutionTitleStyle} onValueChange={(value) => {
+                    // When switching to "same_as_puzzle", reset solutionNumberingStyle since it won't be used
+                    if (value === 'same_as_puzzle') {
+                      updateTypography({ solutionTitleStyle: value as any, solutionNumberingStyle: 'none' });
+                    } else {
+                      updateTypography({ solutionTitleStyle: value as any });
+                    }
+                  }}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="same_as_puzzle">Same as Puzzle</SelectItem>
+                      <SelectItem value="custom">Custom Title</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Custom Solution Title Input */}
+                {typography.solutionTitleStyle === 'custom' && (
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Custom Solution Title</Label>
+                    <Input
+                      value={typography.customSolutionTitle}
+                      onChange={(e) => updateTypography({ customSolutionTitle: e.target.value })}
+                      placeholder="Enter solution title..."
+                    />
+                  </div>
+                )}
+
+                {/* Solution Numbering Style - Only visible when using custom title */}
+                {typography.solutionTitleStyle === 'custom' && (
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Solution Numbering Style</Label>
+                    <Select value={typography.solutionNumberingStyle} onValueChange={(value) => updateTypography({ solutionNumberingStyle: value as any })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        <SelectItem value="prefix">Prefix (1. Title)</SelectItem>
+                        <SelectItem value="suffix">Suffix (Title #1)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
             </div>
           </div>
         </TabsContent>
 
         {/* ==================== WORD LIST SETTINGS ==================== */}
-        <TabsContent value="words" className="p-4 space-y-6">
+        <TabsContent 
+          value="words" 
+          className="p-4 space-y-6"
+          onKeyDown={(e) => {
+            // Allow Enter key to work in textareas without triggering tab navigation
+            if (e.key === 'Enter' && (e.target as HTMLElement)?.tagName === 'TEXTAREA') {
+              e.stopPropagation();
+            }
+          }}
+        >
           <div className="space-y-4">
-            <h3 className="font-semibold text-gray-900">Word List Settings</h3>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-semibold text-gray-900">Word List Settings</h3>
+              <Button variant="outline" size="sm" onClick={handleSave}>
+                <Save className="w-4 h-4 mr-2" />Save
+              </Button>
+            </div>
 
             {/* Words Per Puzzle */}
             <div className="space-y-2">
@@ -776,27 +943,24 @@ export function WordSearchSidebar() {
 
                 {/* Manual Word Input */}
                 {wordList.selectWordListOption === 'manual' && (
-                  <div className="space-y-2">
-                    <Label className="text-sm font-medium">Your Words</Label>
-                    <Textarea
-                      value={titleWords.words.join('\n')}
-                      onChange={(e) => {
-                        const words = e.target.value.split('\n').map(w => w.trim()).filter(w => w);
+                  <>
+                    <WordListTextarea 
+                      value={titleWords.words.join('\n')} 
+                      onChange={(value) => {
+                        const words = value.split('\n').map(w => w.trim()).filter(w => w);
                         setTitleWords({ ...titleWords, words });
                       }}
-                      placeholder="Enter words (one per line)..."
-                      className="h-32"
                     />
                     <div className="flex items-center justify-between">
                       <p className="text-xs text-gray-500">
-                        {wordCount} words {wordCount >= requiredWords ? (
-                          <span className="text-green-600 flex items-center gap-1"><CheckCircle className="w-3 h-3" /> Ready</span>
+                        Enter one word per line. {wordCount} words {wordCount >= requiredWords ? (
+                          <span className="text-green-600 flex items-center gap-1 inline"><CheckCircle className="w-3 h-3" /> Ready</span>
                         ) : (
-                          <span className="text-red-500 flex items-center gap-1"><AlertCircle className="w-3 h-3" /> Need {requiredWords - wordCount} more</span>
+                          <span className="text-red-500 flex items-center gap-1 inline"><AlertCircle className="w-3 h-3" /> Need {requiredWords - wordCount} more</span>
                         )}
                       </p>
                     </div>
-                  </div>
+                  </>
                 )}
 
                 {/* List Formatting */}
@@ -885,32 +1049,22 @@ export function WordSearchSidebar() {
                   <div className="space-y-2">
                     <CheckboxItem label="Don't Alphabetize" checked={wordList.dontAlphabetize} onCheckedChange={(v) => updateWordListSettings({ dontAlphabetize: v })} />
                     <CheckboxItem label="Add Checkboxes" checked={wordList.addCheckboxes} onCheckedChange={(v) => updateWordListSettings({ addCheckboxes: v })} />
-                    <CheckboxItem label="Add Space for Graphics" checked={wordList.addSpaceForGraphics} onCheckedChange={(v) => updateWordListSettings({ addSpaceForGraphics: v })} />
-                    <CheckboxItem label="Include Title Above List" checked={wordList.includeTitleAboveList} onCheckedChange={(v) => updateWordListSettings({ includeTitleAboveList: v })} />
                   </div>
                 </div>
               </>
             )}
-
-            {/* Generate Button */}
-            <div className="pt-4 border-t">
-              {validationError && (
-                <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
-                  <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-                  <p className="text-sm text-red-700">{validationError.message}</p>
-                </div>
-              )}
-              <Button onClick={() => generatePuzzle()} className="w-full" size="lg">
-                Generate {core.numberOfPuzzles} Puzzle{core.numberOfPuzzles > 1 ? 's' : ''}
-              </Button>
-            </div>
           </div>
         </TabsContent>
 
         {/* ==================== COLOR SETTINGS ==================== */}
         <TabsContent value="colors" className="p-4 space-y-6">
           <div className="space-y-4">
-            <h3 className="font-semibold text-gray-900">Color Settings</h3>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-semibold text-gray-900">Color Settings</h3>
+              <Button variant="outline" size="sm" onClick={handleSave}>
+                <Save className="w-4 h-4 mr-2" />Save
+              </Button>
+            </div>
 
             {/* Puzzle Page Colors */}
             <div className="space-y-3">
@@ -918,10 +1072,9 @@ export function WordSearchSidebar() {
               <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
                 <ColorInput label="Background" value={colors.puzzlePage.backgroundColor} onChange={(v) => updatePuzzlePageColors({ backgroundColor: v })} />
                 <ColorInput label="Title" value={colors.puzzlePage.titleColor} onChange={(v) => updatePuzzlePageColors({ titleColor: v })} />
-                <ColorInput label="Subtitle" value={colors.puzzlePage.subtitleColor} onChange={(v) => updatePuzzlePageColors({ subtitleColor: v })} />
+                <ColorInput label="Subtitle" value={colors.puzzlePage.subtitleColor} onChange={(v) => updatePuzzlePageColors({ subtitleColor: v })} disabled={!typography.includeFunFacts} />
                 <ColorInput label="Box" value={colors.puzzlePage.boxColor} onChange={(v) => updatePuzzlePageColors({ boxColor: v })} />
                 <ColorInput label="Puzzle Letters" value={colors.puzzlePage.puzzleColor} onChange={(v) => updatePuzzlePageColors({ puzzleColor: v })} />
-                <ColorInput label="Word List Title" value={colors.puzzlePage.wordListTitleColor} onChange={(v) => updatePuzzlePageColors({ wordListTitleColor: v })} />
                 <ColorInput label="Word List" value={colors.puzzlePage.wordListColor} onChange={(v) => updatePuzzlePageColors({ wordListColor: v })} />
               </div>
             </div>
@@ -948,7 +1101,48 @@ export function WordSearchSidebar() {
         {/* ==================== BOOK SETTINGS ==================== */}
         <TabsContent value="book" className="p-4 space-y-6">
           <div className="space-y-4">
-            <h3 className="font-semibold text-gray-900">Book Settings</h3>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-semibold text-gray-900">Book Settings</h3>
+              <Button variant="outline" size="sm" onClick={handleSave}>
+                <Save className="w-4 h-4 mr-2" />Save
+              </Button>
+            </div>
+
+            {/* Quantity */}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">Quantity</Label>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs text-gray-500">Number of Puzzles</Label>
+                  <IntegerInput
+                    value={core.numberOfPuzzles}
+                    onChange={(value) => updateCore({ numberOfPuzzles: value })}
+                    min={1}
+                    max={1000}
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-gray-500">Starting Number</Label>
+                  <IntegerInput
+                    value={core.puzzlesStartingNumber}
+                    onChange={(value) => updateCore({ puzzlesStartingNumber: value })}
+                    min={1}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Measurement Units */}
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Measurement Units</Label>
+              <Select value={bookCanvas.measurementUnits || 'INCHES'} onValueChange={(value) => updateBookCanvas({ measurementUnits: value as any })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="INCHES">Inches</SelectItem>
+                  <SelectItem value="CENTIMETERS">Centimeters</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
 
             {/* Custom Trim Size */}
             <div className="space-y-2">
@@ -960,33 +1154,98 @@ export function WordSearchSidebar() {
               {bookCanvas.useCustomTrim && (
                 <div className="pl-6 grid grid-cols-2 gap-3">
                   <div>
-                    <Label className="text-xs text-gray-500">Width (inches)</Label>
-                    <DecimalInput value={bookCanvas.customWidth || 0} onChange={(val) => updateBookCanvas({ customWidth: val })} placeholder="8.5" min={0} />
+                    <Label className="text-xs text-gray-500">Width ({bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'})</Label>
+                    <DecimalInput 
+                      value={bookCanvas.measurementUnits === 'CENTIMETERS' ? (bookCanvas.customWidth || 0) * 2.54 : (bookCanvas.customWidth || 0)} 
+                      onChange={(val) => {
+                        const inchesValue = bookCanvas.measurementUnits === 'CENTIMETERS' ? val / 2.54 : val;
+                        updateBookCanvas({ customWidth: inchesValue });
+                      }} 
+                      placeholder={bookCanvas.measurementUnits === 'CENTIMETERS' ? '21.59' : '8.5'} 
+                      min={0} 
+                    />
                   </div>
                   <div>
-                    <Label className="text-xs text-gray-500">Length (inches)</Label>
-                    <DecimalInput value={bookCanvas.customHeight || 0} onChange={(val) => updateBookCanvas({ customHeight: val })} placeholder="11" min={0} />
+                    <Label className="text-xs text-gray-500">Length ({bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'})</Label>
+                    <DecimalInput 
+                      value={bookCanvas.measurementUnits === 'CENTIMETERS' ? (bookCanvas.customHeight || 0) * 2.54 : (bookCanvas.customHeight || 0)} 
+                      onChange={(val) => {
+                        const inchesValue = bookCanvas.measurementUnits === 'CENTIMETERS' ? val / 2.54 : val;
+                        updateBookCanvas({ customHeight: inchesValue });
+                      }} 
+                      placeholder={bookCanvas.measurementUnits === 'CENTIMETERS' ? '27.94' : '11'} 
+                      min={0} 
+                    />
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Puzzle Type */}
+            {/* Trim Size */}
+            {!bookCanvas.useCustomTrim && (
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Trim Size</Label>
+                <Select value={bookCanvas.trimSizePreset || ''} onValueChange={(value) => {
+                  if (value) {
+                    // Set dimensions based on preset (in inches)
+                    const presets: { [key: string]: { width: number; height: number } } = {
+                      '5X8IN': { width: 5, height: 8 },
+                      '5_25X8IN': { width: 5.25, height: 8 },
+                      '5_5X8_5IN': { width: 5.5, height: 8.5 },
+                      '6X9IN': { width: 6, height: 9 },
+                      '5_06X7_81IN': { width: 5.06, height: 7.81 },
+                      '6_14X9_21IN': { width: 6.14, height: 9.21 },
+                      '6_69X9_61IN': { width: 6.69, height: 9.61 },
+                      '7X10IN': { width: 7, height: 10 },
+                      '7_44X9_69IN': { width: 7.44, height: 9.69 },
+                      '7_5X9_25IN': { width: 7.5, height: 9.25 },
+                      '8X10IN': { width: 8, height: 10 },
+                      '8_5X11IN': { width: 8.5, height: 11 },
+                      '8_27X11_69IN': { width: 8.27, height: 11.69 },
+                      '8_25X6IN': { width: 8.25, height: 6 },
+                      '8_25X8_25IN': { width: 8.25, height: 8.25 },
+                      '8_5X8_5IN': { width: 8.5, height: 8.5 },
+                    };
+                    const dims = presets[value];
+                    if (dims) {
+                      updateBookCanvas({ trimSizePreset: value, customWidth: dims.width, customHeight: dims.height });
+                    }
+                  }
+                }}>
+                  <SelectTrigger><SelectValue placeholder="Select a trim size" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="5X8IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '12.7 x 20.32' : '5 x 8'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="5_25X8IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '13.34 x 20.32' : '5.25 x 8'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="5_5X8_5IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '13.97 x 21.59' : '5.5 x 8.5'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="6X9IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '15.24 x 22.86' : '6 x 9'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="5_06X7_81IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '12.85 x 19.84' : '5.06 x 7.81'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="6_14X9_21IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '15.6 x 23.39' : '6.14 x 9.21'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="6_69X9_61IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '16.99 x 24.4' : '6.69 x 9.61'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="7X10IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '17.78 x 25.4' : '7 x 10'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="7_44X9_69IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '18.9 x 24.61' : '7.44 x 9.69'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="7_5X9_25IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '19.05 x 23.5' : '7.5 x 9.25'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="8X10IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '20.32 x 25.4' : '8 x 10'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="8_5X11IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '21.59 x 27.94' : '8.5 x 11'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="8_27X11_69IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '21 x 29.7' : '8.27 x 11.69'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="8_25X6IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '20.96 x 15.24' : '8.25 x 6'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="8_25X8_25IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '20.96 x 20.96' : '8.25 x 8.25'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                    <SelectItem value="8_5X8_5IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '21.59 x 21.59' : '8.5 x 8.5'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {/* Answers Per Page */}
             <div className="space-y-1">
-              <Label className="text-sm font-medium">Puzzle Type</Label>
-              <Select value={bookCanvas.puzzleType} onValueChange={(value) => updateBookCanvas({ puzzleType: value as any })}>
+              <Label className="text-sm font-medium">Answers Per Page</Label>
+              <Select value={bookCanvas.answersPerPage.toString()} onValueChange={(value) => updateBookCanvas({ answersPerPage: parseInt(value) })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="word-search">Word Search</SelectItem>
+                  {[1, 2, 4].map((n) => <SelectItem key={n} value={n.toString()}>{n} Solution{n > 1 ? 's' : ''}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
 
-            {/* Page Structure */}
-            <div className="flex items-center space-x-2">
-              <Checkbox id="includePageBetween" checked={bookCanvas.includePageBetweenPuzzleAndSolutions} onCheckedChange={(checked) => updateBookCanvas({ includePageBetweenPuzzleAndSolutions: checked === true })} />
-              <Label htmlFor="includePageBetween" className="text-sm font-normal">Blank page between puzzle and solutions</Label>
-            </div>
           </div>
         </TabsContent>
       </Tabs>

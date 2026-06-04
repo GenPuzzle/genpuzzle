@@ -30,6 +30,7 @@ export interface SliderFieldProps {
   formatValue?: (value: number) => string;
   className?: string;
   labelClassName?: string;
+  disabled?: boolean;
 }
 
 export function SliderField({
@@ -43,13 +44,14 @@ export function SliderField({
   formatValue,
   className,
   labelClassName,
+  disabled = false,
 }: SliderFieldProps) {
   const displayValue = formatValue ? formatValue(value) : formatSliderValue(value, format);
 
   return (
-    <div className={cn('space-y-1.5', className)}>
+    <div className={cn('space-y-1.5', disabled && 'opacity-50 pointer-events-none', className)}>
       <div className="flex items-center justify-between gap-2">
-        <Label className={cn('text-xs text-gray-500 font-normal', labelClassName)}>{label}</Label>
+        <Label className={cn('text-xs font-normal', disabled ? 'text-gray-400' : 'text-gray-500', labelClassName)}>{label}</Label>
         <span
           className="shrink-0 rounded-md bg-muted px-2 py-0.5 text-xs font-medium tabular-nums text-muted-foreground"
           aria-live="polite"
@@ -63,6 +65,7 @@ export function SliderField({
         min={min}
         max={max}
         step={step}
+        disabled={disabled}
       />
     </div>
   );

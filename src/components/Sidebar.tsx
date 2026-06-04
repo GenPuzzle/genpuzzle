@@ -10,6 +10,14 @@ import { SliderField } from '@/components/ui/slider-field';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Book, Settings, Type, Palette, Grid3X3, RotateCw } from 'lucide-react';
+
+// Add styles for tab trigger hover effect
+const tabTriggerStyles = `
+  [data-state="inactive"]:hover ~ [role="tabpanel"],
+  button[role="tab"]:hover ~ [role="tabpanel"] {
+    background-color: #f9fafb !important;
+  }
+`;
 import { useApp } from '@/lib/app-context';
 import { TRIM_SIZES, TrimSize, Direction } from '@/lib/puzzles/types';
 import { getCategories, getQuotesByCategory, getRandomQuote } from '@/lib/puzzles/cryptogram';
@@ -89,24 +97,48 @@ export function Sidebar() {
 
   return (
     <div className="w-80 h-screen bg-white border-r border-gray-200 flex flex-col">
+      <style>{`
+        /* Tab panel background and transition */
+        [role="tabpanel"] {
+          background-color: #ffffff;
+          transition: background-color 150ms ease-in-out;
+        }
+        
+        /* Change background when any tab button is hovered */
+        button[role="tab"]:hover ~ [role="tabpanel"],
+        .tab-trigger-group:has(button[role="tab"]:hover) ~ [role="tabpanel"] {
+          background-color: #f8fafb !important;
+        }
+        
+        /* Direct hover effect on tab triggers */
+        button[role="tab"]:hover {
+          background-color: rgba(0, 0, 0, 0.06);
+          transition: background-color 150ms ease-in-out;
+        }
+        
+        /* Ensure transition is smooth */
+        button[role="tab"] {
+          transition: background-color 150ms ease-in-out;
+        }
+      `}</style>
       <Tabs defaultValue="book" className="w-full flex-1 overflow-y-auto">
         <TabsList className="w-full grid grid-cols-4">
-          <TabsTrigger value="book" title="Book Settings">
+          <TabsTrigger value="book" title="Book Settings" className="hover:bg-gray-100 transition-colors duration-150">
             <Book className="w-4 h-4" />
           </TabsTrigger>
-          <TabsTrigger value="puzzle" title="Puzzle Settings">
+          <TabsTrigger value="puzzle" title="Puzzle Settings" className="hover:bg-gray-100 transition-colors duration-150">
             <Settings className="w-4 h-4" />
           </TabsTrigger>
-          <TabsTrigger value="words" title="Title & Words">
+          <TabsTrigger value="words" title="Title & Words" className="hover:bg-gray-100 transition-colors duration-150">
             <Type className="w-4 h-4" />
           </TabsTrigger>
-          <TabsTrigger value="colors" title="Colors">
+          <TabsTrigger value="colors" title="Colors" className="hover:bg-gray-100 transition-colors duration-150">
             <Palette className="w-4 h-4" />
           </TabsTrigger>
         </TabsList>
 
         {/* Book Settings */}
-        <TabsContent value="book" className="p-4 space-y-4">
+        <TabsContent value="book" className="p-4 space-y-4 bg-white transition-colors duration-200 rounded-md">
           <div>
             <Label className="text-sm font-medium">Trim Size</Label>
             <Select
@@ -162,7 +194,7 @@ export function Sidebar() {
         </TabsContent>
 
         {/* Puzzle Settings */}
-        <TabsContent value="puzzle" className="p-4 space-y-4">
+        <TabsContent value="puzzle" className="p-4 space-y-4 bg-white transition-colors duration-200 rounded-md">
           {/* Grid Size (for applicable puzzles) */}
           {['word-search', 'crossword'].includes(currentPuzzleType) && (
             <SliderField
@@ -269,7 +301,7 @@ export function Sidebar() {
         </TabsContent>
 
         {/* Title/Words Settings */}
-        <TabsContent value="words" className="p-4 space-y-4">
+        <TabsContent value="words" className="p-4 space-y-4 bg-white transition-colors duration-200 rounded-md">
           <div>
             <Label className="text-sm font-medium">Puzzle Title</Label>
             <Input
@@ -343,7 +375,7 @@ export function Sidebar() {
         </TabsContent>
 
         {/* Color Settings */}
-        <TabsContent value="colors" className="p-4 space-y-4">
+        <TabsContent value="colors" className="p-4 space-y-4 bg-white transition-colors duration-200 rounded-md">
           <div>
             <Label className="text-sm font-medium">Background Color</Label>
             <div className="flex items-center gap-2 mt-1">

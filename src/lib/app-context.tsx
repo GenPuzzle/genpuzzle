@@ -120,6 +120,14 @@ interface AppContextType {
   // Apply mode: whether changes apply to all pages (true) or current page only (false)
   applyMode: Map<string, boolean>; // key: setting category (e.g., 'grid', 'wordList', 'typography', 'colors'), value: true = global, false = local
   setApplyMode: (category: string, isGlobal: boolean) => void;
+
+  // Performance Optimizer: Preview range mode
+  previewRangeMode: 'sample' | 'all';
+  setPreviewRangeMode: (mode: 'sample' | 'all') => void;
+
+  // Performance Optimizer: Active preview tab
+  activePreviewTab: 'puzzles' | 'solutions';
+  setActivePreviewTab: (tab: 'puzzles' | 'solutions') => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -187,9 +195,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [showSolution, setShowSolution] = useState(false);
   const [cryptogramText, setCryptogramText] = useState('');
   const [savedPuzzles, setSavedPuzzles] = useState<SavedPuzzle[]>([]);
-  const [previewZoom, setPreviewZoom] = useState(100);
+  const [previewZoom, setPreviewZoom] = useState(75);
   const [puzzleGridScale, setPuzzleGridScale] = useState(70);
-  const [titleToAnswerGap, setTitleToAnswerGap] = useState(20);
+  const [titleToAnswerGap, setTitleToAnswerGap] = useState(10);
   const [pageMargin, setPageMargin] = useState(40);
 
   // Batch puzzles for word search
@@ -217,6 +225,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       ['colors', true],
     ])
   );
+
+  // Performance Optimizer: Preview range mode (sample vs full)
+  const [previewRangeMode, setPreviewRangeMode] = useState<'sample' | 'all'>('sample');
+
+  // Performance Optimizer: Active preview tab (puzzles vs solutions)
+  const [activePreviewTab, setActivePreviewTab] = useState<'puzzles' | 'solutions'>('puzzles');
 
   const setApplyMode = useCallback((category: string, isGlobal: boolean) => {
     setApplyModeState(prev => new Map(prev).set(category, isGlobal));
@@ -331,7 +345,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const puzzle = generateWordSearch(
         puzzleWords,
         ws.core.lettersAcross,
-        directions
+        directions,
+        ws.wordList.aiLanguage
       ) as WordSearchPuzzle;
 
       puzzle.puzzleNumber = ws.core.puzzlesStartingNumber + i;
@@ -507,6 +522,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         clearPageOverride,
         applyMode,
         setApplyMode,
+        previewRangeMode,
+        setPreviewRangeMode,
+        activePreviewTab,
+        setActivePreviewTab,
       }}
     >
       {children}

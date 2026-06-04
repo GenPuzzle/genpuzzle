@@ -87,10 +87,24 @@ export interface WordSearchCoreSettings {
 // Typography & Spacing Settings
 export interface TypographySpacingSettings {
   // Title Options
-  selectTitleOption: 'puzzle-number' | 'custom' | 'none';
+  selectTitleOption: 'puzzle-number' | 'one-custom-title' | 'custom' | 'none';
   titleText: string;
-  includeSubtitle: boolean;
-  subtitleText: string;
+  
+  // Puzzle Numbering Style
+  puzzleNumberingStyle: 'none' | 'prefix' | 'suffix'; // How to display puzzle numbers with titles
+  
+  // Solution Title Settings
+  solutionTitleStyle: 'same_as_puzzle' | 'custom'; // Whether to use puzzle title or custom solution text
+  customSolutionTitle: string; // Custom title for solution pages (e.g., "Solution")
+  solutionNumberingStyle: 'none' | 'prefix' | 'suffix'; // How to display puzzle numbers on solution pages
+  
+  // Subtitle / Fun Facts & Quotes
+  includeFunFacts: boolean; // Whether to include fun facts/quotes
+  funFactsText: string; // Multi-line: "Fact 1\nFact 2\n..." - each line for respective puzzle page
+  subtitleFontSize: number; // 10-24px, default 14
+  subtitleTextScale: number; // Pixel width of subtitle text box (200-720px, default 500px)
+  subtitleToTitleGap: number; // Gap between title and subtitle/fun-fact (default 10px)
+  subtitleToPuzzleGap: number; // Gap between subtitle/fun-fact and puzzle grid (default 10px)
 
   // Fonts & Sizes
   puzzleTitleFontFamily: string;
@@ -260,6 +274,7 @@ export interface WordSearchPuzzle {
   grid: string[][];
   placements: WordPlacement[];
   words: string[];
+  displayWords: string[]; // Original words with spaces preserved for display
   solution: Map<string, Position[]>;
   puzzleNumber?: number;
 }
@@ -393,8 +408,16 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
     typography: {
       selectTitleOption: 'puzzle-number',
       titleText: 'Word Search',
-      includeSubtitle: false,
-      subtitleText: '',
+      puzzleNumberingStyle: 'none',
+      solutionTitleStyle: 'same_as_puzzle',
+      customSolutionTitle: 'Solution',
+      solutionNumberingStyle: 'none',
+      includeFunFacts: false,
+      funFactsText: '',
+      subtitleFontSize: 14,
+      subtitleTextScale: 500,
+      subtitleToTitleGap: 10,
+      subtitleToPuzzleGap: 10,
       puzzleTitleFontFamily: 'Inter',
       puzzleTitleFontSize: 24,
       answerTitleFontSize: 18,
@@ -412,7 +435,7 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
       setFontForAnswerPages: false,
       answerGridFontFamily: 'Inter',
       setFontSizeForAnswerPages: false,
-      answerGridFontSize: 12,
+      answerGridFontSize: 18,
       spaceBetweenPuzzleAndWordList: 20,
     },
     wordList: {

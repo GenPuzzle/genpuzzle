@@ -119,8 +119,14 @@ function findValidPosition(
   return null;
 }
 
-function fillEmptyCells(grid: string[][]): void {
-  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+function fillEmptyCells(grid: string[][], language: string = 'English'): void {
+  let letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  
+  if (language === 'Arabic') {
+    // Arabic letters (excluding diacritics, using main alphabet)
+    letters = 'ابجدهوزحطيكلمنسعفصقرشتثخذضظغ';
+  }
+  
   for (let r = 0; r < grid.length; r++) {
     for (let c = 0; c < grid[0].length; c++) {
       if (grid[r][c] === '') {
@@ -133,13 +139,49 @@ function fillEmptyCells(grid: string[][]): void {
 export function generateWordSearch(
   words: string[],
   gridSize: number = 15,
-  directions: Direction[] = DIRECTIONS
+  directions: Direction[] = DIRECTIONS,
+  language: string = 'English'
 ): WordSearchPuzzle {
-  // Clean and uppercase words
-  const cleanWords = words
-    .map((w) => w.trim().toUpperCase().replace(/[^A-Z]/g, ''))
-    .filter((w) => w.length > 1 && w.length <= gridSize)
-    .sort((a, b) => b.length - a.length); // Sort by length, longest first
+  // Helper function to check if character is Arabic
+  const isArabicChar = (char: string): boolean => {
+    return /[\u0600-\u06FF]/.test(char);
+  };
+
+  // Helper function to check if character is English
+  const isEnglishChar = (char: string): boolean => {
+    return /[A-Za-z]/.test(char);
+  };
+
+  // Create a mapping from cleaned word to original word (for display)
+  const cleanToDisplay = new Map<string, string>();
+
+  // Clean and process words based on language
+  let cleanWords: string[];
+  
+  if (language === 'Arabic') {
+    // For Arabic: convert to uppercase (Arabic doesn't have case), keep only Arabic chars
+    cleanWords = words
+      .map((w) => w.trim().toUpperCase())
+      .map((w) => {
+        const cleaned = w.split('').filter(isArabicChar).join('');
+        cleanToDisplay.set(cleaned, w);
+        return cleaned;
+      })
+      .filter((w) => w.length > 1 && w.length <= gridSize)
+      .sort((a, b) => b.length - a.length);
+  } else {
+    // For English and other languages: convert to uppercase, keep only A-Z for grid
+    // But preserve spaces in the display version
+    cleanWords = words
+      .map((w) => {
+        const trimmed = w.trim().toUpperCase();
+        const cleaned = trimmed.replace(/[^A-Z]/g, '');
+        cleanToDisplay.set(cleaned, trimmed);
+        return cleaned;
+      })
+      .filter((w) => w.length > 1 && w.length <= gridSize)
+      .sort((a, b) => b.length - a.length);
+  }
 
   // Initialize empty grid
   const grid: string[][] = Array(gridSize)
@@ -162,7 +204,7 @@ export function generateWordSearch(
   }
 
   // Fill remaining cells
-  fillEmptyCells(grid);
+  fillEmptyCells(grid, language);
 
   // Create solution map
   const solution = new Map<string, Position[]>();
@@ -178,11 +220,15 @@ export function generateWordSearch(
     solution.set(placement.word, positions);
   }
 
+  // Map placements to their display words
+  const displayWords = placements.map((p) => cleanToDisplay.get(p.word) || p.word);
+
   return {
     type: 'word-search',
     grid,
     placements,
     words: placements.map((p) => p.word),
+    displayWords, // Include the display words with spaces preserved
     solution,
   };
 }

@@ -38,6 +38,7 @@ interface ExportOptions {
   wordSearchSettings: WordSearchSettings;
   puzzles: WordSearchPuzzle[];
   includeSolution: boolean;
+  onlySolutions?: boolean;
   puzzleGridScale?: number;
   titleToAnswerGap?: number;
   pageMargin?: number;
@@ -363,6 +364,30 @@ async function drawWordSearchPuzzle(
     color: safeColor(layout.page.backgroundColor, '#ffffff'),
   });
 
+  // ===== STRICT SEQUENTIAL TOP-DOWN BLOCK WATERFALL =====
+  // Track vertical position from top of page downward
+  let currentY = pageMargin;
+
+  // ===== PDF SPACING CALIBRATION FACTOR =====
+  // Adjust spacing values to match UI preview pixel-to-point conversion (96 DPI vs 72 PDF points)
+  const CALIBRATION_FACTOR = 1.33; // Ratio to align PDF rendering to UI preview
+  const calibratedSpacingTitle = layout.spacing.titleStartAtPt * CALIBRATION_FACTOR;
+  const calibratedTitleToPuzzle = layout.spacing.spaceTitleToGridPt * CALIBRATION_FACTOR;
+  
+  // ===== FONT BASELINE COMPENSATION FOR TITLE-TO-PUZZLE GAP =====
+  // pdf-lib's heightAtSize() includes ascent/descent metrics that differ from Canvas text bounding box
+  // This micro-adjustment eliminates the invisible font padding gap for 100% UI match
+  const PDF_FONT_PADDING_COMPENSATION = 6; // Points to compensate for font padding difference
+  const adjustedTitleToPuzzle = calibratedTitleToPuzzle + PDF_FONT_PADDING_COMPENSATION;
+
+  // ===== BLOCK 1: TITLE SPACING AND RENDERING =====
+  // Step 1: Advance cursor by spacing from page top
+  currentY += calibratedSpacingTitle;
+  
+  // Step 2: Calculate title block height
+  const titleHeight = titleFont.heightAtSize(layout.title?.fontSizePt || 20);
+  
+  // Step 3: Render title at current position (convert to PDF coordinates)
   if (layout.title) {
     const t = layout.title;
     const textWidth = titleFont.widthOfTextAtSize(t.text, t.fontSizePt);
@@ -372,67 +397,127 @@ async function drawWordSearchPuzzle(
     } else if (t.align === 'right') {
       titleX = pageWidth - pageMargin - textWidth;
     }
+    // PDF Y position: convert from top-down to PDF bottom-up coordinates
+    const pdfTitleY = pageHeight - (currentY + titleHeight);
     page.drawText(t.text, {
       x: titleX,
-      y: pageHeight - t.topPt,
+      y: pdfTitleY,
       size: t.fontSizePt,
       font: titleFont,
       color: safeColor(t.color, '#000000'),
     });
   }
-
+  
+  // Step 4: Move cursor to exact bottom of title block
+  currentY += titleHeight;
+  
+  // ===== BLOCK 1B: SUBTITLE (IF EXISTS) WITH TEXT WRAPPING =====
   if (layout.subtitle) {
     const s = layout.subtitle;
-    const subWidth = titleFont.widthOfTextAtSize(s.text, s.fontSizePt);
-    page.drawText(s.text, {
-      x: (pageWidth - subWidth) / 2,
-      y: pageHeight - s.topPt,
-      size: s.fontSizePt,
-      font: titleFont,
-      color: safeColor(s.color, '#666666'),
-    });
+    const subtitleTextScalePx = settings.typography?.subtitleTextScale ?? 500; // CSS pixels
+    const PT_TO_CSS_PX_RATIO = 96 / 72;
+    const subtitleTextScalePt = subtitleTextScalePx / PT_TO_CSS_PX_RATIO; // Convert to points
+    const subtitleLeftX = (pageWidth - subtitleTextScalePt) / 2; // Center the text box on page
+    const subtitleLineHeightPt = s.fontSizePt * 1.2; // 1.2x line height for better readability
+    
+    // Wrap text to fit within subtitleTextScale
+    let wrappedLines: string[] = [];
+    try {
+      // Use pdf-lib's font measurement for accurate wrapping
+      const words = s.text.split(/\s+/);
+      let currentLine = '';
+      
+      for (const word of words) {
+        const testLine = currentLine ? `${currentLine} ${word}` : word;
+        const testWidth = titleFont.widthOfTextAtSize(testLine, s.fontSizePt);
+        
+        // IF line exceeds wrap boundary AND we have content, THEN wrap
+        if (testWidth <= subtitleTextScalePt) {
+          currentLine = testLine;
+        } else {
+          if (currentLine) {
+            wrappedLines.push(currentLine);
+          }
+          currentLine = word;
+        }
+      }
+      
+      if (currentLine) {
+        wrappedLines.push(currentLine);
+      }
+    } catch (err) {
+      // Fallback: just use the original text if wrapping fails
+      wrappedLines = [s.text];
+    }
+    
+    // Add gap from title to subtitle
+    currentY += settings.typography.subtitleToTitleGap ?? 10;
+    
+    // Draw each wrapped line of the subtitle (centered within the text box)
+    // IF multiple wrapped lines, THEN advance currentY by line height for EACH line,
+    // THEN add gap only AFTER the very last line
+    for (let i = 0; i < wrappedLines.length; i++) {
+      const line = wrappedLines[i];
+      const lineWidth = titleFont.widthOfTextAtSize(line, s.fontSizePt);
+      const lineCenterX = subtitleLeftX + (subtitleTextScalePt - lineWidth) / 2;
+      const pdfSubtitleY = pageHeight - (currentY + s.fontSizePt);
+      
+      page.drawText(line, {
+        x: lineCenterX,
+        y: pdfSubtitleY,
+        size: s.fontSizePt,
+        font: titleFont,
+        color: safeColor(s.color, '#666666'),
+      });
+      
+      currentY += subtitleLineHeightPt;
+    }
+    
+    // Add gap from subtitle to puzzle (ONLY after all lines rendered)
+    currentY += settings.typography.subtitleToPuzzleGap ?? 10;
+  } else if (titleHeight > 0) {
+    // No subtitle: add normal title-to-puzzle gap
+    currentY += adjustedTitleToPuzzle;
   }
-
-  const gridTopY = pageHeight - g.topPt;
+  
+  // ===== BLOCK 2: PUZZLE GRID RENDERING =====
   const contentLeft = g.leftPt;
   const gridStartX = contentLeft;
-  const gridStartY = gridTopY;
+  
+  // Grid top Y position (in PDF coordinates, bottom-up)
+  const pdfGridTopY = pageHeight - currentY;
+  
   const fontSize = g.fontSizePt;
-  const cellSize = g.cellSizePt; // Preserve for legacy layout reference
+  const cellSize = g.cellSizePt;
   const gridWidth = g.widthPt;
   const gridHeight = g.heightPt;
   const totalColumns = g.cols;
   const totalRows = g.rows;
 
-  // Cell Dimensions (EXACT BASELINE MATH)
+  // Cell Dimensions
   const cellWidth = gridWidth / totalColumns;
   const cellHeight = gridHeight / totalRows;
 
-  // Track outermost cell boundaries to calculate the final border
+  // Track outermost cell boundaries for grid border
   let gridOuterLeft = Number.MAX_VALUE;
   let gridOuterRight = Number.MIN_VALUE;
   let gridOuterTop = Number.MIN_VALUE;
   let gridOuterBottom = Number.MAX_VALUE;
 
-  // Render letters in cells with HARDCODED BASELINE MATH for pdf-lib Text Centering
+  // Render letters in cells
   for (let row = 0; row < totalRows; row++) {
     for (let col = 0; col < totalColumns; col++) {
-      // Calculate the absolute Top-Left anchor of the current cell (pdf-lib Y goes up, so we subtract to move down)
       const cellLeftX = gridStartX + (col * cellWidth);
-      const cellTopY = gridStartY - (row * cellHeight);
+      // Grid cells are positioned sequentially downward from pdfGridTopY
+      const cellTopY = pdfGridTopY - (row * cellHeight);
 
-      // Get letter from puzzle grid
       const letter = puzzle.grid[row][col];
-
-      // Text Dimensions with Cap-Height Fix (do NOT use heightAtSize() as it includes descenders)
       const textWidth = gridFont.widthOfTextAtSize(letter, fontSize);
-      const visualTextHeight = fontSize * 0.7; // Cap-height approximation (70% of font size)
+      const visualTextHeight = fontSize * 0.7; // Cap-height
 
-      // The Absolute Dead-Center Math (baseline drop to exact center of cell)
       const centerX = cellLeftX + (cellWidth / 2) - (textWidth / 2);
       const centerY = cellTopY - (cellHeight / 2) - (visualTextHeight / 2);
 
-      // Track outermost boundaries
       gridOuterLeft = Math.min(gridOuterLeft, cellLeftX);
       gridOuterRight = Math.max(gridOuterRight, cellLeftX + cellWidth);
       gridOuterBottom = Math.min(gridOuterBottom, cellTopY - cellHeight);
@@ -449,6 +534,13 @@ async function drawWordSearchPuzzle(
     }
   }
 
+  // Step 4: Move cursor to exact bottom of grid block
+  currentY += gridHeight;
+  
+  // ===== BLOCK 3: PUZZLE-TO-WORDLIST SPACING =====
+  const calibratedPuzzleToWordList = layout.spacing.spaceGridToWordListPt * CALIBRATION_FACTOR;
+  currentY += calibratedPuzzleToWordList;
+  
   // Draw the border lines of the grid strictly based on outermost cell boundaries
   if (!g.noBox) {
     const borderThickness = g.borderThicknessPt;
@@ -464,7 +556,7 @@ async function drawWordSearchPuzzle(
 
   const legacyLayout = {
     gridStartX: gridStartX,
-    gridStartY: gridTopY,
+    gridStartY: pdfGridTopY,
     cellSize: cellSize,
     gridWidth: g.widthPt,
     gridHeight: g.heightPt,
@@ -544,6 +636,10 @@ async function drawWordSearchPuzzle(
 
   const wl = layout.wordList;
   if (!showSolution && wl && wl.words.length > 0) {
+    // ===== BLOCK 4: WORD LIST RENDERING =====
+    // Calculate word list font height
+    const wordListFontHeight = wordListFont.heightAtSize(wl.fontSizePt);
+    
     const numCols = wl.columns;
     const wordsPerCol = wl.wordsPerColumn;
     const columns = distributeWordsIntoColumns(wl.words, numCols);
@@ -567,12 +663,16 @@ async function drawWordSearchPuzzle(
         wordListX +
         columnWidths.slice(0, col).reduce((sum, width) => sum + width, 0) +
         col * wl.columnGapPt;
-      const yPos = pageHeight - wl.topPt - getWordListRowTopOffsetPt(row, wl.lineHeightPt);
+      
+      // Sequential positioning: each row is currentY + (row * lineHeight)
+      const wordRowTopY = currentY + (row * wl.lineHeightPt);
+      // Convert to PDF coordinates (bottom-up)
+      const yPos = pageHeight - (wordRowTopY + wordListFontHeight);
 
       if (wl.addCheckboxes) {
         page.drawRectangle({
           x: wordX,
-          y: yPos - wl.fontSizePt + 2,
+          y: yPos,
           width: wl.checkboxSizePt,
           height: wl.checkboxSizePt,
           borderColor: safeColor(wl.checkboxColor, '#666666'),
@@ -583,7 +683,7 @@ async function drawWordSearchPuzzle(
       const textX = wl.addCheckboxes ? wordX + wl.checkboxSizePt + wl.checkboxGapPt : wordX;
       page.drawText(word, {
         x: textX,
-        y: yPos - wl.fontSizePt + 2,
+        y: yPos,
         size: wl.fontSizePt,
         font: wordListFont,
         color: safeColor(wl.color, '#000000'),
@@ -612,7 +712,7 @@ function drawWordSearchSolutionPage(
   pageWidth: number,
   pageHeight: number,
   margin: number,
-  titleToAnswerGap: number = 20,
+  titleToAnswerGap: number = 10,
   pageMargin: number = 40
 ) {
   const layout = getSolutionPageLayout(settings.bookCanvas.answersPerPage || 1);
@@ -633,22 +733,84 @@ function drawWordSearchSolutionPage(
 
     const innerMargin = Math.min(14, blockWidth * 0.05, blockHeight * 0.05);
     const titleSize = settings.colors.answerPage.answerTitleFontSize || 20;
-    const titleText = `${settings.colors.answerPage.answerTitlePrefix || 'Solution'}${settings.colors.answerPage.showAnswerNumber ? ` ${puzzle.puzzleNumber || index + 1}` : ''}`;
+    
+    // ===== RESOLVE SOLUTION TITLE WITH NEW NUMBERING LOGIC =====
+    // Apply the same logic as resolveTitleText() but for solution pages
+    let baseTitle = '';
+    let numberingStyle = 'none';
+    
+    if (settings.typography.solutionTitleStyle === 'same_as_puzzle') {
+      // Use the same base title and numbering style as the puzzle page
+      switch (settings.typography.selectTitleOption) {
+        case 'puzzle-number':
+        case 'one-custom-title':
+          baseTitle = settings.typography.titleText || titleWords.title || 'Word Search';
+          break;
+        case 'custom': {
+          const lines = (settings.typography.titleText || '')
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+          const puzzleNum = puzzle.puzzleNumber || index + 1;
+          baseTitle = lines.length > 0 ? (lines[puzzleNum - 1] ?? lines[lines.length - 1]) : '';
+          break;
+        }
+        default:
+          baseTitle = titleWords.title || 'Word Search';
+      }
+      // Use the SAME numbering style as puzzle
+      numberingStyle = settings.typography.puzzleNumberingStyle || 'none';
+    } else {
+      // Use custom solution title with its own numbering style
+      baseTitle = settings.typography.customSolutionTitle || 'Solution';
+      numberingStyle = settings.typography.solutionNumberingStyle || 'none';
+    }
+
+    // Apply numbering style to solution title
+    const puzzleNum = puzzle.puzzleNumber || index + 1;
+    if (baseTitle && numberingStyle !== 'none') {
+      if (numberingStyle === 'prefix') {
+        baseTitle = `${puzzleNum}. ${baseTitle}`;
+      } else if (numberingStyle === 'suffix') {
+        baseTitle = `${baseTitle} #${puzzleNum}`;
+      }
+    }
+
+    const titleText = baseTitle;
     const titleWidth = titleFont.widthOfTextAtSize(titleText, titleSize);
     const titleX = blockX + (blockWidth - titleWidth) / 2;
-    const titleY = blockY + blockHeight - innerMargin - titleSize;
+    
+    // ===== PRECISE TITLE-TO-ANSWER COORDINATE MATH (PDF) =====
+    // Calculate the true title block height using the font descriptor
+    const answerTitleHeight = titleFont.heightAtSize(titleSize);
+    
+    // Define title's top boundary within the solution block
+    const answerTitleTopY = blockY + blockHeight - innerMargin;
+    
+    // Position title string, accounting for font baseline shift in pdf-lib
+    const answerTitleRenderY = answerTitleTopY - answerTitleHeight;
+    
+    // Calculate title's bottom edge (visual bottom of title block)
+    const answerTitleBottomY = answerTitleTopY - answerTitleHeight;
 
     page.drawText(titleText, {
       x: titleX,
-      y: titleY,
+      y: answerTitleRenderY,
       size: titleSize,
       font: titleFont,
       color: safeColor(settings.colors.answerPage.titleColor, '#000000'),
     });
 
-    // Use dynamic titleToAnswerGap with nullish checking
-    const currentAnswerGap = (titleToAnswerGap !== undefined && titleToAnswerGap !== null) ? titleToAnswerGap : 20;
-    const gridTop = titleY - currentAnswerGap;
+    // Use dynamic titleToAnswerGap with nullish checking - respect explicit 0 values
+    let currentAnswerGap = (titleToAnswerGap !== undefined && titleToAnswerGap !== null) ? titleToAnswerGap : 10;
+    // Only apply layout-specific minimum if titleToAnswerGap was not explicitly set to 0
+    // When titleToAnswerGap = 0, it means "tight" and should apply to ALL layouts uniformly
+    if (titleToAnswerGap !== 0 && settings.bookCanvas.answersPerPage === 1) {
+      currentAnswerGap = Math.max(currentAnswerGap, 16); // Minimum 16px for 1 solution layout (only when not explicitly 0)
+    }
+    // Grid top sits exactly below title + gap (using unified coordinate math)
+    // Formula: gridY = titleBottomY - gap (gap = 0 means grid touches title immediately)
+    const gridTop = answerTitleBottomY - currentAnswerGap;
     const gridAvailableHeight = gridTop - (blockY + innerMargin);
     const gridAvailableWidth = blockWidth - innerMargin * 2;
     const cellSize = Math.min(
@@ -660,10 +822,11 @@ function drawWordSearchSolutionPage(
     const gridHeight = cellSize * puzzle.grid.length;
     const gridStartX = blockX + innerMargin + (gridAvailableWidth - gridWidth) / 2;
     
-    // Vertically center the grid within the available space (between title and bottom margin)
-    const gridVerticalSpaceUsed = gridHeight;
-    const gridVerticalMargin = (gridAvailableHeight - gridVerticalSpaceUsed) / 2;
-    const gridStartY = gridTop - gridVerticalMargin;
+    // ===== STRICT GRID POSITIONING: NO VERTICAL CENTERING =====
+    // Grid sits directly below title with ONLY titleToAnswerGap as spacing
+    // When titleToAnswerGap = 0, grid baseline aligns exactly to title bottom
+    // This prevents hidden padding from overriding the user's gap selection
+    const gridStartY = gridTop;
 
     const borderB = settings.core.borderStrokeThickness ?? 2;
     
@@ -799,7 +962,7 @@ function drawWordSearchSolutionPage(
 }
 
 export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Array> {
-  const { bookSettings, titleWords, wordSearchSettings, puzzles, includeSolution, puzzleGridScale = 70, titleToAnswerGap = 20, pageMargin = 40, pageOverrides = new Map(), applyMode = new Map() } = options;
+  const { bookSettings, titleWords, wordSearchSettings, puzzles, includeSolution, onlySolutions = false, puzzleGridScale = 70, titleToAnswerGap = 10, pageMargin = 40, pageOverrides = new Map(), applyMode = new Map() } = options;
 
   // Build default settings with all defaults
   const baseSettings: WordSearchSettings = {
@@ -835,8 +998,11 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
       puzzleTitleFontSize: wordSearchSettings?.typography?.puzzleTitleFontSize || 20,
       puzzleTitleFontFamily: wordSearchSettings?.typography?.puzzleTitleFontFamily || 'Inter',
       titleText: wordSearchSettings?.typography?.titleText || '',
-      includeSubtitle: wordSearchSettings?.typography?.includeSubtitle || false,
-      subtitleText: wordSearchSettings?.typography?.subtitleText || '',
+      includeFunFacts: wordSearchSettings?.typography?.includeFunFacts || false,
+      funFactsText: wordSearchSettings?.typography?.funFactsText || '',
+      subtitleFontSize: wordSearchSettings?.typography?.subtitleFontSize || 14,
+      subtitleToTitleGap: wordSearchSettings?.typography?.subtitleToTitleGap ?? 10,
+      subtitleToPuzzleGap: wordSearchSettings?.typography?.subtitleToPuzzleGap ?? 10,
       puzzleGridFontSize: wordSearchSettings?.typography?.puzzleGridFontSize || 18,
       puzzleGridFontFamily: wordSearchSettings?.typography?.puzzleGridFontFamily || 'Inter',
       puzzleGridCase: wordSearchSettings?.typography?.puzzleGridCase || 'upper',
@@ -847,8 +1013,12 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
       answerGridFontFamily: wordSearchSettings?.typography?.answerGridFontFamily || 'Inter',
       spaceBetweenPuzzleAndWordList: (wordSearchSettings?.typography?.spaceBetweenPuzzleAndWordList !== undefined && wordSearchSettings?.typography?.spaceBetweenPuzzleAndWordList !== null) ? wordSearchSettings.typography.spaceBetweenPuzzleAndWordList : 30,
       setFontSizeForAnswerPages: wordSearchSettings?.typography?.setFontSizeForAnswerPages || false,
-      answerGridFontSize: wordSearchSettings?.typography?.answerGridFontSize || 12,
+      answerGridFontSize: wordSearchSettings?.typography?.answerGridFontSize || 18,
       spaceBetweenTitleAndAnswer: (wordSearchSettings?.typography?.spaceBetweenTitleAndAnswer !== undefined && wordSearchSettings?.typography?.spaceBetweenTitleAndAnswer !== null) ? wordSearchSettings.typography.spaceBetweenTitleAndAnswer : 40,
+      puzzleNumberingStyle: (wordSearchSettings?.typography?.puzzleNumberingStyle as 'none' | 'prefix' | 'suffix') || 'none',
+      solutionTitleStyle: (wordSearchSettings?.typography?.solutionTitleStyle as 'same_as_puzzle' | 'custom') || 'same_as_puzzle',
+      customSolutionTitle: wordSearchSettings?.typography?.customSolutionTitle || 'Solution',
+      solutionNumberingStyle: (wordSearchSettings?.typography?.solutionNumberingStyle as 'none' | 'prefix' | 'suffix') || 'none',
     },
     wordList: {
       hideWordList: wordSearchSettings?.wordList?.hideWordList || false,
@@ -911,7 +1081,7 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
   // Get page dimensions
   let pageWidth: number, pageHeight: number;
 
-  if (baseSettings.bookCanvas.useCustomTrim && baseSettings.bookCanvas.customWidth && baseSettings.bookCanvas.customHeight) {
+  if (baseSettings.bookCanvas.customWidth && baseSettings.bookCanvas.customHeight) {
     pageWidth = inchesToPoints(baseSettings.bookCanvas.customWidth);
     pageHeight = inchesToPoints(baseSettings.bookCanvas.customHeight);
   } else {
@@ -948,11 +1118,18 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
     return fontCache.get(key)!;
   };
 
-  // Draw puzzle pages
+  // Draw puzzle pages (skip if only showing solutions)
   let currentPageIndex = 0;
-  for (const puzzle of puzzles) {
-    // Get effective settings for this page (with page overrides merged in)
-    const effectiveSettings = getMergedSettingsForPage(baseSettings, pageOverrides, applyMode, currentPageIndex);
+  if (!onlySolutions) {
+    for (let puzzleIndex = 0; puzzleIndex < puzzles.length; puzzleIndex++) {
+      const puzzle = puzzles[puzzleIndex];
+      // Ensure puzzle number is set (for single puzzles or if not already set)
+      if (!puzzle.puzzleNumber) {
+        puzzle.puzzleNumber = puzzleIndex + 1;
+      }
+
+      // Get effective settings for this page (with page overrides merged in)
+      const effectiveSettings = getMergedSettingsForPage(baseSettings, pageOverrides, applyMode, currentPageIndex);
 
     // Get fonts for this page's settings, mapping UI font weights to PDF bold objects
     const puzzleGridFont = await getOrEmbedFont(
@@ -986,75 +1163,42 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
 
     currentPageIndex++;
 
-    if (effectiveSettings.bookCanvas.includePageBetweenPuzzleAndSolutions) {
-      pdfDoc.addPage([pageWidth, pageHeight]);
-      currentPageIndex++;
+      if (effectiveSettings.bookCanvas.includePageBetweenPuzzleAndSolutions) {
+        pdfDoc.addPage([pageWidth, pageHeight]);
+        currentPageIndex++;
+      }
     }
   }
 
   // Draw solution pages
   if (includeSolution) {
-    if (baseSettings.bookCanvas.answersPerPage <= 1) {
-      for (const puzzle of puzzles) {
-        // Get effective settings for solution page
-        const effectiveSettings = getMergedSettingsForPage(baseSettings, pageOverrides, applyMode, currentPageIndex);
+    // ===== UNIFIED SOLUTION RENDERING FOR ALL LAYOUTS (1, 2, 4 PER PAGE) =====
+    // ALL solution density layouts now use drawWordSearchSolutionPage (which uses titleToAnswerGap)
+    // This ensures the "Title to Answer" slider works consistently across all solution layouts
+    // and prevents cross-contamination from puzzle page spacing settings
+    const chunkSize = baseSettings.bookCanvas.answersPerPage || 1;
+    for (let i = 0; i < puzzles.length; i += chunkSize) {
+      // Get effective settings for solution page
+      const effectiveSettings = getMergedSettingsForPage(baseSettings, pageOverrides, applyMode, currentPageIndex);
 
-        const answerGridFont = await getOrEmbedFont(
-          effectiveSettings.typography.setFontForAnswerPages
-            ? effectiveSettings.typography.answerGridFontFamily || 'Inter'
-            : effectiveSettings.typography.puzzleGridFontFamily || 'Inter',
-          effectiveSettings.typography.setFontForAnswerPages
-            ? effectiveSettings.typography.answerGridFontWeight || false
-            : effectiveSettings.typography.puzzleGridFontWeight || false
-        );
-        const answerTitleBoldFont = await getOrEmbedFont(
-          effectiveSettings.colors.answerPage.answerTitleFontFamily || 'Inter',
-          effectiveSettings.colors.answerPage.answerTitleFontWeight || true // Default to bold for answer title
-        );
+      const answerGridFont = await getOrEmbedFont(
+        effectiveSettings.typography.setFontForAnswerPages
+          ? effectiveSettings.typography.answerGridFontFamily || 'Inter'
+          : effectiveSettings.typography.puzzleGridFontFamily || 'Inter',
+        effectiveSettings.typography.setFontForAnswerPages
+          ? effectiveSettings.typography.answerGridFontWeight || false
+          : effectiveSettings.typography.puzzleGridFontWeight || false
+      );
+      const answerTitleBoldFont = await getOrEmbedFont(
+        effectiveSettings.colors.answerPage.answerTitleFontFamily || 'Inter',
+        effectiveSettings.colors.answerPage.answerTitleFontWeight || true
+      );
 
-        const page = pdfDoc.addPage([pageWidth, pageHeight]);
-        await drawWordSearchPuzzle(
-          page,
-          puzzle,
-          effectiveSettings,
-          titleWords,
-          answerGridFont,
-          answerGridFont,
-          answerTitleBoldFont,
-          pageWidth,
-          pageHeight,
-          margin,
-          true,
-          puzzleGridScale
-        );
+      const page = pdfDoc.addPage([pageWidth, pageHeight]);
+      const pagePuzzles = puzzles.slice(i, i + chunkSize);
+      drawWordSearchSolutionPage(page, pagePuzzles, effectiveSettings, titleWords, answerGridFont, answerTitleBoldFont, pageWidth, pageHeight, margin, titleToAnswerGap, pageMargin);
 
-        currentPageIndex++;
-      }
-    } else {
-      const chunkSize = baseSettings.bookCanvas.answersPerPage;
-      for (let i = 0; i < puzzles.length; i += chunkSize) {
-        // Get effective settings for solution page
-        const effectiveSettings = getMergedSettingsForPage(baseSettings, pageOverrides, applyMode, currentPageIndex);
-
-        const answerGridFont = await getOrEmbedFont(
-          effectiveSettings.typography.setFontForAnswerPages
-            ? effectiveSettings.typography.answerGridFontFamily || 'Inter'
-            : effectiveSettings.typography.puzzleGridFontFamily || 'Inter',
-          effectiveSettings.typography.setFontForAnswerPages
-            ? effectiveSettings.typography.answerGridFontWeight || false
-            : effectiveSettings.typography.puzzleGridFontWeight || false
-        );
-        const answerTitleBoldFont = await getOrEmbedFont(
-          effectiveSettings.colors.answerPage.answerTitleFontFamily || 'Inter',
-          effectiveSettings.colors.answerPage.answerTitleFontWeight || true
-        );
-
-        const page = pdfDoc.addPage([pageWidth, pageHeight]);
-        const pagePuzzles = puzzles.slice(i, i + chunkSize);
-        drawWordSearchSolutionPage(page, pagePuzzles, effectiveSettings, titleWords, answerGridFont, answerTitleBoldFont, pageWidth, pageHeight, margin, titleToAnswerGap, pageMargin);
-
-        currentPageIndex++;
-      }
+      currentPageIndex++;
     }
   }
 

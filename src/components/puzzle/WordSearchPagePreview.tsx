@@ -148,13 +148,18 @@ export function WordSearchPagePreview({
             style={{
               position: 'absolute',
               top: layoutPtToCss(subtitle.topPt - page.marginPt),
-              left: 0,
-              right: 0,
+              left: layoutPtToCss(page.marginPt),
+              right: layoutPtToCss(page.marginPt),
               textAlign: 'center',
               fontFamily: subtitle.fontFamily,
               fontSize: layoutPtToCss(subtitle.fontSizePt),
               color: subtitle.color,
-              lineHeight: 1.1,
+              lineHeight: 1.3,
+              wordWrap: 'break-word',
+              overflowWrap: 'break-word',
+              wordBreak: 'break-word',
+              whiteSpace: 'normal',
+              maxWidth: '100%',
             }}
           >
             {subtitle.text}

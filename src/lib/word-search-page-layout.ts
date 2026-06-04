@@ -204,24 +204,98 @@ function resolveTitleText(
   const puzzleNum = puzzle.puzzleNumber || 1;
 
   if (showSolution) {
-    let text = colors.answerPage.answerTitlePrefix || 'Solution';
-    if (colors.answerPage.showAnswerNumber) text += ` ${puzzleNum}`;
-    return text;
+    // Solution title logic
+    let baseTitle = '';
+    let numberingStyle = 'none';
+    
+    if (typography.solutionTitleStyle === 'same_as_puzzle') {
+      // Use the same base title and numbering style as the puzzle page
+      switch (typography.selectTitleOption) {
+        case 'puzzle-number':
+        case 'one-custom-title':
+          baseTitle = typography.titleText || titleWords.title || 'Word Search';
+          break;
+        case 'custom': {
+          const lines = (typography.titleText || '')
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+          baseTitle = lines.length > 0 ? (lines[puzzleNum - 1] ?? lines[lines.length - 1]) : '';
+          break;
+        }
+        default:
+          baseTitle = titleWords.title || 'Word Search';
+      }
+      // Use the SAME numbering style as puzzle
+      numberingStyle = typography.puzzleNumberingStyle || 'none';
+    } else {
+      // Use custom solution title with its own numbering style
+      baseTitle = typography.customSolutionTitle || 'Solution';
+      numberingStyle = typography.solutionNumberingStyle || 'none';
+    }
+
+    // Apply numbering style to solution title
+    if (baseTitle && numberingStyle !== 'none') {
+      if (numberingStyle === 'prefix') {
+        baseTitle = `${puzzleNum}. ${baseTitle}`;
+      } else if (numberingStyle === 'suffix') {
+        baseTitle = `${baseTitle} #${puzzleNum}`;
+      }
+    }
+
+    return baseTitle;
   }
 
+  // Puzzle title logic (non-solution)
+  let baseTitle = '';
   switch (typography.selectTitleOption) {
     case 'puzzle-number':
-      return `${typography.titleText || titleWords.title || 'Word Search'} #${puzzleNum}`;
+      // For puzzle-number mode, get just the title without the default # suffix
+      baseTitle = typography.titleText || titleWords.title || 'Word Search';
+      break;
+    case 'one-custom-title':
+      baseTitle = typography.titleText || titleWords.title || 'Word Search';
+      break;
     case 'custom': {
       const lines = (typography.titleText || '')
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean);
-      return lines.length > 0 ? (lines[puzzleNum - 1] ?? lines[lines.length - 1]) : '';
+      baseTitle = lines.length > 0 ? (lines[puzzleNum - 1] ?? lines[lines.length - 1]) : '';
+      break;
     }
     default:
       return '';
   }
+
+  // ALWAYS apply puzzle numbering style formatting based on user selection
+  const numberingStyle = typography.puzzleNumberingStyle || 'none';
+  
+  if (baseTitle && numberingStyle !== 'none') {
+    if (numberingStyle === 'prefix') {
+      baseTitle = `${puzzleNum}. ${baseTitle}`;
+    } else if (numberingStyle === 'suffix') {
+      baseTitle = `${baseTitle} #${puzzleNum}`;
+    }
+  }
+
+  return baseTitle;
+}
+
+/** Resolve fun fact/quote text for a specific puzzle. */
+function resolveFunFactText(
+  puzzle: WordSearchPuzzle,
+  typography: any
+): string {
+  if (!typography.includeFunFacts || !typography.funFactsText) return '';
+  
+  const lines = typography.funFactsText
+    .split(/\r?\n/)
+    .map((line: string) => line.trim())
+    .filter((line: string) => line);
+  
+  const puzzleNum = puzzle.puzzleNumber || 1;
+  return lines.length > 0 ? (lines[puzzleNum - 1] ?? '') : '';
 }
 
 /** Convert top-down distance from page top to pdf-lib baseline/box Y (bottom origin). */
@@ -274,30 +348,99 @@ export function computeWordSearchPageLayout(
       color: pageColors.titleColor || '#000000',
       fontFamily: titleFontFamily,
     };
-    yPt += titleSizePt + TITLE_TO_GRID_GAP_PT;
+    // Step 2: Advance yPt after title
+    yPt += titleSizePt;
   }
 
+  // Step 2: Check for subtitle and add appropriate gap
   let subtitle: UnifiedSubtitleBlock | null = null;
-  if (!showSolution && typography.includeSubtitle && typography.subtitleText) {
-    const subtitleSizePt = titleSizePt - 6;
-    subtitle = {
-      text: typography.subtitleText,
-      fontSizePt: subtitleSizePt,
-      topPt: yPt,
-      color: colors.puzzlePage.subtitleColor || '#666666',
-      fontFamily: titleFontFamily,
-    };
-    yPt += subtitleSizePt + TITLE_TO_GRID_GAP_PT;
+  if (!showSolution) {
+    const funFactText = resolveFunFactText(puzzle, typography);
+    if (funFactText) {
+      const subtitleSizePt = typography.subtitleFontSize || 14;
+      const subtitleTextScalePx = typography.subtitleTextScale ?? 500; // CSS pixels
+      const subtitleTextScalePt = subtitleTextScalePx / PT_TO_CSS_PX; // Convert to points
+      const subtitleToTitleGapPt = typography.subtitleToTitleGap ?? 10;
+      const subtitleToPuzzleGapPt = typography.subtitleToPuzzleGap ?? 10;
+      
+      // Step 2a: Add gap from title to subtitle
+      yPt += subtitleToTitleGapPt;
+      
+      // ====== Strict Rendering & Text Wrapping Logic (Exact Conditional Algorithm) ======
+      // IF subtitle text exists, THEN use subtitleTextScale as wrap boundary and calculate centered position
+      const startX = (pageWidthPt - subtitleTextScalePt) / 2; // Center the text box on page
+      
+      // Text measurement using canvas context
+      const canvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+      const ctx = canvas?.getContext('2d');
+      let wrappedLines: string[] = [];
+      
+      if (ctx && funFactText) {
+        ctx.font = `${subtitleSizePt * PT_TO_CSS_PX}px ${titleFontFamily}`;
+        // Use subtitleTextScale directly as CSS pixels
+        const maxWidthCssPx = subtitleTextScalePx;
+        
+        const words = funFactText.split(' ');
+        let currentLine = '';
+        
+        // Word-by-word loop: build lines and wrap when they exceed max width
+        for (const word of words) {
+          const testLine = currentLine ? `${currentLine} ${word}` : word;
+          const testWidth = ctx.measureText(testLine).width;
+          
+          if (testWidth <= maxWidthCssPx) {
+            currentLine = testLine;
+          } else {
+            if (currentLine) {
+              wrappedLines.push(currentLine);
+            }
+            currentLine = word;
+          }
+        }
+        
+        if (currentLine) {
+          wrappedLines.push(currentLine);
+        }
+      } else {
+        // Fallback: use original text as single line
+        wrappedLines = [funFactText];
+      }
+      
+      // Calculate subtitle height based on wrapped line count
+      const lineHeightPt = subtitleSizePt * 1.2; // Standard line height
+      const subtitleHeightPt = wrappedLines.length * lineHeightPt;
+      
+      subtitle = {
+        text: funFactText,
+        fontSizePt: subtitleSizePt,
+        topPt: yPt,
+        color: colors.puzzlePage.subtitleColor || '#666666',
+        fontFamily: titleFontFamily,
+      };
+      
+      // Step 3: Advance yPt after subtitle
+      // IF multiple wrapped lines, THEN ensure proper spacing: advance currentY by line height for each line,
+      // THEN add gap only after the very last line
+      yPt += subtitleHeightPt + subtitleToPuzzleGapPt;
+    } else {
+      // No subtitle: just add the normal title-to-puzzle gap
+      yPt += TITLE_TO_GRID_GAP_PT + spaceTitleToGridPt;
+    }
+  } else {
+    // Solution page: no subtitle, just normal gap
+    yPt += TITLE_TO_GRID_GAP_PT + spaceTitleToGridPt;
   }
 
-  yPt += spaceTitleToGridPt;
-
+  // If we have a subtitle, we've already added all the necessary gaps above
+  // If we don't have a subtitle, we've added the normal gap
+  // So we should NOT add spaceTitleToGridPt again here
+  
   const gridRows = puzzle.grid.length;
   const gridCols = puzzle.grid[0].length;
 
   const formattedWords =
-    !showSolution && !wordList.hideWordList && puzzle.words.length > 0
-      ? formatWords(puzzle.words, wordList)
+    !showSolution && !wordList.hideWordList && puzzle.displayWords.length > 0
+      ? formatWords(puzzle.displayWords, wordList)
       : [];
   const columns = wordList.wordListColumns || 2;
   const wordsPerColumn = formattedWords.length > 0 ? Math.ceil(formattedWords.length / columns) : 0;
