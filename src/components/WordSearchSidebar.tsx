@@ -167,21 +167,21 @@ function ColorInput({
   disabled?: boolean;
 }) {
   return (
-    <div className={cn('flex items-center gap-2', disabled && 'opacity-50 pointer-events-none')}>
+    <div className={cn('flex items-center gap-3 p-3 rounded-lg bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-700 dark:to-slate-600 border border-blue-200 dark:border-slate-600 transition-all duration-200', disabled && 'opacity-50 pointer-events-none')}>
       <div className="flex-1">
-        <Label className={cn('text-xs', disabled ? 'text-gray-400' : 'text-gray-500')}>{label}</Label>
-        <div className="flex items-center gap-2">
+        <Label className={cn('text-sm font-medium', disabled ? 'text-gray-400 dark:text-gray-500' : 'text-gray-700 dark:text-gray-200')}>{label}</Label>
+        <div className="flex items-center gap-2 mt-1">
           <Input
             type="color"
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            className="w-10 h-8 p-1 cursor-pointer"
+            className="w-14 h-10 p-1 cursor-pointer border-2 border-blue-300 dark:border-slate-500 rounded-lg hover:shadow-lg transition-shadow duration-200"
             disabled={disabled}
           />
           <Input
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            className="flex-1 font-mono text-sm"
+            className="flex-1 font-mono text-sm border-gray-300 dark:border-slate-600 focus:border-blue-400 focus:ring-blue-400/20 hover:border-blue-300 transition-colors duration-200"
             placeholder="#000000"
             disabled={disabled}
           />
@@ -326,32 +326,88 @@ export function WordSearchSidebar() {
   const wordCount = titleWords.words.length;
 
   return (
-    <div className="w-96 h-screen bg-white border-r border-gray-200 overflow-y-auto">
-      <Tabs defaultValue="book" className="w-full">
-        <TabsList className="w-full grid grid-cols-5">
-          <TabsTrigger value="book" title="Book">
+    <div className="w-96 h-screen bg-gradient-to-b from-slate-50 to-white dark:from-slate-950 dark:to-slate-900 border-r border-gray-200 dark:border-slate-800 flex flex-col shadow-lg overflow-y-auto">
+      <style>{`
+        /* Modern tab styling */
+        [role="tablist"] {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+          padding: 12px 8px;
+          background: linear-gradient(135deg, rgba(241, 245, 249, 0.5) 0%, rgba(226, 232, 240, 0.5) 100%);
+          border-bottom: 2px solid rgba(226, 232, 240, 0.8);
+        }
+        
+        button[role="tab"] {
+          flex: 1;
+          min-width: 60px;
+          padding: 10px 12px;
+          border-radius: 8px;
+          font-weight: 500;
+          transition: all 300ms ease-out;
+          border: 2px solid transparent;
+          background: white;
+          color: #64748b;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+        
+        button[role="tab"]:hover {
+          background: linear-gradient(135deg, #eef2ff 0%, #dbeafe 100%);
+          color: #4f46e5;
+          box-shadow: 0 4px 12px rgba(79, 70, 229, 0.15);
+          transform: translateY(-1px);
+        }
+        
+        button[role="tab"][data-state="active"] {
+          background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+          color: white;
+          border-color: #4f46e5;
+          box-shadow: 0 8px 16px rgba(79, 70, 229, 0.3);
+        }
+        
+        [role="tabpanel"] {
+          padding: 20px;
+          background: transparent;
+          animation: slideDown 300ms ease-out;
+        }
+        
+        @keyframes slideDown {
+          from {
+            opacity: 0;
+            transform: translateY(-10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+      `}</style>
+
+      <Tabs defaultValue="book" className="w-full flex-1">
+        <TabsList className="w-full grid grid-cols-5 bg-transparent">
+          <TabsTrigger value="book" title="Book" className="transition-all duration-200">
             <Book className="w-4 h-4" />
           </TabsTrigger>
-          <TabsTrigger value="words" title="Words">
+          <TabsTrigger value="words" title="Words" className="transition-all duration-200">
             <List className="w-4 h-4" />
           </TabsTrigger>
-          <TabsTrigger value="design" title="Design">
+          <TabsTrigger value="design" title="Design" className="transition-all duration-200">
             <Type className="w-4 h-4" />
           </TabsTrigger>
-          <TabsTrigger value="colors" title="Colors">
+          <TabsTrigger value="colors" title="Colors" className="transition-all duration-200">
             <Palette className="w-4 h-4" />
           </TabsTrigger>
-          <TabsTrigger value="puzzle" title="Puzzle">
+          <TabsTrigger value="puzzle" title="Puzzle" className="transition-all duration-200">
             <Grid3X3 className="w-4 h-4" />
           </TabsTrigger>
         </TabsList>
 
         {/* ==================== PUZZLE SETTINGS ==================== */}
-        <TabsContent value="puzzle" className="p-4 space-y-6">
+        <TabsContent value="puzzle" className="p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2">
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="font-semibold text-gray-900">Puzzle Settings</h3>
-              <Button variant="outline" size="sm" onClick={handleSave}>
+              <h3 className="font-semibold text-gray-900 dark:text-white">Puzzle Settings</h3>
+              <Button variant="outline" size="sm" onClick={handleSave} className="hover:bg-gradient-to-r hover:from-indigo-50 hover:to-indigo-100 dark:hover:from-slate-700 dark:hover:to-slate-600 transition-all duration-200 border-gray-300 dark:border-slate-600">
                 <Save className="w-4 h-4 mr-2" />Save
               </Button>
             </div>
@@ -506,7 +562,7 @@ export function WordSearchSidebar() {
         </TabsContent>
 
         {/* ==================== DESIGN SETTINGS ==================== */}
-        <TabsContent value="design" className="p-4 space-y-6">
+        <TabsContent value="design" className="p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2">
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <h3 className="font-semibold text-gray-900">Design Settings</h3>
@@ -849,7 +905,7 @@ export function WordSearchSidebar() {
         {/* ==================== WORD LIST SETTINGS ==================== */}
         <TabsContent 
           value="words" 
-          className="p-4 space-y-6"
+          className="p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2"
           onKeyDown={(e) => {
             // Allow Enter key to work in textareas without triggering tab navigation
             if (e.key === 'Enter' && (e.target as HTMLElement)?.tagName === 'TEXTAREA') {
@@ -1057,7 +1113,7 @@ export function WordSearchSidebar() {
         </TabsContent>
 
         {/* ==================== COLOR SETTINGS ==================== */}
-        <TabsContent value="colors" className="p-4 space-y-6">
+        <TabsContent value="colors" className="p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2">
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <h3 className="font-semibold text-gray-900">Color Settings</h3>
@@ -1092,14 +1148,14 @@ export function WordSearchSidebar() {
             <Button variant="outline" onClick={() => updateColors({
               puzzlePage: { backgroundColor: '#ffffff', titleColor: '#1f2937', subtitleColor: '#6b7280', boxColor: '#1f2937', puzzleColor: '#1f2937', wordListTitleColor: '#374151', wordListColor: '#4b5563' },
               answerPage: { backgroundColor: '#ffffff', titleColor: '#1f2937', boxColor: '#1f2937', lettersInSolutionColor: '#22c55e', lettersNotInSolutionColor: '#d1d5db', solutionStrokeThickness: 12, solutionStrokePadding: 2, solutionFrameColor: '#22c55e', solutionFrameStyle: 'rounded', solutionFrameRadius: 6, solutionHighlightAlpha: 30, onlyHighlightWordListWords: false, answerTitlePrefix: 'Solution', answerTitleFontFamily: 'Inter', answerTitleFontSize: 20, answerTitleAlignment: 'center', showAnswerNumber: true }
-            })} className="w-full">
+            })} className="w-full hover:bg-gradient-to-r hover:from-gray-100 hover:to-gray-200 dark:hover:from-slate-700 dark:hover:to-slate-600 transition-all duration-200 border-gray-300 dark:border-slate-600">
               Reset Colors
             </Button>
           </div>
         </TabsContent>
 
         {/* ==================== BOOK SETTINGS ==================== */}
-        <TabsContent value="book" className="p-4 space-y-6">
+        <TabsContent value="book" className="p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2">
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <h3 className="font-semibold text-gray-900">Book Settings</h3>
@@ -1283,7 +1339,7 @@ function DirectionCheckbox({
   return (
     <button
       onClick={() => onCheckedChange(!checked)}
-      className={`px-2 py-1 text-xs rounded border transition-colors ${checked ? 'bg-indigo-500 text-white border-indigo-500' : 'bg-white text-gray-600 border-gray-300 hover:border-indigo-300'}`}
+      className={`px-2 py-1.5 text-xs font-semibold rounded-lg border-2 transition-all duration-200 transform hover:scale-110 active:scale-95 ${checked ? 'bg-gradient-to-r from-indigo-500 to-indigo-600 text-white border-indigo-600 shadow-lg shadow-indigo-300/30 hover:from-indigo-600 hover:to-indigo-700' : 'bg-white dark:bg-slate-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-slate-600 hover:border-indigo-400 dark:hover:border-indigo-400 hover:bg-blue-50 dark:hover:bg-slate-600'}`}
     >
       {label}
     </button>
