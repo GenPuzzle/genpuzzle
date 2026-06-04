@@ -57,10 +57,10 @@
 
 @keyframes glow {
   0%, 100% {
-    box-shadow: 0 0 5px rgba(99, 102, 241, 0.3);
+    box-shadow: 0 0 5px rgba(34, 118, 180, 0.3);
   }
   50% {
-    box-shadow: 0 0 20px rgba(99, 102, 241, 0.5);
+    box-shadow: 0 0 20px rgba(34, 118, 180, 0.5);
   }
 }
 
@@ -105,16 +105,16 @@ input[type="range"]::-webkit-slider-thumb {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
+  background: linear-gradient(135deg, #2276B4 0%, #1a5a8c 100%);
   cursor: pointer;
-  border: 3px solid white;
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+  border: 3px solid #F0F5F6;
+  box-shadow: 0 2px 8px rgba(34, 118, 180, 0.4);
   transition: all 0.2s ease;
 }
 
 input[type="range"]::-webkit-slider-thumb:hover {
   transform: scale(1.1);
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.6);
+  box-shadow: 0 4px 12px rgba(34, 118, 180, 0.6);
 }
 
 input[type="range"]::-webkit-slider-thumb:active {
@@ -125,16 +125,16 @@ input[type="range"]::-moz-range-thumb {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
+  background: linear-gradient(135deg, #2276B4 0%, #1a5a8c 100%);
   cursor: pointer;
-  border: 3px solid white;
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+  border: 3px solid #F0F5F6;
+  box-shadow: 0 2px 8px rgba(34, 118, 180, 0.4);
   transition: all 0.2s ease;
 }
 
 input[type="range"]::-moz-range-thumb:hover {
   transform: scale(1.1);
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.6);
+  box-shadow: 0 4px 12px rgba(34, 118, 180, 0.6);
 }
 
 input[type="range"]::-moz-range-thumb:active {
@@ -147,10 +147,10 @@ input[type="range"]::-moz-range-thumb:active {
   display: flex;
   flex-wrap: wrap;
   border-radius: 1rem;
-  background: linear-gradient(145deg, #e6e6e6, #ffffff);
+  background: linear-gradient(145deg, #F0F5F6, #ffffff);
   box-shadow:
-    5px 5px 15px rgba(0, 0, 0, 0.15),
-    -5px -5px 15px rgba(255, 255, 255, 0.8);
+    5px 5px 15px rgba(125, 129, 131, 0.12),
+    -5px -5px 15px rgba(255, 255, 255, 0.9);
   padding: 0.5rem;
   font-size: 14px;
   gap: 0.5rem;
@@ -174,13 +174,13 @@ input[type="range"]::-moz-range-thumb:active {
   border-radius: 0.7rem;
   border: none;
   padding: 0.7rem 0.8rem;
-  color: #2d3748;
+  color: #7D8183;
   font-weight: 500;
   font-family: inherit;
-  background: linear-gradient(145deg, #ffffff, #e6e6e6);
+  background: linear-gradient(145deg, #ffffff, #F0F5F6);
   box-shadow:
-    3px 3px 6px rgba(0, 0, 0, 0.1),
-    -3px -3px 6px rgba(255, 255, 255, 0.7);
+    3px 3px 6px rgba(125, 129, 131, 0.08),
+    -3px -3px 6px rgba(255, 255, 255, 0.8);
   transition: all 0.2s ease;
   overflow: hidden;
   position: relative;
@@ -188,24 +188,24 @@ input[type="range"]::-moz-range-thumb:active {
 }
 
 .radio-inputs .radio input:checked + .name {
-  background: linear-gradient(145deg, #3b82f6, #2563eb);
-  color: white;
+  background: linear-gradient(145deg, #2276B4, #1a5a8c);
+  color: #F0F5F6;
   font-weight: 600;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
   box-shadow:
     inset 2px 2px 5px rgba(0, 0, 0, 0.2),
     inset -2px -2px 5px rgba(255, 255, 255, 0.1),
-    3px 3px 8px rgba(59, 130, 246, 0.3);
+    3px 3px 8px rgba(34, 118, 180, 0.3);
   transform: translateY(2px);
   animation: select 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .radio-inputs .radio:hover .name {
-  background: linear-gradient(145deg, #f0f0f0, #ffffff);
+  background: linear-gradient(145deg, #F0F5F6, #ffffff);
   transform: translateY(-1px);
   box-shadow:
-    4px 4px 8px rgba(0, 0, 0, 0.1),
-    -4px -4px 8px rgba(255, 255, 255, 0.8);
+    4px 4px 8px rgba(125, 129, 131, 0.1),
+    -4px -4px 8px rgba(255, 255, 255, 0.9);
 }
 
 .radio-inputs .radio:hover input:checked + .name {
@@ -225,11 +225,11 @@ input[type="range"]::-moz-range-thumb:active {
 }
 
 .radio-inputs .radio input:checked + .name::before {
-  background: #60a5fa;
+  background: #2276B4;
   box-shadow: 
-    0 0 6px #60a5fa,
-    10px -10px 0 #60a5fa,
-    -10px -10px 0 #60a5fa;
+    0 0 6px #2276B4,
+    10px -10px 0 #2276B4,
+    -10px -10px 0 #2276B4;
   top: -10px;
   left: 50%;
   transform: translateX(-50%);
@@ -237,11 +237,11 @@ input[type="range"]::-moz-range-thumb:active {
 }
 
 .radio-inputs .radio input:checked + .name::after {
-  background: #93c5fd;
+  background: #2276B4;
   box-shadow: 
-    0 0 8px #93c5fd,
-    10px 10px 0 #93c5fd,
-    -10px 10px 0 #93c5fd;
+    0 0 8px #2276B4,
+    10px 10px 0 #2276B4,
+    -10px 10px 0 #2276B4;
   bottom: -10px;
   left: 50%;
   transform: translateX(-50%);
@@ -301,10 +301,10 @@ input[type="range"]::-moz-range-thumb:active {
   display: inline-flex;
   width: 100%;
   border-radius: 1rem;
-  background: linear-gradient(145deg, #e6e6e6, #ffffff);
+  background: linear-gradient(145deg, #F0F5F6, #ffffff);
   box-shadow:
-    5px 5px 15px rgba(0, 0, 0, 0.15),
-    -5px -5px 15px rgba(255, 255, 255, 0.8);
+    5px 5px 15px rgba(125, 129, 131, 0.12),
+    -5px -5px 15px rgba(255, 255, 255, 0.9);
   padding: 0.5rem;
   gap: 0.5rem;
   height: auto;
@@ -313,33 +313,33 @@ input[type="range"]::-moz-range-thumb:active {
 .modern-tabs-trigger {
   padding: 0.7rem 0.8rem !important;
   border-radius: 0.7rem;
-  background: linear-gradient(145deg, #ffffff, #e6e6e6) !important;
+  background: linear-gradient(145deg, #ffffff, #F0F5F6) !important;
   box-shadow:
-    3px 3px 6px rgba(0, 0, 0, 0.1),
-    -3px -3px 6px rgba(255, 255, 255, 0.7) !important;
-  color: #2d3748 !important;
+    3px 3px 6px rgba(125, 129, 131, 0.08),
+    -3px -3px 6px rgba(255, 255, 255, 0.8) !important;
+  color: #7D8183 !important;
   transition: all 0.2s ease;
   font-weight: 500;
   position: relative;
 }
 
 .modern-tabs-trigger:hover {
-  background: linear-gradient(145deg, #f0f0f0, #ffffff) !important;
+  background: linear-gradient(145deg, #F0F5F6, #ffffff) !important;
   transform: translateY(-1px);
   box-shadow:
-    4px 4px 8px rgba(0, 0, 0, 0.1),
-    -4px -4px 8px rgba(255, 255, 255, 0.8) !important;
+    4px 4px 8px rgba(125, 129, 131, 0.1),
+    -4px -4px 8px rgba(255, 255, 255, 0.9) !important;
 }
 
 .modern-tabs-trigger[data-state="active"] {
-  background: linear-gradient(145deg, #3b82f6, #2563eb) !important;
-  color: white !important;
+  background: linear-gradient(145deg, #2276B4, #1a5a8c) !important;
+  color: #F0F5F6 !important;
   font-weight: 600;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
   box-shadow:
     inset 2px 2px 5px rgba(0, 0, 0, 0.2),
     inset -2px -2px 5px rgba(255, 255, 255, 0.1),
-    3px 3px 8px rgba(59, 130, 246, 0.3) !important;
+    3px 3px 8px rgba(34, 118, 180, 0.3) !important;
   transform: translateY(2px);
   animation: select 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
