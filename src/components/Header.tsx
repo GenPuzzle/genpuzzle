@@ -14,15 +14,15 @@ export default function Header() {
         className="flex items-center gap-3 no-underline text-inherit hover:opacity-90 active:scale-95 transition-all duration-200 group"
       >
         {/* Logo with glow effect on hover */}
-        <div className="relative h-12 w-auto flex-shrink-0 group-hover:animate-glow">
+        <div className="relative h-12 w-12 flex-shrink-0 group-hover:animate-glow">
           <div className="absolute inset-0 bg-gradient-to-r from-blue-400 to-indigo-400 rounded-lg blur-md opacity-0 group-hover:opacity-30 transition-opacity duration-300"></div>
           <Image
-            src="/logo.png?v=1.2"
+            src="/genpuzzle-icon.svg"
             alt="GenPuzzle Logo"
             height={48}
             width={48}
             priority
-            className="h-12 w-auto object-contain relative drop-shadow-sm"
+            className="h-12 w-12 object-contain relative drop-shadow-sm"
             unoptimized={true}
           />
         </div>

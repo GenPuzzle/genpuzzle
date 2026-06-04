@@ -299,6 +299,7 @@ input[type="range"]::-moz-range-thumb:active {
 /* Modern Tab Styling */
 .modern-tabs-list {
   display: inline-flex;
+  width: 100%;
   border-radius: 1rem;
   background: linear-gradient(145deg, #e6e6e6, #ffffff);
   box-shadow:

@@ -305,129 +305,7 @@ export function PreviewCanvas() {
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-gray-50 relative">
-      {/* Performance Mode Controls */}
-      <div className="px-6 py-4 bg-gradient-to-r from-gray-50 to-blue-50 border-b border-blue-100">
-        <div className="flex items-center gap-6 flex-wrap">
-          {/* Preview Range Mode Toggle - Modern Neumorphic Radio Buttons */}
-          <div className="flex items-center gap-4">
-            <span className="text-sm font-semibold text-gray-700">Preview Range:</span>
-            <div className="radio-inputs" style={{ width: 'auto' }}>
-              <div className="radio">
-                <input
-                  type="radio"
-                  id="preview-range-sample"
-                  name="preview-range"
-                  checked={previewRangeMode === 'sample'}
-                  onChange={() => setPreviewRangeMode('sample')}
-                  disabled={isGeneratingPdf}
-                />
-                <label htmlFor="preview-range-sample" className="name">
-                  Sample Pages (Fast)
-                </label>
-              </div>
-              <div className="radio">
-                <input
-                  type="radio"
-                  id="preview-range-all"
-                  name="preview-range"
-                  checked={previewRangeMode === 'all'}
-                  onChange={handleToggleFullPageMode}
-                  disabled={isGeneratingPdf || isGenerating}
-                />
-                <label htmlFor="preview-range-all" className="name">
-                  All Pages (Full)
-                </label>
-              </div>
-            </div>
-          </div>
-
-          {/* Preview Content Tabs */}
-          <Tabs value={activePreviewTab} onValueChange={(v) => handleSwitchPreviewTab(v as 'puzzles' | 'solutions')}>
-            <TabsList className="modern-tabs-list">
-              <TabsTrigger value="puzzles" className="modern-tabs-trigger text-xs">Puzzle Sheets</TabsTrigger>
-              <TabsTrigger value="solutions" className="modern-tabs-trigger text-xs">Solution Sheets</TabsTrigger>
-            </TabsList>
-          </Tabs>
-
-          {/* Info Text */}
-          <div className="text-xs font-medium text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg">
-            {previewRangeMode === 'sample' ? (
-              <span>Showing first puzzle only • Instant updates for fast editing</span>
-            ) : (
-              <span>Showing all {puzzlesToRender.length} puzzles • Full document preview</span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Toolbar */}
-      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 border-b border-gradient-to-r border-blue-200/50 shadow-md animate-fade-in">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between px-6 py-4 gap-6">
-          {/* Title Section */}
-          <div className="flex items-center gap-4 min-w-fit">
-            <div className="flex items-center gap-3">
-              <div className="w-1 h-8 bg-gradient-to-b from-blue-500 to-indigo-500 rounded-full"></div>
-              <h2 className="text-lg font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
-                {displayTitle}
-              </h2>
-            </div>
-            {puzzlesToRender.length > 1 && (
-              <span className="text-sm font-medium text-blue-600 bg-blue-100 px-3 py-1 rounded-full animate-fade-in" style={{animationDelay: '100ms'}}>
-                {puzzlesToRender.length} puzzles
-              </span>
-            )}
-          </div>
-
-          {/* Controls Section */}
-          <div className="flex flex-col sm:flex-row gap-4 w-full lg:w-auto lg:max-w-2xl">
-            {/* Zoom Control */}
-            <div className="flex items-center gap-3 px-4 py-3 bg-white/70 backdrop-blur-md border border-blue-200/30 rounded-lg shadow-sm hover:shadow-md hover:bg-white/90 transition-all duration-200 group">
-              <label htmlFor="preview-zoom-slider" className="text-sm font-semibold text-gray-700 whitespace-nowrap flex items-center gap-2">
-                <svg className="w-4 h-4 text-indigo-600 group-hover:rotate-12 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7" />
-                </svg>
-                Zoom
-              </label>
-              <input
-                id="preview-zoom-slider"
-                type="range"
-                min={25}
-                max={150}
-                value={previewZoom}
-                onChange={(e) => setPreviewZoom(Number(e.target.value))}
-                className="w-20 h-2 bg-gradient-to-r from-blue-200 to-indigo-200 rounded-lg appearance-none cursor-pointer slider-thumb hover:shadow-lg transition-shadow"
-                style={{
-                  background: `linear-gradient(to right, #3b82f6 0%, #6366f1 ${((previewZoom - 25) / 125) * 100}%, #dbeafe ${((previewZoom - 25) / 125) * 100}%, #dbeafe 100%)`,
-                }}
-              />
-              <span className="text-sm font-bold text-indigo-700 min-w-fit bg-gradient-to-r from-indigo-100 to-blue-100 px-2 py-1 rounded">{previewZoom}%</span>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex flex-wrap gap-2 items-center">
-              <Button 
-                size="sm" 
-                onClick={handleGeneratePuzzlesWithLoading} 
-                disabled={isGeneratingPdf || isGenerating}
-                className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white shadow-md hover:shadow-lg transform hover:scale-105 active:scale-95 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
-              >
-                Generate {wordSearchSettings?.core?.numberOfPuzzles || 1} {(wordSearchSettings?.core?.numberOfPuzzles || 1) === 1 ? 'Puzzle' : 'Puzzles'}
-              </Button>
-              <Button 
-                size="sm" 
-                onClick={handleExportPDFWithLoading} 
-                disabled={isGeneratingPdf || isGenerating}
-                className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md hover:shadow-lg transform hover:scale-105 active:scale-95 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
-              >
-                <Download className="w-4 h-4 mr-1 group-hover:animate-bounce" />
-                Export PDF
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-
+    <div className="flex-1 flex flex-col h-full bg-white relative">
       {/* Validation Error Display */}
       {validationError && (
         <div className="px-4 py-3 bg-red-50 border-b border-red-200">
@@ -438,50 +316,193 @@ export function PreviewCanvas() {
         </div>
       )}
 
-      {/* PDF Preview Area — Real-time WYSIWYG with iframe streaming */}
-      <div className="flex-1 overflow-auto p-8 flex justify-center items-start bg-gray-100 relative">
-        {/* Non-blocking loading overlay with 3D rotating spinner */}
-        {isGenerating && (
-          <div className="absolute inset-0 z-[9999] bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center pointer-events-auto">
-            <div className="spinner">
-              <div></div>
-              <div></div>
-              <div></div>
-              <div></div>
-              <div></div>
-            </div>
-          </div>
-        )}
-        {previewPdfUrl && !isGenerating ? (
-          <div className="relative bg-white rounded-lg shadow-lg" style={{ width: 'fit-content', maxWidth: '95%' }}>
-            {isGeneratingPdf && (
-              <div className="absolute inset-0 bg-white/70 flex items-center justify-center rounded-lg z-50 backdrop-blur-sm">
-                <HoneycombLoader />
+      {/* Two-Column Layout: PDF Preview (Left) + Controls (Right) */}
+      <div className="flex-1 flex gap-0 overflow-hidden">
+        
+        {/* LEFT SIDE: PDF Preview Area (70%) - Larger preview */}
+        <div className="flex-[0.7] flex flex-col bg-white border-r border-gray-200">
+          
+          {/* PDF Content Area */}
+          <div className="flex-1 overflow-auto flex justify-center items-start p-4 bg-gradient-to-br from-white to-gray-50 relative">
+            {/* Non-blocking loading overlay with 3D rotating spinner */}
+            {isGenerating && (
+              <div className="absolute inset-0 z-[9999] bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center pointer-events-auto">
+                <div className="spinner">
+                  <div></div>
+                  <div></div>
+                  <div></div>
+                  <div></div>
+                  <div></div>
+                </div>
               </div>
             )}
-            {(() => {
-              let pdfUrl = `${previewPdfUrl}#toolbar=0&navpanes=0&scrollbar=0&zoom=${previewZoom}`;
-              // If viewing solutions, navigate to the page where solutions start (after all puzzles)
-              if (activePreviewTab === 'solutions' && puzzlesToRender.length > 0) {
-                const solutionStartPage = puzzlesToRender.length + 1;
-                pdfUrl += `&page=${solutionStartPage}`;
-              }
-              return (
-                <iframe
-                  key={`${previewPdfUrl}-${activePreviewTab}-${previewZoom}`}
-                  src={pdfUrl}
-                  className="w-full h-full border-0 rounded-lg"
-                  style={{ minHeight: '750px', minWidth: '600px' }}
-                  title="PDF Preview"
-                />
-              );
-            })()}
+            {previewPdfUrl && !isGenerating ? (
+              <div className="relative bg-white rounded-xl shadow-xl border border-gray-100" style={{ width: '100%', height: '100%', maxWidth: 'none' }}>
+                {isGeneratingPdf && (
+                  <div className="absolute inset-0 bg-white/70 flex items-center justify-center rounded-xl z-50 backdrop-blur-sm">
+                    <HoneycombLoader />
+                  </div>
+                )}
+                {(() => {
+                  let pdfUrl = `${previewPdfUrl}#toolbar=0&navpanes=0&scrollbar=1&zoom=${previewZoom}`;
+                  // If viewing solutions, navigate to the page where solutions start (after all puzzles)
+                  if (activePreviewTab === 'solutions' && puzzlesToRender.length > 0) {
+                    const solutionStartPage = puzzlesToRender.length + 1;
+                    pdfUrl += `&page=${solutionStartPage}`;
+                  }
+                  return (
+                    <iframe
+                      key={`${previewPdfUrl}-${activePreviewTab}-${previewZoom}`}
+                      src={pdfUrl}
+                      className="w-full h-full border-0 rounded-xl"
+                      title="PDF Preview"
+                    />
+                  );
+                })()}
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-full text-gray-400 flex-col gap-4">
+                <svg className="w-16 h-16 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <p className="text-lg font-medium">Generate puzzles to see preview</p>
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="flex items-center justify-center h-full text-gray-500">
-            <p className="text-lg">Generate puzzles to see preview</p>
+        </div>
+
+        {/* RIGHT SIDE: Controls Panel (30%) - Organized vertically */}
+        <div className="flex-[0.3] flex flex-col bg-gradient-to-b from-blue-50 via-indigo-50 to-purple-50 border-0 overflow-y-auto">
+          
+          {/* Toolbar / Title */}
+          <div className="bg-gradient-to-r from-blue-100 to-indigo-100 border-b border-blue-200/50 shadow-sm p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-1 h-6 bg-gradient-to-b from-blue-500 to-indigo-500 rounded-full"></div>
+              <h3 className="text-sm font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+                Preview Controls
+              </h3>
+            </div>
+            {puzzlesToRender.length > 1 && (
+              <span className="text-xs font-medium text-blue-600 bg-blue-100 px-2 py-1 rounded-full inline-block">
+                {puzzlesToRender.length} puzzles
+              </span>
+            )}
           </div>
-        )}
+
+          {/* Controls Content */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            
+            {/* Preview Range Mode Toggle */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Preview Range:</p>
+              <div className="radio-inputs" style={{ width: '100%' }}>
+                <div className="radio flex-1">
+                  <input
+                    type="radio"
+                    id="preview-range-sample"
+                    name="preview-range"
+                    checked={previewRangeMode === 'sample'}
+                    onChange={() => setPreviewRangeMode('sample')}
+                    disabled={isGeneratingPdf}
+                  />
+                  <label htmlFor="preview-range-sample" className="name text-xs">
+                    Sample (Fast)
+                  </label>
+                </div>
+                <div className="radio flex-1">
+                  <input
+                    type="radio"
+                    id="preview-range-all"
+                    name="preview-range"
+                    checked={previewRangeMode === 'all'}
+                    onChange={handleToggleFullPageMode}
+                    disabled={isGeneratingPdf || isGenerating}
+                  />
+                  <label htmlFor="preview-range-all" className="name text-xs">
+                    All Pages
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {/* Divider */}
+            <div className="h-px bg-gradient-to-r from-blue-200/30 via-indigo-200/30 to-transparent"></div>
+
+            {/* Preview Content Tabs */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Content Type:</p>
+              <Tabs value={activePreviewTab} onValueChange={(v) => handleSwitchPreviewTab(v as 'puzzles' | 'solutions')}>
+                <TabsList className="modern-tabs-list w-full">
+                  <TabsTrigger value="puzzles" className="modern-tabs-trigger text-xs flex-1">Puzzles</TabsTrigger>
+                  <TabsTrigger value="solutions" className="modern-tabs-trigger text-xs flex-1">Solutions</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
+
+            {/* Divider */}
+            <div className="h-px bg-gradient-to-r from-blue-200/30 via-indigo-200/30 to-transparent"></div>
+
+            {/* Zoom Control */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label htmlFor="preview-zoom-slider" className="text-xs font-semibold text-gray-700 uppercase tracking-wide flex items-center gap-2">
+                  <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7" />
+                  </svg>
+                  Zoom Level
+                </label>
+                <span className="text-sm font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded">{previewZoom}%</span>
+              </div>
+              <input
+                id="preview-zoom-slider"
+                type="range"
+                min={25}
+                max={150}
+                value={previewZoom}
+                onChange={(e) => setPreviewZoom(Number(e.target.value))}
+                className="w-full h-2 bg-gradient-to-r from-blue-200 to-indigo-200 rounded-lg appearance-none cursor-pointer slider-thumb"
+                style={{
+                  background: `linear-gradient(to right, #3b82f6 0%, #6366f1 ${((previewZoom - 25) / 125) * 100}%, #dbeafe ${((previewZoom - 25) / 125) * 100}%, #dbeafe 100%)`,
+                }}
+              />
+            </div>
+
+            {/* Divider */}
+            <div className="h-px bg-gradient-to-r from-blue-200/30 via-indigo-200/30 to-transparent"></div>
+
+            {/* Info Text */}
+            <div className="text-xs text-gray-600 bg-white/50 px-3 py-2 rounded-lg border border-blue-100/50">
+              {previewRangeMode === 'sample' ? (
+                <span>📄 <strong>Sample Mode:</strong> Showing first puzzle only for fast editing</span>
+              ) : (
+                <span>📚 <strong>Full Mode:</strong> Showing all {puzzlesToRender.length} puzzles in complete document</span>
+              )}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="space-y-2 pt-2">
+              <Button 
+                size="sm" 
+                onClick={handleGeneratePuzzlesWithLoading} 
+                disabled={isGeneratingPdf || isGenerating}
+                className="w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white shadow-md hover:shadow-lg transform hover:scale-105 active:scale-95 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+              >
+                Generate {wordSearchSettings?.core?.numberOfPuzzles || 1}
+              </Button>
+              <Button 
+                size="sm" 
+                onClick={handleExportPDFWithLoading} 
+                disabled={isGeneratingPdf || isGenerating}
+                className="w-full bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md hover:shadow-lg transform hover:scale-105 active:scale-95 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+              >
+                <Download className="w-4 h-4 mr-1" />
+                Export PDF
+              </Button>
+            </div>
+
+          </div>
+        </div>
+
       </div>
     </div>
   );
