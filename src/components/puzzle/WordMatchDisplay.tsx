@@ -19,7 +19,7 @@ export function WordMatchDisplay({ puzzle, showSolution = false }: WordMatchDisp
               key={`left-${index}`}
               className="flex items-center gap-3 min-w-[120px]"
             >
-              <span className="w-8 h-8 flex items-center justify-center bg-indigo-100 rounded-full text-sm font-bold text-indigo-700">
+              <span className="w-8 h-8 flex items-center justify-center rounded-full text-sm font-bold" style={{background: `rgba(34, 118, 180, 0.1)`, color: `#2276B4`}}>
                 {index + 1}
               </span>
               <span className="text-lg font-medium">{word}</span>

@@ -115,9 +115,9 @@ export function Sidebar() {
         
         {/* Book Settings Section */}
         <AccordionItem value="book" className="border-0 rounded-lg bg-white dark:bg-slate-800 shadow-sm hover:shadow-md transition-shadow duration-200 border border-gray-200 dark:border-slate-700 overflow-hidden">
-          <AccordionTrigger className="px-4 py-3 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 dark:hover:from-slate-700 dark:hover:to-slate-700 transition-all duration-200 [&[data-state=open]>svg]:rotate-180">
+          <AccordionTrigger className="px-4 py-3 dark:hover:from-slate-700 dark:hover:to-slate-700 transition-all duration-200 [&[data-state=open]>svg]:rotate-180" style={{background: `transparent`, "--hover-bg": `linear-gradient(to right, #F0F5F6, #F0F5F6)`} as React.CSSProperties}>
             <div className="flex items-center gap-3 text-left">
-              <div className="p-2 bg-gradient-to-br from-blue-400 to-blue-500 rounded-lg">
+              <div className="p-2 rounded-lg" style={{background: `linear-gradient(to bottom right, #2276B4, #1a5a8c)`}}>
                 <Book className="w-4 h-4 text-white" />
               </div>
               <span className="font-semibold text-gray-900 dark:text-white">Book Settings</span>
@@ -132,7 +132,7 @@ export function Sidebar() {
                   setBookSettings({ ...bookSettings, trimSize: value as TrimSize })
                 }
               >
-                <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 hover:border-indigo-400 transition-colors duration-200">
+                <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200" style={{borderColor: `#7D8183`}}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -145,14 +145,15 @@ export function Sidebar() {
               </Select>
             </div>
 
-            <div className="flex items-center justify-between p-3 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-700 dark:to-slate-600 rounded-lg hover:shadow-sm transition-shadow duration-200">
+            <div className="flex items-center justify-between p-3 dark:from-slate-700 dark:to-slate-600 rounded-lg hover:shadow-sm transition-shadow duration-200" style={{background: `linear-gradient(to right, #F0F5F6, #F0F5F6)`}}>
               <Label className="text-sm font-medium text-gray-700 dark:text-gray-200">Include Bleed (0.125")</Label>
               <Switch
                 checked={bookSettings.includeBleed}
                 onCheckedChange={(checked) =>
                   setBookSettings({ ...bookSettings, includeBleed: checked })
                 }
-                className="data-[state=checked]:bg-indigo-600"
+                className=""
+                style={{color: `#2276B4`} as React.CSSProperties}
               />
             </div>
 
@@ -163,7 +164,8 @@ export function Sidebar() {
                 onCheckedChange={(checked) =>
                   setBookSettings({ ...bookSettings, includeSolution: checked })
                 }
-                className="data-[state=checked]:bg-indigo-600"
+                className=""
+                style={{color: `#2276B4`} as React.CSSProperties}
               />
             </div>
 
@@ -183,9 +185,9 @@ export function Sidebar() {
 
         {/* Puzzle Settings Section */}
         <AccordionItem value="puzzle" className="border-0 rounded-lg bg-white dark:bg-slate-800 shadow-sm hover:shadow-md transition-shadow duration-200 border border-gray-200 dark:border-slate-700 overflow-hidden">
-          <AccordionTrigger className="px-4 py-3 hover:bg-gradient-to-r hover:from-purple-50 hover:to-pink-50 dark:hover:from-slate-700 dark:hover:to-slate-700 transition-all duration-200 [&[data-state=open]>svg]:rotate-180">
+          <AccordionTrigger className="px-4 py-3 dark:hover:from-slate-700 dark:hover:to-slate-700 transition-all duration-200 [&[data-state=open]>svg]:rotate-180" style={{"--hover-bg": `linear-gradient(to right, #F0F5F6, #F0F5F6)`} as React.CSSProperties}>
             <div className="flex items-center gap-3 text-left">
-              <div className="p-2 bg-gradient-to-br from-purple-400 to-pink-500 rounded-lg">
+              <div className="p-2 rounded-lg" style={{background: `linear-gradient(to bottom right, #E91E63, #E91E63)`}}>
                 <Settings className="w-4 h-4 text-white" />
               </div>
               <span className="font-semibold text-gray-900 dark:text-white">Puzzle Settings</span>
@@ -222,10 +224,10 @@ export function Sidebar() {
                       onClick={() => handleDirectionToggle(dir.value)}
                       className={`w-10 h-10 rounded-lg border-2 text-lg flex items-center justify-center transition-all duration-200 transform hover:scale-110 font-semibold ${
                         directionToggles[dir.value]
-                          ? 'bg-gradient-to-br from-indigo-500 to-indigo-600 text-white border-indigo-600 shadow-lg shadow-indigo-300/30'
-                          : 'bg-white dark:bg-slate-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-slate-600 hover:border-indigo-400 dark:hover:border-indigo-400'
+                          ? 'text-white'
+                          : 'bg-white dark:bg-slate-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-slate-600 dark:hover:bg-slate-600'
                       }`}
-                      title={dir.label}
+                      style={directionToggles[dir.value] ? {background: `linear-gradient(to bottom right, #2276B4, #1a5a8c)`, borderColor: `#2276B4`, boxShadow: `0 0 12px rgba(34, 118, 180, 0.3)`} : {borderColor: `#7D8183`}}
                     >
                       {dir.label}
                     </button>
@@ -244,11 +246,8 @@ export function Sidebar() {
                       key={diff}
                       variant={sudokuDifficulty === diff ? 'default' : 'outline'}
                       onClick={() => setSudokuDifficulty(diff)}
-                      className={`capitalize text-sm transition-all duration-200 ${
-                        sudokuDifficulty === diff
-                          ? 'bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 shadow-lg shadow-indigo-300/30'
-                          : 'hover:bg-gradient-to-r hover:from-indigo-50 hover:to-indigo-100 dark:hover:from-slate-700 dark:hover:to-slate-600'
-                      }`}
+                      className={`capitalize text-sm transition-all duration-200 ${sudokuDifficulty === diff ? 'text-white' : ''}`}
+                      style={sudokuDifficulty === diff ? {background: `linear-gradient(to right, #2276B4, #1a5a8c)`, boxShadow: `0 0 12px rgba(34, 118, 180, 0.3)`} : {background: `transparent`}}
                       size="sm"
                     >
                       {diff}
@@ -263,7 +262,7 @@ export function Sidebar() {
               <div className="space-y-2">
                 <Label className="text-sm font-medium text-gray-700 dark:text-gray-200">Maze Size</Label>
                 <Select value={mazeSize} onValueChange={(v: any) => setMazeSize(v)}>
-                  <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 hover:border-indigo-400 transition-colors duration-200">
+                  <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200" style={{borderColor: `#7D8183`}}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -282,7 +281,7 @@ export function Sidebar() {
                 <div className="space-y-2">
                   <Label className="text-sm font-medium text-gray-700 dark:text-gray-200">Select a Quote</Label>
                   <Select value={quoteCategory} onValueChange={setQuoteCategory}>
-                    <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 hover:border-indigo-400 transition-colors duration-200">
+                    <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200" style={{borderColor: `#7D8183`}}>
                       <SelectValue placeholder="Select category" />
                     </SelectTrigger>
                     <SelectContent>
@@ -299,7 +298,7 @@ export function Sidebar() {
                   variant="outline" 
                   size="sm" 
                   onClick={handleRandomQuote} 
-                  className="w-full hover:bg-gradient-to-r hover:from-indigo-50 hover:to-indigo-100 dark:hover:from-slate-700 dark:hover:to-slate-600 transition-all duration-200 border-gray-300 dark:border-slate-600"
+                  className="w-full transition-all duration-200 border-gray-300 dark:border-slate-600" style={{borderColor: `#7D8183`}}
                 >
                   <RotateCw className="w-4 h-4 mr-2" />
                   Random Quote
@@ -326,9 +325,8 @@ export function Sidebar() {
                 value={titleWords.title}
                 onChange={(e) => setTitleWords({ ...titleWords, title: e.target.value })}
                 placeholder="Enter puzzle title"
-                className="mt-1 border-gray-300 dark:border-slate-600 focus:border-indigo-400 focus:ring-indigo-400/20 hover:border-indigo-300 transition-colors duration-200"
+                className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200" style={{borderColor: `#7D8183`, "--focus-border": `#2276B4`, "--focus-ring": `rgba(34, 118, 180, 0.2)`} as React.CSSProperties}
               />
-            </div>
 
             <div className="space-y-2">
               <Label className="text-sm font-medium text-gray-700 dark:text-gray-200">Font Family</Label>
@@ -338,7 +336,7 @@ export function Sidebar() {
                   setTitleWords({ ...titleWords, fontFamily: value })
                 }
               >
-                <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 hover:border-indigo-400 transition-colors duration-200">
+                <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200" style={{borderColor: `#7D8183`}}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -374,14 +372,14 @@ export function Sidebar() {
                   value={cryptogramText}
                   onChange={(e) => setCryptogramText(e.target.value)}
                   placeholder="Enter text to encode (or use Random Quote)"
-                  className="mt-1 h-32 border-gray-300 dark:border-slate-600 focus:border-indigo-400 focus:ring-indigo-400/20 resize-none hover:border-indigo-300 transition-colors duration-200"
+                  className="mt-1 h-32 border-gray-300 dark:border-slate-600 resize-none transition-colors duration-200" style={{borderColor: `#7D8183`, "--focus-border": `#2276B4`, "--focus-ring": `rgba(34, 118, 180, 0.2)`} as React.CSSProperties}
                 />
               ) : (
                 <Textarea
                   value={titleWords.words.join('\n')}
                   onChange={(e) => handleWordsChange(e.target.value)}
                   placeholder="Enter words (one per line)"
-                  className="mt-1 h-32 border-gray-300 dark:border-slate-600 focus:border-indigo-400 focus:ring-indigo-400/20 resize-none hover:border-indigo-300 transition-colors duration-200"
+                  className="mt-1 h-32 border-gray-300 dark:border-slate-600 resize-none transition-colors duration-200" style={{borderColor: `#7D8183`, "--focus-border": `#2276B4`, "--focus-ring": `rgba(34, 118, 180, 0.2)`} as React.CSSProperties}
                 />
               )}
               <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mt-1">
@@ -432,7 +430,7 @@ export function Sidebar() {
               </div>
             </div>
 
-            <div className="space-y-3 p-3 rounded-lg bg-purple-50 dark:bg-slate-700 border border-purple-200 dark:border-slate-600">
+            <div className="space-y-3 p-3 rounded-lg border" style={{background: `rgba(34, 118, 180, 0.08)`, borderColor: `rgba(34, 118, 180, 0.2)`}}>
               <Label className="text-sm font-medium text-gray-700 dark:text-gray-200">Title Color</Label>
               <div className="flex items-center gap-3 mt-1">
                 <Input
@@ -445,7 +443,7 @@ export function Sidebar() {
                     })
                   }
                   className="w-14 h-12 p-1 cursor-pointer border-2 border-purple-300 dark:border-slate-500 rounded-lg hover:shadow-lg transition-shadow duration-200"
-                />
+                />rounded-lg hover:shadow-lg transition-shadow duration-200" style={{borderColor: `rgba(34, 118, 180, 0.3)`}}
                 <Input
                   value={colorSettings.puzzlePage.titleColor}
                   onChange={(e) =>
@@ -455,7 +453,7 @@ export function Sidebar() {
                     })
                   }
                   className="flex-1 font-mono text-sm border-gray-300 dark:border-slate-600 focus:border-purple-400 focus:ring-purple-400/20"
-                />
+                />transition-colors duration-200" style={{borderColor: `#7D8183`, "--focus-border": `#2276B4`, "--focus-ring": `rgba(34, 118, 180, 0.2)`} as React.CSSProperties}
               </div>
             </div>
 
@@ -559,7 +557,8 @@ export function Sidebar() {
       <div className="border-t border-gray-200 dark:border-slate-700 p-4 bg-gradient-to-r from-slate-50 to-white dark:from-slate-800 dark:to-slate-900 shadow-lg">
         <Button 
           onClick={handleGenerate} 
-          className="w-full bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white font-semibold py-6 rounded-lg shadow-lg shadow-indigo-300/30 hover:shadow-xl hover:shadow-indigo-400/40 transition-all duration-200 transform hover:scale-105 active:scale-95"
+          className="w-full text-white font-semibold py-6 rounded-lg shadow-lg transition-all duration-200 transform hover:scale-105 active:scale-95"
+          style={{background: `linear-gradient(to right, #2276B4, #1a5a8c)`, boxShadow: `0 0 16px rgba(34, 118, 180, 0.3)`}}
         >
           <Grid3X3 className="w-5 h-5 mr-2" />
           Generate {currentPuzzleType === 'cryptogram' ? 'Cryptogram' : currentPuzzleType === 'sudoku' ? 'Sudoku' : 'Puzzle'}
@@ -567,7 +566,6 @@ export function Sidebar() {
       </div>
     </div>
   );
-}
         </TabsContent>
 
         {/* Title/Words Settings */}

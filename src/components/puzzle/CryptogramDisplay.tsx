@@ -43,12 +43,11 @@ export function CryptogramDisplay({ puzzle, showSolution = false }: CryptogramDi
                 return (
                   <span
                     key={j}
-                    className={`inline-block min-w-[0.75em] text-center ${
-                      isLetter ? 'border-b-2 border-indigo-300' : ''
-                    }`}
+                    className={`inline-block min-w-[0.75em] text-center`}
                     style={{
                       color: showSolution ? '#22c55e' : '#1f2937',
-                      borderColor: showSolution ? '#16a34a' : '#c7d2fe',
+                      borderColor: showSolution ? '#16a34a' : `rgba(34, 118, 180, 0.3)`,
+                      borderBottom: isLetter ? '2px solid' : 'none',
                     }}
                   >
                     {isLetter ? (showSolution ? puzzle.originalText.split(' ')[i]?.[j] || '' : char) : char}

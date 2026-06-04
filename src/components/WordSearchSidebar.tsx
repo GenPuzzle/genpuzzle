@@ -167,7 +167,7 @@ function ColorInput({
   disabled?: boolean;
 }) {
   return (
-    <div className={cn('flex items-center gap-3 p-3 rounded-lg bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-slate-700 dark:to-slate-600 border border-blue-200 dark:border-slate-600 transition-all duration-200', disabled && 'opacity-50 pointer-events-none')}>
+    <div className={cn('flex items-center gap-3 p-3 rounded-lg dark:from-slate-700 dark:to-slate-600 dark:border-slate-600 transition-all duration-200 border', disabled && 'opacity-50 pointer-events-none')} style={{background: `linear-gradient(to right, #F0F5F6, #F0F5F6)`, borderColor: `rgba(34, 118, 180, 0.2)`}}>
       <div className="flex-1">
         <Label className={cn('text-sm font-medium', disabled ? 'text-gray-400 dark:text-gray-500' : 'text-gray-700 dark:text-gray-200')}>{label}</Label>
         <div className="flex items-center gap-2 mt-1">
@@ -407,7 +407,7 @@ export function WordSearchSidebar() {
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <h3 className="font-semibold text-gray-900 dark:text-white">Puzzle Settings</h3>
-              <Button variant="outline" size="sm" onClick={handleSave} className="hover:bg-gradient-to-r hover:from-indigo-50 hover:to-indigo-100 dark:hover:from-slate-700 dark:hover:to-slate-600 transition-all duration-200 border-gray-300 dark:border-slate-600">
+              <Button variant="outline" size="sm" onClick={handleSave} className="transition-all duration-200 border-gray-300 dark:border-slate-600" style={{borderColor: `#7D8183`}}>
                 <Save className="w-4 h-4 mr-2" />Save
               </Button>
             </div>
@@ -957,10 +957,10 @@ export function WordSearchSidebar() {
 
                 {/* AI Generation */}
                 {wordList.selectWordListOption === 'ai' && (
-                  <div className="space-y-3 p-3 bg-purple-50 rounded-lg border border-purple-200">
+                  <div className="space-y-3 p-3 rounded-lg border" style={{background: `rgba(34, 118, 180, 0.08)`, borderColor: `rgba(34, 118, 180, 0.2)`}}>
                     <div className="flex items-center gap-2">
-                      <Sparkles className="w-4 h-4 text-purple-600" />
-                      <Label className="text-sm font-medium text-purple-700">AI Word Generation</Label>
+                      <Sparkles className="w-4 h-4" style={{color: `#2276B4`}} />
+                      <Label className="text-sm font-medium" style={{color: `#2276B4`}}>AI Word Generation</Label>
                     </div>
                     <div>
                       <Label className="text-xs text-gray-500">Theme</Label>
@@ -1339,7 +1339,8 @@ function DirectionCheckbox({
   return (
     <button
       onClick={() => onCheckedChange(!checked)}
-      className={`px-2 py-1.5 text-xs font-semibold rounded-lg border-2 transition-all duration-200 transform hover:scale-110 active:scale-95 ${checked ? 'bg-gradient-to-r from-indigo-500 to-indigo-600 text-white border-indigo-600 shadow-lg shadow-indigo-300/30 hover:from-indigo-600 hover:to-indigo-700' : 'bg-white dark:bg-slate-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-slate-600 hover:border-indigo-400 dark:hover:border-indigo-400 hover:bg-blue-50 dark:hover:bg-slate-600'}`}
+      className={`px-2 py-1.5 text-xs font-semibold rounded-lg border-2 transition-all duration-200 transform hover:scale-110 active:scale-95 ${checked ? 'text-white' : 'bg-white dark:bg-slate-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-slate-600 dark:hover:bg-slate-600'}`}
+      style={checked ? {background: `linear-gradient(to right, #2276B4, #1a5a8c)`, borderColor: `#2276B4`, boxShadow: `0 0 12px rgba(34, 118, 180, 0.3)`} : {borderColor: `#7D8183`}}
     >
       {label}
     </button>
