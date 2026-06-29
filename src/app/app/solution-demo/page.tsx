@@ -5,7 +5,6 @@ import { WordSearchSolutionPage } from '@/components/puzzle';
 import { generateWordSearch } from '@/lib/puzzles/word-search';
 
 export default function SolutionDemoPage() {
-  // Generate a sample word search puzzle
   const words = ['HELLO', 'WORLD', 'PUZZLE', 'SEARCH', 'WORD', 'FIND', 'GAME'];
   const puzzle = generateWordSearch(words, 12, 12);
 

@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { Toaster } from "@/components/ui/sonner";
-import AppShell from "@/components/AppShell";
 
 import "./globals.css";
 import { PUBLISHING_FONTS_GOOGLE_CSS_URL } from "@/lib/publishing-fonts";
@@ -18,8 +17,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "GenPuzzle",
-  description: "GenPuzzle - Puzzle and worksheet generator",
+  title: "GenPuzzle — Puzzle book maker",
+  description: "Create and publish professional puzzle books with GenPuzzle.",
   icons: [
     { rel: "icon", url: "/favicon.svg", type: "image/svg+xml" },
     { rel: "shortcut icon", url: "/favicon.svg" },
@@ -32,11 +31,7 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const content = (
-    <AppShell>
-      {children}
-    </AppShell>
-  );
+  const content = children;
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -49,7 +44,7 @@ export default function RootLayout({
         <meta name="theme-color" content="#1a5a8c" />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased overflow-hidden h-screen`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen`}
       >
         <Toaster />
         <ThemeProvider
