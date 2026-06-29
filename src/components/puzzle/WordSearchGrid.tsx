@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { WordSearchPuzzle } from '@/lib/puzzles/types';
-import { getGridCellWrapperStyle, getGridLetterGlyphStyle } from '@/lib/grid-letter-centering';
+import { getGridCellWrapperStyle, getGridLetterGlyphStyle, fitGridLetterSizeCss } from '@/lib/grid-letter-centering';
+import { drawSolutionGridInterior } from '@/lib/solution-grid-interior-draw';
 
 interface WordSearchGridProps {
   puzzle: WordSearchPuzzle;
@@ -12,20 +13,18 @@ interface WordSearchGridProps {
   borderStrokeThickness?: number;
   puzzleColor?: string;
   boxColor?: string;
-  // Solution stroke settings
   solutionStrokeColor?: string;
   solutionStrokeThickness?: number;
   solutionStrokePadding?: number;
-  // Frame style settings
   solutionFrameStyle?: 'rounded' | 'square' | 'circle';
   solutionFrameRadius?: number;
-  solutionHighlightAlpha?: number; // 0-100
-  onlyHighlightWordListWords?: boolean;
-  wordList?: string[];
+  solutionHighlightAlpha?: number;
   puzzleGridFontSize?: number;
   puzzleGridFontFamily?: string;
   answerGridFontSize?: number;
   answerGridFontFamily?: string;
+  gridBorderPadding?: number;
+  borderRadius?: number;
 }
 
 export function WordSearchGrid({
@@ -39,301 +38,148 @@ export function WordSearchGrid({
   solutionStrokeColor = '#000000',
   solutionStrokeThickness = 12,
   solutionStrokePadding = 0,
-  solutionFrameStyle = 'rounded',
-  solutionFrameRadius = 6,
   solutionHighlightAlpha = 30,
-  onlyHighlightWordListWords = true,
-  wordList = [],
   puzzleGridFontSize = 14,
   puzzleGridFontFamily = 'monospace',
   answerGridFontSize,
   answerGridFontFamily,
-
+  gridBorderPadding = 0,
+  borderRadius = 4,
 }: WordSearchGridProps) {
-  // Fixed configuration (not user-editable)
-  const solutionHighlightMode = 'box-frame'; // Always use box-frame
-  const solutionLineCap = 'round'; // Always use rounded ends
-  const getHighlightBand = (placement: { start: { row: number; col: number }; end: { row: number; col: number } }) => {
-    const thickness = Math.max(1, solutionStrokeThickness || 1);
-    const padding = solutionStrokePadding || 0;
-    const startX = placement.start.col * cellSize + cellSize / 2;
-    const startY = placement.start.row * cellSize + cellSize / 2;
-    const endX = placement.end.col * cellSize + cellSize / 2;
-    const endY = placement.end.row * cellSize + cellSize / 2;
+  const solutionCanvasRef = useRef<HTMLCanvasElement>(null);
 
-    const isHorizontal = placement.start.row === placement.end.row;
-    const isVertical = placement.start.col === placement.end.col;
-    const isDiagonal = !isHorizontal && !isVertical;
+  const cols = puzzle.grid[0]?.length ?? 0;
+  const rows = puzzle.grid.length;
+  const innerWidthPx = cols * cellSize;
+  const innerHeightPx = rows * cellSize;
 
-    if (isDiagonal) {
-      const centerX = (startX + endX) / 2;
-      const centerY = (startY + endY) / 2;
-      const dx = endX - startX;
-      const dy = endY - startY;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-      const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+  const letterFontSize = showSolution
+    ? answerGridFontSize !== undefined && answerGridFontSize !== null && answerGridFontSize !== 0
+      ? answerGridFontSize
+      : 18
+    : puzzleGridFontSize;
+  const letterFontFamily = showSolution
+    ? answerGridFontFamily || puzzleGridFontFamily
+    : puzzleGridFontFamily;
 
-      return {
-        x: centerX - (distance + padding * 2) / 2,
-        y: centerY - thickness / 2,
-        width: distance + padding * 2,
-        height: thickness,
-        rotation: angle,
-        centerX,
-        centerY,
-      };
-    }
+  useEffect(() => {
+    if (!showSolution || !solutionCanvasRef.current || cols === 0 || rows === 0) return;
 
-    if (isHorizontal) {
-      const minCol = Math.min(placement.start.col, placement.end.col);
-      const maxCol = Math.max(placement.start.col, placement.end.col);
-      const width = (maxCol - minCol + 1) * cellSize + padding * 2;
-      const x = minCol * cellSize - padding;
-      const y = placement.start.row * cellSize + (cellSize - thickness) / 2;
-      return { x, y, width, height: thickness };
-    }
+    const canvas = solutionCanvasRef.current;
+    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
 
-    const minRow = Math.min(placement.start.row, placement.end.row);
-    const maxRow = Math.max(placement.start.row, placement.end.row);
-    const height = (maxRow - minRow + 1) * cellSize + padding * 2;
-    const x = placement.start.col * cellSize + (cellSize - thickness) / 2;
-    const y = minRow * cellSize - padding;
-    return { x, y, width: thickness, height };
-  };
+    canvas.width = Math.max(1, Math.ceil(innerWidthPx * dpr));
+    canvas.height = Math.max(1, Math.ceil(innerHeightPx * dpr));
+    canvas.style.width = `${innerWidthPx}px`;
+    canvas.style.height = `${innerHeightPx}px`;
 
-  // Build placement cells map for highlighting frames
-  const placementCells = useMemo(() => {
-    const cells: { start: { row: number; col: number }; end: { row: number; col: number }; word?: string }[] = [];
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
 
-    if (!puzzle.placements) return cells;
-
-    if (showSolution) {
-      return puzzle.placements.map((placement) => ({
-        start: placement.start,
-        end: placement.end,
-        word: placement.word,
-      }));
-    }
-
-    for (const placement of puzzle.placements) {
-      if (onlyHighlightWordListWords && !wordList.some(w => w.toUpperCase() === placement.word.toUpperCase())) {
-        continue;
-      }
-
-      cells.push({
-        start: placement.start,
-        end: placement.end,
-        word: placement.word,
+    const draw = () => {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, innerWidthPx, innerHeightPx);
+      drawSolutionGridInterior(ctx, puzzle, {
+        cellPx: cellSize,
+        fontPx: Math.max(4, letterFontSize),
+        letterColor: puzzleColor,
+        fontFamily: letterFontFamily,
+        solutionFrameColor: solutionStrokeColor,
+        solutionStrokeThicknessPx: Math.max(1, solutionStrokeThickness),
+        solutionStrokePaddingPx: Math.max(0, solutionStrokePadding),
+        solutionHighlightAlpha,
       });
+    };
+
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      void document.fonts.ready.then(draw).catch(draw);
+    } else {
+      draw();
     }
-
-    return cells;
-  }, [puzzle.placements, onlyHighlightWordListWords, wordList, showSolution]);
-
-  // Check if a cell is part of a word placement
-  const isInPlacement = (row: number, col: number): { start: { row: number; col: number }; end: { row: number; col: number } } | null => {
-    for (const placement of placementCells) {
-      const minRow = Math.min(placement.start.row, placement.end.row);
-      const maxRow = Math.max(placement.start.row, placement.end.row);
-      const minCol = Math.min(placement.start.col, placement.end.col);
-      const maxCol = Math.max(placement.start.col, placement.end.col);
-
-      if (row >= minRow && row <= maxRow && col >= minCol && col <= maxCol) {
-        // Check if it's on the same row, column, or diagonal
-        const isHorizontal = placement.start.row === placement.end.row && row === placement.start.row;
-        const isVertical = placement.start.col === placement.end.col && col === placement.start.col;
-        const isDiagonal = Math.abs(placement.start.row - placement.end.row) === Math.abs(placement.start.col - placement.end.col);
-
-        if (isHorizontal || isVertical || isDiagonal) {
-          return placement;
-        }
-      }
-    }
-    return null;
-  };
+  }, [
+    showSolution,
+    puzzle,
+    cellSize,
+    cols,
+    rows,
+    innerWidthPx,
+    innerHeightPx,
+    letterFontSize,
+    letterFontFamily,
+    puzzleColor,
+    solutionStrokeColor,
+    solutionStrokeThickness,
+    solutionStrokePadding,
+    solutionHighlightAlpha,
+  ]);
 
   return (
-    <div className="inline-block relative">
-      {/* Frame overlay for solution highlighting - rendered BELOW letters */}
-      {showSolution && placementCells.length > 0 && (
-        <svg
-          className="absolute pointer-events-none"
-          style={{
-            width: puzzle.grid[0].length * cellSize,
-            height: puzzle.grid.length * cellSize,
-            overflow: 'visible',
-              zIndex: 1,
-              left: 0,
-              top: 0,
-          }}
-        >
-          <defs>
-            <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
-              <feDropShadow dx="0" dy="0" stdDeviation="1" floodOpacity="0.1" />
-            </filter>
-          </defs>
-            {placementCells.map((placement, idx) => {
-
-              const normalizedOpacity = Math.max(0, Math.min(100, solutionHighlightAlpha)) / 100;
-              // Debug: log opacity so we can verify UI changes reach the renderer
-              if (typeof window !== 'undefined' && (window as any).__WORDSEARCH_DEBUG_OPACITY__) {
-                // eslint-disable-next-line no-console
-                console.log('WordSearchGrid: solutionHighlightAlpha=', solutionHighlightAlpha, 'opacity=', normalizedOpacity);
-              }
-
-              const thickness = Math.max(1, solutionStrokeThickness);
-              const padding = solutionStrokePadding || 0;
-              const startCellX = placement.start.col * cellSize + cellSize / 2;
-              const startCellY = placement.start.row * cellSize + cellSize / 2;
-              const endCellX = placement.end.col * cellSize + cellSize / 2;
-              const endCellY = placement.end.row * cellSize + cellSize / 2;
-              const isHorizontal = placement.start.row === placement.end.row;
-              const isVertical = placement.start.col === placement.end.col;
-              const isDiagonal = !isHorizontal && !isVertical;
-
-              // Use per-word color if available, otherwise use default color
-              const wordColor = placement.word && puzzle.placements && puzzle.placements.find(p => p.word === placement.word)?.color || solutionStrokeColor;
-              
-              // Fixed: always use box-frame with rounded ends
-              const bandFill = wordColor;
-              const bandFillOpacity = normalizedOpacity;
-              const radius = thickness / 2; // Always rounded ends
-
-              if (isDiagonal) {
-                const dx = endCellX - startCellX;
-                const dy = endCellY - startCellY;
-                const distance = Math.sqrt(dx * dx + dy * dy);
-                const centerX = (startCellX + endCellX) / 2;
-                const centerY = (startCellY + endCellY) / 2;
-                const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-                const width = distance + padding * 2;
-                const height = thickness;
-
-                return (
-                  <rect
-                    key={idx}
-                    x={centerX - width / 2}
-                    y={centerY - height / 2}
-                    width={width}
-                    height={height}
-                    rx={radius}
-                    ry={radius}
-                    fill={bandFill}
-                    fillOpacity={bandFillOpacity}
-                    strokeLinejoin="round"
-                    transform={`rotate(${angle} ${centerX} ${centerY})`}
-                    filter="url(#shadow)"
-                  />
-                );
-              }
-
-              if (isHorizontal) {
-                const minCol = Math.min(placement.start.col, placement.end.col);
-                const maxCol = Math.max(placement.start.col, placement.end.col);
-                const width = (maxCol - minCol + 1) * cellSize + padding * 2;
-                const x = minCol * cellSize - padding;
-                const y = placement.start.row * cellSize + (cellSize - thickness) / 2;
-
-                return (
-                  <rect
-                    key={idx}
-                    x={x}
-                    y={y}
-                    width={width}
-                    height={thickness}
-                    rx={radius}
-                    ry={radius}
-                    fill={bandFill}
-                    fillOpacity={bandFillOpacity}
-                    strokeLinejoin="round"
-                    filter="url(#shadow)"
-                  />
-                );
-              }
-
-              const minRow = Math.min(placement.start.row, placement.end.row);
-              const maxRow = Math.max(placement.start.row, placement.end.row);
-              const height = (maxRow - minRow + 1) * cellSize + padding * 2;
-              const x = placement.start.col * cellSize + (cellSize - thickness) / 2;
-              const y = minRow * cellSize - padding;
-
-              return (
-                <rect
-                  key={idx}
-                  x={x}
-                  y={y}
-                  width={thickness}
-                  height={height}
-                  rx={radius}
-                  ry={radius}
-                  fill={bandFill}
-                  fillOpacity={bandFillOpacity}
-                  strokeLinejoin="round"
-                  filter="url(#shadow)"
-                />
-              );
-            })}
-        </svg>
-      )}
-
-      {/* Border wraps exact cell grid (cols × cellSize, rows × cellSize) */}
+    <div className="block relative">
       <div
         className="relative inline-block"
         style={{
           border: noBoxAroundPuzzle ? 'none' : `${borderStrokeThickness}px solid ${boxColor}`,
-          borderRadius: '4px',
-          padding: 0,
+          borderRadius: `${borderRadius}px`,
+          padding: `${gridBorderPadding}px`,
           margin: 0,
           lineHeight: 0,
           backgroundColor: '#ffffff',
           boxSizing: 'content-box',
         }}
       >
-        <div
-          className="grid gap-0 relative"
-          style={{
-            gridTemplateColumns: `repeat(${puzzle.grid[0].length}, ${cellSize}px)`,
-            gridTemplateRows: `repeat(${puzzle.grid.length}, ${cellSize}px)`,
-            width: puzzle.grid[0].length * cellSize,
-            height: puzzle.grid.length * cellSize,
-            gap: 0,
-            zIndex: 2,
-          }}
-        >
-          {puzzle.grid.map((row, rowIndex) =>
-            row.map((letter, colIndex) => {
-              const isHighlighted = showSolution && isInPlacement(rowIndex, colIndex) !== null;
-              // Calculate rounded radius proportional to cell size
-              const borderRadius = Math.max(cellSize * 0.15, 3);
-              // FIX: Completely isolate from puzzleFontSize
-              const letterFontSize = showSolution
-                ? (answerGridFontSize !== undefined && answerGridFontSize !== null && answerGridFontSize !== 0)
-                  ? answerGridFontSize
-                  : 18 // Strict hardcoded default for solution grid (initial state)
-                : puzzleGridFontSize;
-              const letterFontFamily = showSolution
-                ? answerGridFontFamily || puzzleGridFontFamily
-                : puzzleGridFontFamily;
+        {showSolution ? (
+          <canvas
+            ref={solutionCanvasRef}
+            className="block"
+            style={{
+              width: innerWidthPx,
+              height: innerHeightPx,
+              display: 'block',
+            }}
+            aria-hidden
+          />
+        ) : (
+          <div
+            className="grid gap-0 relative"
+            style={{
+              gridTemplateColumns: `repeat(${cols}, ${cellSize}px)`,
+              gridTemplateRows: `repeat(${rows}, ${cellSize}px)`,
+              width: innerWidthPx,
+              height: innerHeightPx,
+              gap: 0,
+            }}
+          >
+            {puzzle.grid.map((row, rowIndex) =>
+              row.map((letter, colIndex) => {
+                const cellBorderRadius = Math.max(cellSize * 0.15, 3);
+                const fittedFontSize = fitGridLetterSizeCss(
+                  letter,
+                  letterFontSize,
+                  cellSize,
+                  letterFontFamily,
+                  400
+                );
 
-              return (
-                <div
-                  key={`${rowIndex}-${colIndex}`}
-                  className="select-none"
-                  style={getGridCellWrapperStyle({
-                    cellSize,
-                    fontSize: letterFontSize,
-                    fontFamily: letterFontFamily,
-                    color: puzzleColor,
-                    fontWeight: 400,
-                    borderRadius,
-                  })}
-                >
-                  <span style={getGridLetterGlyphStyle(letterFontSize)}>{letter}</span>
-                </div>
-              );
-            })
-          )}
-        </div>
+                return (
+                  <div
+                    key={`${rowIndex}-${colIndex}`}
+                    className="select-none"
+                    style={getGridCellWrapperStyle({
+                      cellSize,
+                      fontSize: fittedFontSize,
+                      fontFamily: letterFontFamily,
+                      color: puzzleColor,
+                      fontWeight: 400,
+                      borderRadius: cellBorderRadius,
+                    })}
+                  >
+                    <span style={getGridLetterGlyphStyle(fittedFontSize)}>{letter}</span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

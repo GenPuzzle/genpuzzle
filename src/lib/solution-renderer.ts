@@ -175,23 +175,26 @@ export function getPDFSolutionPaths(
   const endY = wordPath.endY * wordPath.cellSize + wordPath.cellSize / 2;
   const opacity = config.alpha !== undefined ? Math.max(0, Math.min(100, config.alpha)) / 100 : 1;
   const thickness = Math.max(1, config.thickness);
-  const padding = config.padding ?? 0;
+  const padding = Math.max(0, config.padding ?? 0);
   const mode = config.solutionHighlightMode || 'box-frame';
   const lineCap = config.solutionLineCap || 'butt';
-
-  const isHorizontal = wordPath.startY === wordPath.endY;
-  const isVertical = wordPath.startX === wordPath.endX;
-  const isDiagonal = !isHorizontal && !isVertical;
 
   const dx = endX - startX;
   const dy = endY - startY;
   const distance = Math.sqrt(dx * dx + dy * dy);
-  const directionX = distance > 0 ? dx / distance : 1;
-  const directionY = distance > 0 ? dy / distance : 0;
-  const paddedStartX = startX - directionX * padding;
-  const paddedStartY = startY - directionY * padding;
-  const paddedEndX = endX + directionX * padding;
-  const paddedEndY = endY + directionY * padding;
+
+  if (distance === 0) {
+    return null;
+  }
+
+  const directionX = dx / distance;
+  const directionY = dy / distance;
+  const cellSize = wordPath.cellSize;
+  const endpointOffset = padding + Math.max(0, (cellSize - thickness) / 2);
+  const paddedStartX = startX - directionX * endpointOffset;
+  const paddedStartY = startY - directionY * endpointOffset;
+  const paddedEndX = endX + directionX * endpointOffset;
+  const paddedEndY = endY + directionY * endpointOffset;
 
   return {
     type: 'line',

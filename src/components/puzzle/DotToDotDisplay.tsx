@@ -50,7 +50,7 @@ export function DotToDotDisplay({ puzzle, showSolution = false }: DotToDotDispla
                 cx={coords.x}
                 cy={coords.y}
                 r={6}
-                fill="#7D8183"
+                fill="#404040"
                 stroke="#5a5f61"
                 strokeWidth={2}
               />

@@ -1,0 +1,315 @@
+/* Document workspace tabs — modern browser-style (blue / white / grey / black) */
+.doc-tabs-shell {
+  --doc-tab-bar-bg: var(--gp-blue, #1a5a8c);
+  --doc-tab-bar-bg-deep: var(--gp-blue-dark, #144a75);
+  --doc-tab-active-bg: #ffffff;
+  --doc-tab-inactive-text: #ffffff;
+  --doc-tab-active-text: var(--gp-black, #0f172a);
+
+  width: 100%;
+  overflow: hidden;
+}
+
+.doc-tabs-header {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  gap: 0.5rem;
+  padding: 0 0.5rem 0 0.75rem;
+  background: linear-gradient(180deg, var(--doc-tab-bar-bg) 0%, var(--doc-tab-bar-bg-deep) 100%);
+  border-top-left-radius: 0.625rem;
+  border-top-right-radius: 0.625rem;
+  min-height: 2.5rem;
+  width: 100%;
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+}
+
+@media (min-width: 768px) {
+  .doc-tabs-header {
+    gap: 0.75rem;
+    padding: 0 0.75rem 0 1rem;
+    min-height: 2.75rem;
+  }
+}
+
+.doc-tabs-title {
+  flex-shrink: 0;
+  padding-bottom: 0.5rem;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
+  white-space: nowrap;
+}
+
+@media (max-width: 639px) {
+  .doc-tabs-title {
+    display: none;
+  }
+}
+
+.doc-tabs-bar {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  align-items: flex-end;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-top: 0.4rem;
+  padding-bottom: 0;
+  scrollbar-width: thin;
+  gap: 0.125rem;
+  border-right: none;
+  justify-content: flex-start;
+}
+
+.doc-tabs-bar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.doc-tabs-bar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.35);
+  border-radius: 4px;
+}
+
+.doc-tab {
+  flex: 0 0 auto;
+  display: inline-flex !important;
+  flex-direction: row !important;
+  max-width: 180px;
+  width: auto;
+  min-height: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+@media (min-width: 768px) {
+  .doc-tab {
+    max-width: 240px;
+  }
+}
+
+.doc-tab__name {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  position: relative;
+  border-top-left-radius: 0.5rem;
+  border-top-right-radius: 0.5rem;
+  color: var(--doc-tab-inactive-text);
+  font-size: 12px;
+  font-weight: 500;
+  transition:
+    color 0.18s ease,
+    background-color 0.18s ease,
+    opacity 0.18s ease,
+    box-shadow 0.18s ease;
+  cursor: pointer;
+  user-select: none;
+  max-width: 100%;
+}
+
+.doc-tab:not(.doc-tab--active):hover .doc-tab__name {
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+.doc-tab--dragging .doc-tab__name {
+  opacity: 0.5;
+  cursor: pointer;
+}
+
+.doc-tab--drop-target .doc-tab__name {
+  outline: 2px dashed rgba(255, 255, 255, 0.65);
+  outline-offset: -2px;
+}
+
+.doc-tab__select {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 190px;
+  text-align: left;
+}
+
+.doc-tab__pre-name,
+.doc-tab__pos-name {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background-color: var(--doc-tab-bar-bg-deep);
+  bottom: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.doc-tab__pre-name {
+  right: -10px;
+  border-bottom-left-radius: 300px;
+  box-shadow: -3px 3px 0 3px var(--doc-tab-active-bg);
+}
+
+.doc-tab__pos-name {
+  left: -10px;
+  border-bottom-right-radius: 300px;
+  box-shadow: 3px 3px 0 3px var(--doc-tab-active-bg);
+}
+
+.doc-tab--active .doc-tab__name {
+  background-color: var(--doc-tab-active-bg);
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--doc-tab-active-text);
+  box-shadow:
+    0 -1px 0 rgba(15, 23, 42, 0.04),
+    0 2px 8px rgba(15, 23, 42, 0.08);
+  animation: doc-tab-name-activated 0.15s ease-out forwards;
+}
+
+.doc-tab--active .doc-tab__pre-name,
+.doc-tab--active .doc-tab__pos-name {
+  animation: doc-tab-border-activated 0.15s ease-out forwards;
+  z-index: 0;
+}
+
+.doc-tab__label {
+  z-index: 1;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.75rem;
+  border-top-left-radius: 0.5rem;
+  border-top-right-radius: 0.5rem;
+  white-space: nowrap;
+  line-height: 1.2;
+  max-width: 100%;
+}
+
+.doc-tab--active .doc-tab__label {
+  animation: doc-tab-text-activated 0.15s ease-out forwards;
+}
+
+.doc-tab__remove {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+  padding: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.doc-tab:not(.doc-tab--active) .doc-tab__remove:hover {
+  background-color: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+}
+
+.doc-tab--active .doc-tab__remove {
+  color: var(--gp-grey-600, #64748b);
+}
+
+.doc-tab--active .doc-tab__remove:hover {
+  background-color: var(--gp-grey-100, #e8ecf0);
+  color: var(--gp-black, #0f172a);
+}
+
+@keyframes doc-tab-name-activated {
+  from {
+    background-color: transparent;
+    font-weight: 500;
+    color: var(--doc-tab-inactive-text);
+  }
+
+  to {
+    background-color: var(--doc-tab-active-bg);
+    font-weight: 600;
+    color: var(--doc-tab-active-text);
+  }
+}
+
+@keyframes doc-tab-border-activated {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes doc-tab-text-activated {
+  from {
+    background-color: transparent;
+  }
+
+  to {
+    background-color: var(--doc-tab-active-bg);
+  }
+}
+
+.doc-tabs-add {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-end;
+  margin-bottom: 0.35rem;
+  margin-left: 0.125rem;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 0.375rem;
+  border: 1px dashed rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: none;
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    transform 0.15s ease;
+}
+
+.doc-tabs-add__label {
+  display: block;
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1;
+  color: inherit;
+  pointer-events: none;
+  user-select: none;
+}
+
+.doc-tabs-add:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.85);
+  color: #ffffff;
+  transform: scale(1.05);
+  box-shadow: none;
+}
+
+.doc-tabs-add:active {
+  transform: scale(0.98);
+}

@@ -1,30 +1,51 @@
 "use client"
 
 import * as React from "react"
-import * as CheckboxPrimitive from "@radix-ui/react-checkbox"
-import { Check } from "lucide-react"
-
 import { cn } from "@/lib/utils"
 
-const Checkbox = React.forwardRef<
-  React.ElementRef<typeof CheckboxPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof CheckboxPrimitive.Root>
->(({ className, ...props }, ref) => (
-  <CheckboxPrimitive.Root
-    ref={ref}
-    className={cn(
-      "peer h-4 w-4 shrink-0 rounded-sm border border-primary ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground",
-      className
-    )}
-    {...props}
-  >
-    <CheckboxPrimitive.Indicator
-      className={cn("flex items-center justify-center text-current")}
-    >
-      <Check className="h-4 w-4" />
-    </CheckboxPrimitive.Indicator>
-  </CheckboxPrimitive.Root>
-))
-Checkbox.displayName = CheckboxPrimitive.Root.displayName
+export interface CheckboxProps
+  extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "type" | "onChange"> {
+  onCheckedChange?: (checked: boolean) => void
+  label?: React.ReactNode
+  compact?: boolean
+}
+
+const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
+  ({ className, checked, onCheckedChange, disabled, id, label, compact, children, ...props }, ref) => {
+    const text = label ?? children
+    const hasText = text !== undefined && text !== null && text !== ""
+
+    return (
+      <label
+        className={cn(
+          "custom-checkbox-container",
+          compact && "custom-checkbox-container--compact",
+          disabled && "custom-checkbox-container--disabled",
+          className
+        )}
+      >
+        <input
+          type="checkbox"
+          ref={ref}
+          id={id}
+          checked={checked}
+          disabled={disabled}
+          className="custom-checkbox-input"
+          onChange={(event) => onCheckedChange?.(event.target.checked)}
+          {...props}
+        />
+        <span
+          className={cn(
+            "custom-checkbox-label",
+            !hasText && "custom-checkbox-label--box-only"
+          )}
+        >
+          {hasText ? <span className="custom-checkbox-text">{text}</span> : null}
+        </span>
+      </label>
+    )
+  }
+)
+Checkbox.displayName = "Checkbox"
 
 export { Checkbox }

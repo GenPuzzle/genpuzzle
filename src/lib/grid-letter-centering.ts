@@ -1,6 +1,182 @@
 import type { CSSProperties } from 'react';
 import type { PDFFont } from 'pdf-lib';
 
+/** Max fraction of cell used by a glyph (width and height). */
+export const GRID_LETTER_CELL_FILL_RATIO = 0.85;
+
+/** Cap-height approximation for PDF vertical centering (not full em-box). */
+export const PDF_CAP_HEIGHT_RATIO = 0.7;
+
+export interface GridCellRect {
+  cellW: number;
+  cellH: number;
+  left: number;
+  top: number;
+  centerX: number;
+  centerY: number;
+}
+
+/**
+ * Cell bounding box — top-left origin (canvas / CSS / PPT Y-down).
+ * Text draws at (centerX, centerY) with textAlign center + textBaseline middle.
+ */
+export function getGridCellRectTopOrigin(
+  gridLeft: number,
+  gridTop: number,
+  col: number,
+  row: number,
+  cellW: number,
+  cellH: number
+): GridCellRect {
+  const left = gridLeft + col * cellW;
+  const top = gridTop + row * cellH;
+  return {
+    cellW,
+    cellH,
+    left,
+    top,
+    centerX: left + cellW / 2,
+    centerY: top + cellH / 2,
+  };
+}
+
+/**
+ * Cell bounding box — PDF bottom-left origin (Y grows upward).
+ * centerY is the geometric centre of the cell in PDF coordinates.
+ */
+export function getGridCellRectPdf(
+  gridStartX: number,
+  pdfGridTopY: number,
+  col: number,
+  row: number,
+  cellW: number,
+  cellH: number
+): GridCellRect {
+  const left = gridStartX + col * cellW;
+  const top = pdfGridTopY - row * cellH;
+  return {
+    cellW,
+    cellH,
+    left,
+    top,
+    centerX: left + cellW / 2,
+    centerY: top - cellH / 2,
+  };
+}
+
+/** Clamp requested size to cell height/width budget. */
+export function fitGridLetterSizeToCell(
+  requestedSize: number,
+  cellSize: number,
+  fillRatio: number = GRID_LETTER_CELL_FILL_RATIO
+): number {
+  return Math.max(1, Math.min(requestedSize, cellSize * fillRatio));
+}
+
+/** Scale down further when measured width or cap-height exceeds the cell. */
+export function fitGridLetterSizeWithWidth(
+  requestedSize: number,
+  cellSize: number,
+  letterWidth: number,
+  fillRatio: number = GRID_LETTER_CELL_FILL_RATIO
+): number {
+  let size = fitGridLetterSizeToCell(requestedSize, cellSize, fillRatio);
+  const maxSpan = cellSize * fillRatio;
+
+  if (letterWidth > maxSpan && letterWidth > 0) {
+    size = Math.max(1, size * (maxSpan / letterWidth));
+  }
+
+  const capHeight = size * PDF_CAP_HEIGHT_RATIO;
+  if (capHeight > maxSpan) {
+    size = Math.max(1, size * (maxSpan / capHeight));
+  }
+
+  return size;
+}
+
+/** Fit a letter using pdf-lib glyph metrics. */
+export function fitGridLetterSizePdf(
+  font: PDFFont,
+  letter: string,
+  requestedSizePt: number,
+  cellSizePt: number,
+  fillRatio: number = GRID_LETTER_CELL_FILL_RATIO
+): number {
+  let size = fitGridLetterSizeToCell(requestedSizePt, cellSizePt, fillRatio);
+  const width = font.widthOfTextAtSize(letter, size);
+  return Math.max(4, fitGridLetterSizeWithWidth(size, cellSizePt, width, fillRatio));
+}
+
+/** PDF drawText position from cell centre (pdf-lib baseline coords). */
+export function getPdfLetterDrawCoords(
+  font: PDFFont,
+  letter: string,
+  requestedFontSizePt: number,
+  cell: GridCellRect
+): { x: number; y: number; size: number } {
+  const size = fitGridLetterSizePdf(font, letter, requestedFontSizePt, cell.cellW);
+  const textWidth = font.widthOfTextAtSize(letter, size);
+  const visualTextHeight = size * PDF_CAP_HEIGHT_RATIO;
+  return {
+    x: cell.centerX - textWidth / 2,
+    y: cell.centerY - visualTextHeight / 2,
+    size,
+  };
+}
+
+/** Measure text width in CSS pixels (browser); heuristic fallback on server. */
+export function measureTextWidthPx(
+  text: string,
+  fontSizePx: number,
+  fontFamily: string,
+  fontWeight: number | string = 400
+): number {
+  if (typeof document === 'undefined') {
+    return text.length * fontSizePx * 0.55;
+  }
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return text.length * fontSizePx * 0.55;
+  ctx.font = `${fontWeight} ${fontSizePx}px ${fontFamily}`;
+  return ctx.measureText(text).width;
+}
+
+/** Fit letter font size for DOM / canvas snapshot (CSS px). */
+export function fitGridLetterSizeCss(
+  letter: string,
+  requestedSizePx: number,
+  cellSizePx: number,
+  fontFamily: string,
+  fontWeight: number | string = 400,
+  fillRatio: number = GRID_LETTER_CELL_FILL_RATIO
+): number {
+  let size = fitGridLetterSizeToCell(requestedSizePx, cellSizePx, fillRatio);
+  const width = measureTextWidthPx(letter, size, fontFamily, fontWeight);
+  return fitGridLetterSizeWithWidth(size, cellSizePx, width, fillRatio);
+}
+
+/** PPT table cells: estimate width when DOM measure is unavailable. */
+export function estimateLetterWidthPt(letter: string, fontSizePt: number): number {
+  if (letter.length === 0) return 0;
+  const ch = letter.toUpperCase();
+  const narrow = ch === 'I' || ch === 'J' || ch === 'L' || ch === '1';
+  const wide = ch === 'W' || ch === 'M' || ch === '%';
+  const ratio = narrow ? 0.28 : wide ? 0.78 : 0.58;
+  return fontSizePt * ratio;
+}
+
+export function fitGridLetterSizePpt(
+  letter: string,
+  requestedSizePt: number,
+  cellSizePt: number,
+  fillRatio: number = GRID_LETTER_CELL_FILL_RATIO
+): number {
+  let size = fitGridLetterSizeToCell(requestedSizePt, cellSizePt, fillRatio);
+  const width = estimateLetterWidthPt(letter, size);
+  return Math.max(4, Math.round(fitGridLetterSizeWithWidth(size, cellSizePt, width, fillRatio)));
+}
+
 /**
  * Master outer border rectangle (FIRST calculation).
  * This is the definitive outer boundary for the entire puzzle grid.
@@ -210,7 +386,7 @@ export function getGridCellWrapperStyle(options: {
   };
 }
 
-/** Inner glyph fills the cell box for optical centering. */
+/** Inner glyph — centred, clipped to cell. */
 export function getGridLetterGlyphStyle(fontSize: number): CSSProperties {
   return {
     display: 'flex',
@@ -218,10 +394,13 @@ export function getGridLetterGlyphStyle(fontSize: number): CSSProperties {
     justifyContent: 'center',
     width: '100%',
     height: '100%',
+    maxWidth: '100%',
+    maxHeight: '100%',
     lineHeight: 1,
     fontSize,
     margin: 0,
     padding: 0,
     textAlign: 'center',
+    overflow: 'hidden',
   };
 }

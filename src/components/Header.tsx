@@ -2,39 +2,54 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
+import { AppFileMenu } from '@/components/AppFileMenu';
+import { AppServicesMenu } from '@/components/AppServicesMenu';
+import { AppUpgradeMenu } from '@/components/AppUpgradeMenu';
+import { AppHeaderRightNav } from '@/components/AppHeaderRightNav';
+import { ShareProjectDialog } from '@/components/ShareProjectDialog';
+import { useProjectShare } from '@/hooks/useProjectShare';
 
 export default function Header() {
+  const { shareDialogOpen, setShareDialogOpen, shareUrl, openShareDialog, shareEnabled, projectName } =
+    useProjectShare();
+
   return (
-    <header className="relative flex items-center gap-4 px-6 py-4 bg-gradient-to-r from-blue-50 to-blue-100 dark:from-slate-900 dark:to-slate-800 border-b border-blue-200 dark:border-slate-700 shadow-sm hover:shadow-md transition-shadow duration-300" style={{background: `linear-gradient(to right, #F0F5F6 0%, #ffffff 100%)`}}>
-      {/* Decorative gradient background */}
-      <div className="absolute inset-0 -z-10" style={{background: `linear-gradient(to right, rgba(34, 118, 180, 0.05) 0%, rgba(34, 118, 180, 0.02) 100%)`}}></div>
-      
-      <Link 
-        href="/" 
-        className="flex items-center gap-3 no-underline text-inherit hover:opacity-90 active:scale-95 transition-all duration-200 group"
+    <>
+      <header
+        className="relative flex items-center gap-3 px-4 py-2 border-b border-[#144a75] shadow-sm"
+        style={{ background: 'linear-gradient(to right, #1a5a8c 0%, #2276b4 100%)' }}
       >
-        {/* Logo with glow effect on hover */}
-        <div className="relative h-12 w-12 flex-shrink-0 group-hover:animate-glow">
-          <div className="absolute inset-0 rounded-lg blur-md opacity-0 group-hover:opacity-30 transition-opacity duration-300" style={{background: `linear-gradient(to right, #2276B4, #1a5a8c)`}}></div>
+        <Link
+          href="/"
+          className="flex shrink-0 items-center no-underline text-inherit hover:opacity-90 active:scale-95 transition-all duration-200"
+          aria-label="GenPuzzle home"
+        >
           <Image
-            src="/genpuzzle-icon.svg"
-            alt="GenPuzzle Logo"
-            height={48}
-            width={48}
+            src="/genpuzzle-icon-white.svg"
+            alt="GenPuzzle"
+            height={32}
+            width={32}
             priority
-            className="h-12 w-12 object-contain relative drop-shadow-sm"
-            unoptimized={true}
+            className="h-8 w-8 object-contain drop-shadow-sm"
+            unoptimized
           />
-        </div>
-        
-        {/* Brand text with gradient */}
-        <div className="flex flex-col">
-          <span className="text-xl font-bold tracking-tight" style={{background: `linear-gradient(to right, #2276B4, #1a5a8c)`, WebkitBackgroundClip: `text`, WebkitTextFillColor: `transparent`, backgroundClip: `text`}}>
-            GenPuzzle
-          </span>
-          <span className="text-xs font-medium tracking-wider" style={{color: `#7D8183`}}>Puzzle Generator</span>
-        </div>
-      </Link>
-    </header>
+        </Link>
+
+        <nav className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2" aria-label="Main navigation">
+          <AppFileMenu onShare={openShareDialog} shareEnabled={shareEnabled} />
+          <AppServicesMenu />
+          <AppUpgradeMenu />
+        </nav>
+
+        <AppHeaderRightNav onShare={openShareDialog} shareEnabled={shareEnabled} />
+      </header>
+
+      <ShareProjectDialog
+        open={shareDialogOpen}
+        onOpenChange={setShareDialogOpen}
+        shareUrl={shareUrl}
+        projectName={projectName}
+      />
+    </>
   );
 }

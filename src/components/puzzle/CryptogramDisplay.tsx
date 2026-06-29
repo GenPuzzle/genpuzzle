@@ -21,7 +21,7 @@ export function CryptogramDisplay({ puzzle, showSolution = false }: CryptogramDi
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([encoded, original]) => (
               <div key={encoded} className="flex flex-col items-center">
-                <span className="text-lg font-bold" style={{ color: '#7D8183' }}>
+                <span className="text-lg font-bold" style={{ color: '#404040' }}>
                   {showSolution ? original : encoded}
                 </span>
                 <span className="text-gray-400">↓</span>

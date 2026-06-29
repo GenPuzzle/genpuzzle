@@ -18,6 +18,7 @@ interface WordSearchPagePreviewProps {
   showSolution: boolean;
   className?: string;
   puzzleGridScale?: number;
+  titleToAnswerGap?: number;
 }
 
 function WordListPreview({ layout }: { layout: UnifiedPageLayout }) {
@@ -33,7 +34,7 @@ function WordListPreview({ layout }: { layout: UnifiedPageLayout }) {
         position: 'absolute',
         top: layoutPtToCss(wl.topPt - layout.page.marginPt),
         left: leftPx,
-        width: layoutPtToCss(wl.blockWidthPt),
+        minWidth: layoutPtToCss(wl.blockWidthPt),
         fontFamily: wl.fontFamily,
         fontSize: layoutPtToCss(wl.fontSizePt),
         fontWeight: 400,
@@ -42,6 +43,8 @@ function WordListPreview({ layout }: { layout: UnifiedPageLayout }) {
         flexDirection: 'row',
         gap: layoutPtToCss(wl.columnGapPt),
         textAlign: 'left',
+        overflow: 'visible',
+        flexWrap: 'nowrap',
       }}
     >
       {columns.map((col, colIdx) => (
@@ -50,7 +53,10 @@ function WordListPreview({ layout }: { layout: UnifiedPageLayout }) {
           style={{
             position: 'relative',
             minWidth: layoutPtToCss(wl.columnWidthsPt[colIdx]),
+            width: 'auto',
+            flex: '0 0 auto',
             height: layoutPtToCss(col.length * wl.lineHeightPt),
+            overflow: 'visible',
           }}
         >
           {col.map((word, rowIdx) => (
@@ -77,7 +83,17 @@ function WordListPreview({ layout }: { layout: UnifiedPageLayout }) {
                   }}
                 />
               )}
-              <span>{word}</span>
+              <span
+                style={{
+                  whiteSpace: 'nowrap',
+                  display: 'inline-flex',
+                  flexShrink: 0,
+                  wordBreak: 'normal',
+                  overflowWrap: 'normal',
+                }}
+              >
+                {word}
+              </span>
             </div>
           ))}
         </div>
@@ -93,10 +109,11 @@ export function WordSearchPagePreview({
   showSolution,
   className,
   puzzleGridScale = 100,
+  titleToAnswerGap,
 }: WordSearchPagePreviewProps) {
   const layout = useMemo(
-    () => computeWordSearchPageLayout(puzzle, settings, titleWords, showSolution, puzzleGridScale),
-    [puzzle, settings, titleWords, showSolution, puzzleGridScale]
+    () => computeWordSearchPageLayout(puzzle, settings, titleWords, showSolution, puzzleGridScale, titleToAnswerGap),
+    [puzzle, settings, titleWords, showSolution, puzzleGridScale, titleToAnswerGap]
   );
 
   const { page, title, subtitle, grid, wordList } = layout;
@@ -169,10 +186,10 @@ export function WordSearchPagePreview({
         <div
           style={{
             position: 'absolute',
-            top: layoutPtToCss(grid.topPt - page.marginPt),
-            left: layoutPtToCss(grid.leftPt - page.marginPt),
-            width: layoutPtToCss(grid.widthPt),
-            height: layoutPtToCss(grid.heightPt),
+            top: layoutPtToCss(grid.topPt - page.marginPt - (grid.framePaddingPt || 0)),
+            left: layoutPtToCss(grid.leftPt - page.marginPt - (grid.framePaddingPt || 0)),
+            width: layoutPtToCss(grid.widthPt + (grid.framePaddingPt || 0) * 2),
+            height: layoutPtToCss(grid.heightPt + (grid.framePaddingPt || 0) * 2),
           }}
         >
           <WordSearchGrid
@@ -181,6 +198,8 @@ export function WordSearchPagePreview({
             cellSize={layoutPtToCss(grid.cellSizePt)}
             noBoxAroundPuzzle={grid.noBox}
             borderStrokeThickness={layoutPtToCss(grid.borderThicknessPt)}
+            gridBorderPadding={layoutPtToCss(grid.framePaddingPt || 0)}
+            borderRadius={settings.core.borderCornerRadius ?? 4}
             puzzleColor={grid.letterColor}
             boxColor={grid.boxColor}
             puzzleGridFontSize={layoutPtToCss(grid.fontSizePt)}

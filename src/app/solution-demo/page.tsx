@@ -7,7 +7,7 @@ import { generateWordSearch } from '@/lib/puzzles/word-search';
 export default function SolutionDemoPage() {
   // Generate a sample word search puzzle
   const words = ['HELLO', 'WORLD', 'PUZZLE', 'SEARCH', 'WORD', 'FIND', 'GAME'];
-  const puzzle = generateWordSearch(words, 12);
+  const puzzle = generateWordSearch(words, 12, 12);
 
   return (
     <div className="min-h-screen bg-gray-100 p-8">

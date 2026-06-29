@@ -117,7 +117,7 @@ export function Sidebar() {
         <AccordionItem value="book" className="border-0 rounded-lg bg-white dark:bg-slate-800 shadow-sm hover:shadow-md transition-shadow duration-200 border border-gray-200 dark:border-slate-700 overflow-hidden">
           <AccordionTrigger className="px-4 py-3 dark:hover:from-slate-700 dark:hover:to-slate-700 transition-all duration-200 [&[data-state=open]>svg]:rotate-180" style={{background: `transparent`, "--hover-bg": `linear-gradient(to right, #F0F5F6, #F0F5F6)`} as React.CSSProperties}>
             <div className="flex items-center gap-3 text-left">
-              <div className="p-2 rounded-lg" style={{background: `linear-gradient(to bottom right, #2276B4, #1a5a8c)`}}>
+              <div className="p-2 rounded-lg" style={{background: `linear-gradient(to bottom right, #404040, #1a5a8c)`}}>
                 <Book className="w-4 h-4 text-white" />
               </div>
               <span className="font-semibold text-gray-900 dark:text-white">Book Settings</span>
@@ -132,7 +132,7 @@ export function Sidebar() {
                   setBookSettings({ ...bookSettings, trimSize: value as TrimSize })
                 }
               >
-                <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200" style={{borderColor: `#7D8183`}}>
+                <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -153,7 +153,7 @@ export function Sidebar() {
                   setBookSettings({ ...bookSettings, includeBleed: checked })
                 }
                 className=""
-                style={{color: `#2276B4`} as React.CSSProperties}
+                style={{color: `#404040`} as React.CSSProperties}
               />
             </div>
 
@@ -165,7 +165,7 @@ export function Sidebar() {
                   setBookSettings({ ...bookSettings, includeSolution: checked })
                 }
                 className=""
-                style={{color: `#2276B4`} as React.CSSProperties}
+                style={{color: `#404040`} as React.CSSProperties}
               />
             </div>
 
@@ -227,7 +227,7 @@ export function Sidebar() {
                           ? 'text-white'
                           : 'bg-white dark:bg-slate-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-slate-600 dark:hover:bg-slate-600'
                       }`}
-                      style={directionToggles[dir.value] ? {background: `linear-gradient(to bottom right, #2276B4, #1a5a8c)`, borderColor: `#2276B4`, boxShadow: `0 0 12px rgba(34, 118, 180, 0.3)`} : {borderColor: `#7D8183`}}
+                      style={directionToggles[dir.value] ? {background: `linear-gradient(to bottom right, #404040, #1a5a8c)`, boxShadow: `0 0 12px rgba(34, 118, 180, 0.3)`} : {}}
                     >
                       {dir.label}
                     </button>
@@ -247,7 +247,7 @@ export function Sidebar() {
                       variant={sudokuDifficulty === diff ? 'default' : 'outline'}
                       onClick={() => setSudokuDifficulty(diff)}
                       className={`capitalize text-sm transition-all duration-200 ${sudokuDifficulty === diff ? 'text-white' : ''}`}
-                      style={sudokuDifficulty === diff ? {background: `linear-gradient(to right, #2276B4, #1a5a8c)`, boxShadow: `0 0 12px rgba(34, 118, 180, 0.3)`} : {background: `transparent`}}
+                      style={sudokuDifficulty === diff ? {background: `linear-gradient(to right, #404040, #1a5a8c)`, boxShadow: `0 0 12px rgba(34, 118, 180, 0.3)`} : {background: `transparent`}}
                       size="sm"
                     >
                       {diff}
@@ -262,7 +262,7 @@ export function Sidebar() {
               <div className="space-y-2">
                 <Label className="text-sm font-medium text-gray-700 dark:text-gray-200">Maze Size</Label>
                 <Select value={mazeSize} onValueChange={(v: any) => setMazeSize(v)}>
-                  <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200" style={{borderColor: `#7D8183`}}>
+                  <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -281,7 +281,7 @@ export function Sidebar() {
                 <div className="space-y-2">
                   <Label className="text-sm font-medium text-gray-700 dark:text-gray-200">Select a Quote</Label>
                   <Select value={quoteCategory} onValueChange={setQuoteCategory}>
-                    <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200" style={{borderColor: `#7D8183`}}>
+                    <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200">
                       <SelectValue placeholder="Select category" />
                     </SelectTrigger>
                     <SelectContent>
@@ -298,7 +298,7 @@ export function Sidebar() {
                   variant="outline" 
                   size="sm" 
                   onClick={handleRandomQuote} 
-                  className="w-full transition-all duration-200 border-gray-300 dark:border-slate-600" style={{borderColor: `#7D8183`}}
+                  className="w-full transition-all duration-200 border-gray-300 dark:border-slate-600"
                 >
                   <RotateCw className="w-4 h-4 mr-2" />
                   Random Quote
@@ -325,7 +325,7 @@ export function Sidebar() {
                 value={titleWords.title}
                 onChange={(e) => setTitleWords({ ...titleWords, title: e.target.value })}
                 placeholder="Enter puzzle title"
-                className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200" style={{borderColor: `#7D8183`, "--focus-border": `#2276B4`, "--focus-ring": `rgba(34, 118, 180, 0.2)`} as React.CSSProperties}
+                className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200" style={{"--focus-border": `#404040`, "--focus-ring": `rgba(34, 118, 180, 0.2)`} as React.CSSProperties}
               />
 
             <div className="space-y-2">
@@ -336,7 +336,7 @@ export function Sidebar() {
                   setTitleWords({ ...titleWords, fontFamily: value })
                 }
               >
-                <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200" style={{borderColor: `#7D8183`}}>
+                <SelectTrigger className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -372,14 +372,14 @@ export function Sidebar() {
                   value={cryptogramText}
                   onChange={(e) => setCryptogramText(e.target.value)}
                   placeholder="Enter text to encode (or use Random Quote)"
-                  className="mt-1 h-32 border-gray-300 dark:border-slate-600 resize-none transition-colors duration-200" style={{borderColor: `#7D8183`, "--focus-border": `#2276B4`, "--focus-ring": `rgba(34, 118, 180, 0.2)`} as React.CSSProperties}
+                  className="mt-1 h-32 border-gray-300 dark:border-slate-600 resize-none transition-colors duration-200" style={{"--focus-border": `#404040`, "--focus-ring": `rgba(34, 118, 180, 0.2)`} as React.CSSProperties}
                 />
               ) : (
                 <Textarea
                   value={titleWords.words.join('\n')}
                   onChange={(e) => handleWordsChange(e.target.value)}
                   placeholder="Enter words (one per line)"
-                  className="mt-1 h-32 border-gray-300 dark:border-slate-600 resize-none transition-colors duration-200" style={{borderColor: `#7D8183`, "--focus-border": `#2276B4`, "--focus-ring": `rgba(34, 118, 180, 0.2)`} as React.CSSProperties}
+                  className="mt-1 h-32 border-gray-300 dark:border-slate-600 resize-none transition-colors duration-200" style={{"--focus-border": `#404040`, "--focus-ring": `rgba(34, 118, 180, 0.2)`} as React.CSSProperties}
                 />
               )}
               <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mt-1">
@@ -430,7 +430,7 @@ export function Sidebar() {
               </div>
             </div>
 
-            <div className="space-y-3 p-3 rounded-lg border" style={{background: `rgba(34, 118, 180, 0.08)`, borderColor: `rgba(34, 118, 180, 0.2)`}}>
+            <div className="space-y-3 p-3 rounded-lg border" style={{background: `rgba(34, 118, 180, 0.08)`}}>
               <Label className="text-sm font-medium text-gray-700 dark:text-gray-200">Title Color</Label>
               <div className="flex items-center gap-3 mt-1">
                 <Input
@@ -442,8 +442,8 @@ export function Sidebar() {
                       puzzlePage: { ...colorSettings.puzzlePage, titleColor: e.target.value },
                     })
                   }
-                  className="w-14 h-12 p-1 cursor-pointer border-2 rounded-lg hover:shadow-lg transition-shadow duration-200" style={{borderColor: '#7D8183'}}
-                />rounded-lg hover:shadow-lg transition-shadow duration-200" style={{borderColor: `rgba(34, 118, 180, 0.3)`}}
+                  className="w-14 h-12 p-1 cursor-pointer border-2 rounded-lg hover:shadow-lg transition-shadow duration-200"
+                />
                 <Input
                   value={colorSettings.puzzlePage.titleColor}
                   onChange={(e) =>
@@ -452,8 +452,8 @@ export function Sidebar() {
                       puzzlePage: { ...colorSettings.puzzlePage, titleColor: e.target.value },
                     })
                   }
-                  className="flex-1 font-mono text-sm border-gray-300 dark:border-slate-600" style={{borderColor: '#7D8183'}} onFocus={(e) => {e.target.style.borderColor = '#2276B4'; e.target.style.boxShadow = '0 0 0 3px rgba(34, 118, 180, 0.1)'}} onBlur={(e) => {e.target.style.borderColor = '#7D8183'; e.target.style.boxShadow = 'none'}}
-                />transition-colors duration-200" style={{borderColor: `#7D8183`, "--focus-border": `#2276B4`, "--focus-ring": `rgba(34, 118, 180, 0.2)`} as React.CSSProperties}
+                  className="flex-1 font-mono text-sm border-gray-300 dark:border-slate-600"
+                />
               </div>
             </div>
 
@@ -536,9 +536,8 @@ export function Sidebar() {
                     solutionFrameStyle: 'rounded',
                     solutionFrameRadius: 6,
                     solutionHighlightAlpha: 30,
-                    onlyHighlightWordListWords: false,
                     answerTitlePrefix: 'Solution',
-                    answerTitleFontFamily: 'Inter',
+                    answerTitleFontFamily: 'Arial',
                     answerTitleFontSize: 20,
                     answerTitleAlignment: 'center',
                     showAnswerNumber: true,
@@ -558,7 +557,7 @@ export function Sidebar() {
         <Button 
           onClick={handleGenerate} 
           className="w-full text-white font-semibold py-6 rounded-lg shadow-lg transition-all duration-200 transform hover:scale-105 active:scale-95"
-          style={{background: `linear-gradient(to right, #2276B4, #1a5a8c)`, boxShadow: `0 0 16px rgba(34, 118, 180, 0.3)`}}
+          style={{background: `linear-gradient(to right, #404040, #1a5a8c)`, boxShadow: `0 0 16px rgba(34, 118, 180, 0.3)`}}
         >
           <Grid3X3 className="w-5 h-5 mr-2" />
           Generate {currentPuzzleType === 'cryptogram' ? 'Cryptogram' : currentPuzzleType === 'sudoku' ? 'Sudoku' : 'Puzzle'}
@@ -777,9 +776,8 @@ export function Sidebar() {
                   solutionFrameStyle: 'rounded',
                   solutionFrameRadius: 6,
                   solutionHighlightAlpha: 30,
-                  onlyHighlightWordListWords: false,
                   answerTitlePrefix: 'Solution',
-                  answerTitleFontFamily: 'Inter',
+                  answerTitleFontFamily: 'Arial',
                   answerTitleFontSize: 20,
                   answerTitleAlignment: 'center',
                   showAnswerNumber: true,

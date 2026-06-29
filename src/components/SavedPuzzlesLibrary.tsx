@@ -44,7 +44,7 @@ export function SavedPuzzlesLibrary({ isOpen, onClose }: SavedPuzzlesLibraryProp
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
           <div className="flex items-center gap-3">
-            <FolderOpen className="w-5 h-5" style={{color: `#2276B4`}} />
+            <FolderOpen className="w-5 h-5" style={{color: `#404040`}} />
             <h2 className="text-lg font-semibold">My Puzzles</h2>
             <span className="px-2 py-0.5 bg-gray-100 rounded-full text-sm text-gray-600">
               {savedPuzzles.length}
@@ -72,7 +72,7 @@ export function SavedPuzzlesLibrary({ isOpen, onClose }: SavedPuzzlesLibraryProp
                 >
                   <div className="flex items-center gap-4">
                     <div className="w-12 h-12 rounded-lg flex items-center justify-center" style={{background: `rgba(34, 118, 180, 0.1)`}}>
-                      <span className="text-sm font-bold" style={{color: `#2276B4`}}>
+                      <span className="text-sm font-bold" style={{color: `#404040`}}>
                         {getPuzzleIcon(puzzle.type)}
                       </span>
                     </div>

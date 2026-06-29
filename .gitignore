@@ -6,3 +6,13 @@ node_modules
 # local env files
 .env*
 !.env.example
+
+# local scratch / temp artifacts
+-H
+temp-*
+tsc-*.txt
+tmp*
+border-radius-diff.txt
+extracted_user_request.txt
+frontend_demo.html
+worker.js

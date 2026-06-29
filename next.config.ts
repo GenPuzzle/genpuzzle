@@ -7,6 +7,26 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  turbopack: {
+    resolveAlias: {
+      fs: { browser: "./src/lib/empty.ts" },
+      path: { browser: "./src/lib/empty.ts" },
+      os: { browser: "./src/lib/empty.ts" },
+      crypto: { browser: "./src/lib/empty.ts" },
+      stream: { browser: "./src/lib/empty.ts" },
+      buffer: { browser: "./src/lib/empty.ts" },
+      util: { browser: "./src/lib/empty.ts" },
+      process: { browser: "./src/lib/empty.ts" },
+      timers: { browser: "./src/lib/empty.ts" },
+      tls: { browser: "./src/lib/empty.ts" },
+      net: { browser: "./src/lib/empty.ts" },
+      child_process: { browser: "./src/lib/empty.ts" },
+      https: { browser: "./src/lib/empty.ts" },
+      http: { browser: "./src/lib/empty.ts" },
+      "image-size": { browser: "./src/lib/empty.ts" },
+      express: { browser: "./src/lib/empty.ts" },
+    },
+  },
   webpack: (config, { webpack, isServer }) => {
     if (!isServer) {
       config.plugins.push(
@@ -28,6 +48,10 @@ const nextConfig: NextConfig = {
         tls: false,
         net: false,
         child_process: false,
+        https: false,
+        http: false,
+        "image-size": false,
+        express: false,
       };
     }
     return config;

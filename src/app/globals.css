@@ -3,6 +3,20 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Global: Remove focus rings from all buttons */
+button:focus-visible,
+button:focus,
+button:active,
+[role="button"]:focus-visible,
+[role="button"]:focus,
+[role="button"]:active {
+  outline: none !important;
+  box-shadow: none !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-color: transparent !important;
+}
+
 /* Modern Animations */
 @keyframes slideDown {
   from {
@@ -44,6 +58,25 @@
     opacity: 1;
     transform: scale(1);
   }
+}
+
+@keyframes removeDialogPulse {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.09);
+  }
+}
+
+.animate-remove-dialog-pulse {
+  animation: removeDialogPulse 0.6s linear infinite alternate-reverse;
+}
+
+html, body, #__next {
+  min-height: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 @keyframes shimmer {
@@ -105,7 +138,7 @@ input[type="range"]::-webkit-slider-thumb {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2276B4 0%, #1a5a8c 100%);
+  background: linear-gradient(135deg, #404040 0%, #1a5a8c 100%);
   cursor: pointer;
   border: 3px solid #F0F5F6;
   box-shadow: 0 2px 8px rgba(34, 118, 180, 0.4);
@@ -125,7 +158,7 @@ input[type="range"]::-moz-range-thumb {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2276B4 0%, #1a5a8c 100%);
+  background: linear-gradient(135deg, #404040 0%, #1a5a8c 100%);
   cursor: pointer;
   border: 3px solid #F0F5F6;
   box-shadow: 0 2px 8px rgba(34, 118, 180, 0.4);
@@ -188,7 +221,7 @@ input[type="range"]::-moz-range-thumb:active {
 }
 
 .radio-inputs .radio input:checked + .name {
-  background: linear-gradient(145deg, #2276B4, #1a5a8c);
+  background: linear-gradient(145deg, #404040, #1a5a8c);
   color: #F0F5F6;
   font-weight: 600;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
@@ -225,11 +258,11 @@ input[type="range"]::-moz-range-thumb:active {
 }
 
 .radio-inputs .radio input:checked + .name::before {
-  background: #2276B4;
+  background: #404040;
   box-shadow: 
-    0 0 6px #2276B4,
-    10px -10px 0 #2276B4,
-    -10px -10px 0 #2276B4;
+    0 0 6px #404040,
+    10px -10px 0 #404040,
+    -10px -10px 0 #404040;
   top: -10px;
   left: 50%;
   transform: translateX(-50%);
@@ -237,11 +270,11 @@ input[type="range"]::-moz-range-thumb:active {
 }
 
 .radio-inputs .radio input:checked + .name::after {
-  background: #2276B4;
+  background: #404040;
   box-shadow: 
-    0 0 8px #2276B4,
-    10px 10px 0 #2276B4,
-    -10px 10px 0 #2276B4;
+    0 0 8px #404040,
+    10px 10px 0 #404040,
+    -10px 10px 0 #404040;
   bottom: -10px;
   left: 50%;
   transform: translateX(-50%);
@@ -323,6 +356,14 @@ input[type="range"]::-moz-range-thumb:active {
   position: relative;
 }
 
+.modern-tabs-trigger:focus-visible {
+  outline: none !important;
+  ring: none !important;
+  box-shadow:
+    3px 3px 6px rgba(125, 129, 131, 0.08),
+    -3px -3px 6px rgba(255, 255, 255, 0.8) !important;
+}
+
 .modern-tabs-trigger:hover {
   background: linear-gradient(145deg, #F0F5F6, #ffffff) !important;
   transform: translateY(-1px);
@@ -332,7 +373,7 @@ input[type="range"]::-moz-range-thumb:active {
 }
 
 .modern-tabs-trigger[data-state="active"] {
-  background: linear-gradient(145deg, #2276B4, #1a5a8c) !important;
+  background: linear-gradient(145deg, #404040, #1a5a8c) !important;
   color: #F0F5F6 !important;
   font-weight: 600;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
@@ -386,72 +427,96 @@ input[type="range"]::-moz-range-thumb:active {
 }
 
 :root {
+  /* GenPuzzle 4-color palette: blue, white, grey, black */
+  --gp-blue: #1a5a8c;
+  --gp-blue-light: #2276b4;
+  --gp-blue-dark: #144a75;
+  --gp-blue-muted: #5a8fb8;
+  --gp-white: #ffffff;
+  --gp-grey-50: #f4f6f8;
+  --gp-grey-100: #e8ecf0;
+  --gp-grey-200: #c5cdd6;
+  --gp-grey-400: #9ca3af;
+  --gp-grey-600: #64748b;
+  --gp-grey-800: #475569;
+  --gp-black: #0f172a;
+
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.51 0.01 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.51 0.01 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.51 0.01 0);
-  --accent: oklch(0.51 0.01 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.51 0.01 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.51 0.01 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.51 0.01 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.51 0.01 0);
+  --background: var(--gp-white);
+  --foreground: var(--gp-black);
+  --card: var(--gp-white);
+  --card-foreground: var(--gp-black);
+  --popover: var(--gp-white);
+  --popover-foreground: var(--gp-black);
+  --primary: var(--gp-blue);
+  --primary-foreground: var(--gp-white);
+  --secondary: var(--gp-grey-100);
+  --secondary-foreground: var(--gp-black);
+  --muted: var(--gp-grey-50);
+  --muted-foreground: var(--gp-grey-600);
+  --accent: var(--gp-grey-100);
+  --accent-foreground: var(--gp-blue);
+  --destructive: var(--gp-black);
+  --destructive-foreground: var(--gp-white);
+  --border: var(--gp-grey-200);
+  --input: var(--gp-grey-200);
+  --ring: var(--gp-blue);
+  --chart-1: var(--gp-blue);
+  --chart-2: var(--gp-blue-light);
+  --chart-3: var(--gp-grey-600);
+  --chart-4: var(--gp-grey-400);
+  --chart-5: var(--gp-black);
+  --sidebar: var(--gp-grey-50);
+  --sidebar-foreground: var(--gp-black);
+  --sidebar-primary: var(--gp-blue);
+  --sidebar-primary-foreground: var(--gp-white);
+  --sidebar-accent: var(--gp-grey-100);
+  --sidebar-accent-foreground: var(--gp-blue);
+  --sidebar-border: var(--gp-grey-200);
+  --sidebar-ring: var(--gp-blue);
+
+  /* Legacy theme variable overrides (remove purple) */
+  --color-white: var(--gp-white);
+  --el-text-color-primary: var(--gp-black);
+  --autoTdkExtThemeBgColor: var(--gp-blue);
+  --autoTdkExtThemeShallowColor: var(--gp-grey-400);
+  --autoTdkExtThemeHoverBgColor: var(--gp-grey-100);
+  --autoTdkExtThemeHoverBgDeepColor: var(--gp-blue);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.51 0.01 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.51 0.01 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.51 0.01 0);
-  --accent: oklch(0.51 0.01 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.51 0.01 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.51 0.01 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.51 0.01 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.51 0.01 0);
+  --background: var(--gp-black);
+  --foreground: var(--gp-white);
+  --card: #1e293b;
+  --card-foreground: var(--gp-white);
+  --popover: #1e293b;
+  --popover-foreground: var(--gp-white);
+  --primary: var(--gp-blue-light);
+  --primary-foreground: var(--gp-white);
+  --secondary: #334155;
+  --secondary-foreground: var(--gp-white);
+  --muted: #334155;
+  --muted-foreground: var(--gp-grey-200);
+  --accent: #334155;
+  --accent-foreground: var(--gp-white);
+  --destructive: var(--gp-grey-800);
+  --destructive-foreground: var(--gp-white);
+  --border: #334155;
+  --input: #334155;
+  --ring: var(--gp-blue-light);
+  --chart-1: var(--gp-blue-light);
+  --chart-2: var(--gp-blue);
+  --chart-3: var(--gp-grey-400);
+  --chart-4: var(--gp-grey-600);
+  --chart-5: var(--gp-white);
+  --sidebar: #1e293b;
+  --sidebar-foreground: var(--gp-white);
+  --sidebar-primary: var(--gp-blue-light);
+  --sidebar-primary-foreground: var(--gp-white);
+  --sidebar-accent: #334155;
+  --sidebar-accent-foreground: var(--gp-white);
+  --sidebar-border: #334155;
+  --sidebar-ring: var(--gp-blue-light);
 }
 
 @layer base {
@@ -575,3 +640,628 @@ input[type="range"]::-moz-range-thumb:active {
   border-color: #4c8bf5;
   box-shadow: 0 0 10px #4c8bf580;
 }
+
+/* App Button Style - Applied to all UI buttons */
+.app-radio-btn {
+  font-size: var(--text-xs, 0.75rem);
+  font-weight: var(--font-weight-medium, 500);
+  border-radius: var(--radius, 0.625rem);
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: all var(--default-transition-duration, 0.15s) var(--default-transition-timing-function, ease);
+  text-align: center;
+  border: 1px solid transparent;
+}
+
+/* Remove focus rings and active borders completely */
+.app-radio-btn:focus,
+.app-radio-btn:active,
+.app-radio-btn:focus-visible,
+.app-radio-btn input:focus {
+  outline: none !important;
+  outline-color: transparent !important;
+  box-shadow: none !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-color: transparent !important;
+}
+
+/* Inactive state (default) */
+.app-radio-btn.inactive {
+  background-color: var(--color-white, #fff);
+  color: var(--el-text-color-primary, #303133);
+  border: 1px solid var(--autoTdkExtThemeShallowColor, #9c9c9e);
+}
+
+/* Inactive hover state */
+.app-radio-btn.inactive:hover {
+  background-color: var(--autoTdkExtThemeHoverBgColor, #f1f1f1);
+  color: var(--autoTdkExtThemeHoverBgDeepColor, #9c9c9e);
+  border-color: var(--autoTdkExtThemeHoverBgDeepColor, #9c9c9e);
+}
+
+/* Active state (selected/checked) */
+.app-radio-btn.active {
+  background-color: var(--gp-blue);
+  color: var(--gp-white);
+  border: 1px solid transparent;
+  box-shadow: 0 2px 8px rgba(26, 90, 140, 0.25);
+}
+
+/* Active hover state */
+.app-radio-btn.active:hover {
+  background-color: var(--gp-blue-dark);
+}
+
+/* Alert / confirm dialog close (top-right X) */
+.gp-alert-close {
+  position: absolute;
+  right: 0.625rem;
+  top: 0.625rem;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  min-width: 30px !important;
+  min-height: 30px !important;
+  padding: 0 !important;
+  margin: 0;
+  border-radius: 7px;
+  border: 2px solid #d1d5db;
+  background: #ffffff !important;
+  color: #0f172a !important;
+  cursor: pointer;
+  box-shadow: none !important;
+  transform: none !important;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.gp-alert-close:hover {
+  border-color: var(--gp-blue, #1a5a8c) !important;
+  background: var(--gp-blue, #1a5a8c) !important;
+  color: #ffffff !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.gp-alert-close svg {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  pointer-events: none;
+  display: block;
+  stroke: currentColor;
+}
+
+.gp-alert-close--on-dark {
+  border: 2px solid rgba(255, 255, 255, 0.4) !important;
+  background: rgba(255, 255, 255, 0.15) !important;
+  color: #ffffff !important;
+}
+
+.gp-alert-close--on-dark:hover {
+  border-color: rgba(255, 255, 255, 0.75) !important;
+  background: rgba(255, 255, 255, 0.28) !important;
+  color: #ffffff !important;
+}
+
+/* Modern buttons — global default */
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.custom-checkbox-input) {
+  appearance: none;
+  background-color: var(--gp-white);
+  color: var(--gp-black);
+  border: 1px solid var(--gp-grey-200);
+  font-size: var(--text-xs, 0.8125rem);
+  font-weight: 600;
+  border-radius: 0.5rem;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):focus,
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):focus-visible {
+  outline: none !important;
+  box-shadow: 0 0 0 2px rgba(26, 90, 140, 0.25);
+}
+
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):hover {
+  background-color: var(--gp-grey-50);
+  color: var(--gp-blue);
+  border-color: var(--gp-blue);
+  box-shadow: 0 2px 8px rgba(26, 90, 140, 0.12);
+  transform: translateY(-1px);
+}
+
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+/* ===== MOBILE RESPONSIVENESS FIXES ===== */
+
+/* Ensure PDF iframe renders properly on all devices */
+iframe[title="PDF Preview"] {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  pointer-events: auto;
+}
+
+/* Mobile-specific scrolling improvements */
+@media (max-width: 768px) {
+  /* Ensure full height for mobile preview */
+  html, body {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  /* Improve touch responsiveness */
+  input[type="range"].touch-manipulation {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: none;
+  }
+
+  /* Ensure PDF container takes full available space */
+  [role="main"],
+  .flex-1 {
+    min-height: 0;
+  }
+
+  /* Fix button sizes for touch */
+  button:not(.gp-alert-close):not(.canvas-context-panel__close):not(.canvas-hit-zone):not(.direction-toggle):not(.gp-icon-toggle) {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 10px 12px !important;
+    font-size: 14px !important;
+  }
+
+  /* Improve spacing on mobile controls */
+  .space-y-2 {
+    gap: 0.75rem;
+  }
+
+  .space-y-3 {
+    gap: 1rem;
+  }
+
+  .space-y-4 {
+    gap: 1.25rem;
+  }
+
+  /* Ensure proper sidebar overlay */
+  .fixed.inset-y-0 {
+    width: 100% !important;
+    max-width: 16rem;
+  }
+
+  /* Fix PDF preview container on mobile */
+  div[style*="background: linear-gradient"] {
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Enhanced PDF iframe mobile display */
+  iframe[title="PDF Preview"] {
+    display: block !important;
+    width: 100% !important;
+    height: 100% !important;
+    border: none !important;
+    min-height: 300px;
+  }
+
+  /* PDF preview parent container optimization */
+  .flex-1.md\:flex-\[0\.7\] {
+    min-height: 400px;
+    overflow: hidden;
+  }
+
+  /* Improve radio button responsiveness */
+  .radio-inputs .radio .name {
+    padding: 0.8rem 0.6rem !important;
+    font-size: 12px !important;
+  }
+
+  /* Fix zoom slider on mobile */
+  input[type="range"] {
+    height: 8px;
+    min-height: 44px;
+    padding: 18px 0;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    width: 24px;
+    height: 24px;
+  }
+
+  input[type="range"]::-moz-range-thumb {
+    width: 24px;
+    height: 24px;
+  }
+
+  /* Prevent text selection on controls */
+  .radio-inputs,
+  .modern-tabs-list,
+  [class*="control"] {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  /* Ensure proper tab bar behavior */
+  .modern-tabs-list {
+    width: 100%;
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .modern-tabs-trigger {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 12px !important;
+    padding: 8px 6px !important;
+  }
+
+  /* Fix info text sizing */
+  .text-xs {
+    font-size: 11px;
+  }
+
+  /* Ensure labels are readable */
+  label {
+    display: block;
+    word-break: break-word;
+  }
+
+  /* Safe area support for notched devices */
+  @supports (padding: max(0px)) {
+    body {
+      padding-left: max(0px, env(safe-area-inset-left));
+      padding-right: max(0px, env(safe-area-inset-right));
+    }
+  }
+}
+
+/* Extra-small screens (< 480px) */
+@media (max-width: 479px) {
+  .text-base.md\:text-lg {
+    font-size: 14px !important;
+  }
+
+  .w-12.h-12.md\:w-16.md\:h-16 {
+    width: 40px !important;
+    height: 40px !important;
+  }
+
+  .p-2.md\:p-4 {
+    padding: 8px !important;
+  }
+
+  .rounded-lg.md\:rounded-xl {
+    border-radius: 8px !important;
+  }
+
+  .shadow-lg.md\:shadow-xl {
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  }
+
+  /* Stack buttons vertically on very small screens */
+  .flex.gap-2 > button {
+    width: 100%;
+  }
+
+  /* Reduce header padding */
+  .border-b.shadow-sm.p-3.md\:p-4 {
+    padding: 10px 12px !important;
+  }
+
+  /* Make preview controls more compact */
+  .space-y-3.md\:space-y-4 {
+    gap: 0.75rem !important;
+  }
+}
+
+/* Header expand buttons — adapted from Uiverse.io by vinodjangid07 */
+.header-expand-btn {
+  --heb-size: 38px;
+  --heb-hover-width: 108px;
+  --heb-blue: #1a5a8c;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: var(--heb-size);
+  height: var(--heb-size);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition-duration: 0.3s;
+  box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.18);
+  background-color: #ffffff;
+  color: var(--heb-blue);
+  flex-shrink: 0;
+  text-decoration: none;
+  padding: 0;
+  font: inherit;
+}
+
+.header-expand-btn--sm {
+  --heb-hover-width: 82px;
+}
+
+.header-expand-btn--md {
+  --heb-hover-width: 108px;
+}
+
+.header-expand-btn--lg {
+  --heb-hover-width: 132px;
+}
+
+.header-expand-btn--xl {
+  --heb-hover-width: 148px;
+}
+
+.header-expand-btn--xxl {
+  --heb-hover-width: 178px;
+}
+
+.header-expand-btn__sign {
+  width: 100%;
+  transition-duration: 0.3s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--heb-blue);
+}
+
+.header-expand-btn__sign svg {
+  width: 14px;
+  height: 14px;
+  color: var(--heb-blue);
+  stroke: var(--heb-blue);
+}
+
+.header-expand-btn__text {
+  position: absolute;
+  right: 0;
+  width: 0;
+  opacity: 0;
+  color: var(--heb-blue);
+  font-size: 0.82rem;
+  font-weight: 600;
+  transition-duration: 0.3s;
+  white-space: nowrap;
+}
+
+.header-expand-btn:hover {
+  width: var(--heb-hover-width);
+  border-radius: 32px;
+  transition-duration: 0.3s;
+}
+
+.header-expand-btn:hover .header-expand-btn__sign {
+  width: 30%;
+  transition-duration: 0.3s;
+  padding-left: 14px;
+}
+
+.header-expand-btn:hover .header-expand-btn__text {
+  opacity: 1;
+  width: 70%;
+  transition-duration: 0.3s;
+  padding-right: 8px;
+}
+
+.header-expand-btn:active {
+  transform: translate(2px, 2px);
+}
+
+.header-expand-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.header-expand-btn:disabled:hover {
+  width: var(--heb-size, 38px);
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.header-expand-btn:disabled:hover .header-expand-btn__text {
+  width: 0;
+  opacity: 0;
+}
+
+/* Checkboxes — adapted from Uiverse.io by AegisX-dev (blue/grey/white/black palette) */
+.custom-checkbox-container {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 8px;
+}
+
+.custom-checkbox-container--compact {
+  padding: 2px 4px;
+}
+
+.custom-checkbox-container--disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.custom-checkbox-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.custom-checkbox-label {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding-left: 32px;
+  min-height: 20px;
+  transition: all 0.2s ease;
+}
+
+.custom-checkbox-label--box-only {
+  padding-left: 20px;
+}
+
+.custom-checkbox-label:before {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, var(--gp-grey-50, #f4f6f8) 0%, var(--gp-grey-100, #e8ecf0) 100%);
+  border: 2px solid var(--gp-grey-400, #9ca3af);
+  transition: all 0.3s ease;
+  z-index: 1;
+  outline: 0 solid transparent;
+}
+
+.custom-checkbox-label:after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 3px;
+  width: 8px;
+  height: 12px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) scale(0);
+  opacity: 0;
+  transition: all 0.2s ease;
+  z-index: 3;
+}
+
+.custom-checkbox-input:checked + .custom-checkbox-label:before {
+  background: linear-gradient(135deg, var(--gp-blue-light, #2276b4) 0%, var(--gp-blue, #1a5a8c) 100%);
+  border-color: var(--gp-blue-dark, #144a75);
+}
+
+.custom-checkbox-input:checked + .custom-checkbox-label:after {
+  transform: rotate(45deg) scale(1);
+  opacity: 1;
+}
+
+.custom-checkbox-container:hover .custom-checkbox-label:before {
+  box-shadow: 0 2px 4px rgba(15, 23, 42, 0.12);
+  transform: scale(1.05);
+}
+
+.custom-checkbox-text {
+  color: var(--gp-black, #0f172a);
+  font-size: 0.875rem;
+  line-height: 1.25;
+  transition: color 0.2s ease;
+  position: relative;
+  z-index: 4;
+}
+
+.custom-checkbox-container--compact .custom-checkbox-text {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--gp-grey-800, #475569);
+}
+
+.custom-checkbox-container:hover .custom-checkbox-text {
+  color: var(--gp-blue, #1a5a8c);
+}
+
+.custom-checkbox-input:focus + .custom-checkbox-label:before {
+  outline: 2px solid var(--gp-blue, #1a5a8c);
+  outline-offset: 2px;
+  transition: outline 0.1s ease-in-out;
+}
+
+.custom-checkbox-input:disabled + .custom-checkbox-label:before {
+  opacity: 0.6;
+}
+
+.custom-checkbox-input:disabled + .custom-checkbox-label .custom-checkbox-text {
+  color: var(--gp-grey-400, #9ca3af);
+}
+
+/* Icon toggle buttons — shared by Word Directions, header shapes, etc. */
+.gp-icon-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 2.5rem;
+  min-height: 2.5rem;
+  min-width: 0;
+  padding: 0;
+  border-radius: 0.5rem;
+  border: 2px solid #e2e8f0;
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  transition: all 200ms ease-out;
+  cursor: pointer;
+}
+
+.gp-icon-toggle:hover:not(.gp-icon-toggle--active) {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.gp-icon-toggle--active {
+  border-color: var(--gp-blue, #1a5a8c);
+  background: linear-gradient(
+    180deg,
+    var(--gp-blue-light, #2276b4) 0%,
+    var(--gp-blue, #1a5a8c) 100%
+  );
+  color: #ffffff;
+  box-shadow:
+    0 0 0 2px rgba(34, 118, 180, 0.2),
+    0 0 16px rgba(34, 118, 180, 0.55),
+    0 2px 6px rgba(26, 90, 140, 0.35);
+}
+
+.gp-icon-toggle--active:hover {
+  box-shadow:
+    0 0 0 2px rgba(34, 118, 180, 0.3),
+    0 0 20px rgba(34, 118, 180, 0.65),
+    0 2px 8px rgba(26, 90, 140, 0.4);
+}
+
+.gp-icon-toggle svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  stroke-width: 2.25;
+  flex-shrink: 0;
+}
+
+.gp-icon-toggle--active svg {
+  color: #ffffff;
+  stroke: #ffffff;
+}
+
+.gp-icon-toggle:not(.gp-icon-toggle--active) svg {
+  color: #334155;
+  stroke: #334155;
+}
+

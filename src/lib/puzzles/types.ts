@@ -1,5 +1,9 @@
 // Puzzle Types and Interfaces
 
+import type { HeaderAssemblySettings } from '@/lib/header-assembly/types';
+import { DEFAULT_HEADER_ASSEMBLY } from '@/lib/header-assembly/types';
+import type { HeaderNumberConfig } from '@/lib/header-assembly/types';
+
 export type PuzzleType =
   | 'word-search'
   | 'crossword'
@@ -38,12 +42,34 @@ export type Direction =
 // ============ WORD SEARCH SPECIFIC SETTINGS ============
 
 // Book/Canvas Settings
+export type MeasurementUnits = 'INCHES' | 'CENTIMETERS';
+
+export type TrimSizePresetId =
+  | '5X8IN'
+  | '5_25X8IN'
+  | '5_5X8_5IN'
+  | '6X9IN'
+  | '5_06X7_81IN'
+  | '6_14X9_21IN'
+  | '6_69X9_61IN'
+  | '7X10IN'
+  | '7_44X9_69IN'
+  | '7_5X9_25IN'
+  | '8X10IN'
+  | '8_5X11IN'
+  | '8_27X11_69IN'
+  | '8_25X6IN'
+  | '8_25X8_25IN'
+  | '8_5X8_5IN';
+
 export interface BookCanvasSettings {
   // Bleed and trim
   includeBleed: boolean;
   useCustomTrim: boolean;
   customWidth: number;
   customHeight: number;
+  trimSizePreset?: TrimSizePresetId;
+  measurementUnits?: MeasurementUnits;
 
   // Puzzle Type
   puzzleType: PuzzleType;
@@ -79,6 +105,15 @@ export interface WordSearchCoreSettings {
   noBoxAroundPuzzle: boolean;
   addGridLines: boolean;
   borderStrokeThickness: number;
+  borderCornerRadius: number;
+  /** Padding (in CSS px) between outer frame and the letter grid on puzzle pages */
+  gridBorderPadding: number;
+  /** Border stroke thickness on solution grid frames */
+  solutionBorderStrokeThickness: number;
+  /** Border corner radius on solution grid frames */
+  solutionBorderCornerRadius: number;
+  /** Padding (in CSS px) between outer frame and the letter grid on solution pages */
+  solutionGridBorderPadding: number;
   gridLinesStrokeThickness: number;
   innerGridOpacity: number; // 0-100, 0 = invisible inner grid lines, 100 = fully opaque
 
@@ -92,6 +127,9 @@ export interface TypographySpacingSettings {
   
   // Puzzle Numbering Style
   puzzleNumberingStyle: 'none' | 'prefix' | 'suffix'; // How to display puzzle numbers with titles
+
+  /** Bottom-of-page book page numbers (distinct from puzzle title numbering). */
+  pageNumber: PageNumberSettings;
   
   // Solution Title Settings
   solutionTitleStyle: 'same_as_puzzle' | 'custom'; // Whether to use puzzle title or custom solution text
@@ -102,7 +140,10 @@ export interface TypographySpacingSettings {
   includeFunFacts: boolean; // Whether to include fun facts/quotes
   funFactsText: string; // Multi-line: "Fact 1\nFact 2\n..." - each line for respective puzzle page
   subtitleFontSize: number; // 10-24px, default 14
-  subtitleTextScale: number; // Pixel width of subtitle text box (200-720px, default 500px)
+  subtitleFontFamily: string;
+  subtitleTextScale: number; // Pixel width of subtitle text box (200-720px, default 500px) - DEPRECATED: use subtitleMaxWidthPercent
+  subtitleMaxWidthPercent: number; // Max width as percentage of grid width (50-100%, default 100%)
+  subtitleBoxMargin: number; // Horizontal margin/padding of subtitle text box (0-100pt, default 0)
   subtitleToTitleGap: number; // Gap between title and subtitle/fun-fact (default 10px)
   subtitleToPuzzleGap: number; // Gap between subtitle/fun-fact and puzzle grid (default 10px)
 
@@ -136,6 +177,40 @@ export interface TypographySpacingSettings {
   // Layout
   spaceBetweenPuzzleAndWordList: number;
 }
+
+export type PageNumberPosition =
+  | 'bottom-center'
+  | 'bottom-left'
+  | 'bottom-right'
+  | 'alternating';
+
+export interface PageNumberSettings {
+  enabled: boolean;
+  /** First printed number value (e.g. 1). */
+  startNumberingFrom: number;
+  /** 1-based book page where numbering begins. */
+  startAtPage: number;
+  position: PageNumberPosition;
+  shape: HeaderNumberConfig;
+  textColor: string;
+  fontFamily: string;
+  fontSize: number;
+  bottomOffsetPx: number;
+  sideOffsetPx: number;
+}
+
+export const DEFAULT_PAGE_NUMBER_SETTINGS: PageNumberSettings = {
+  enabled: false,
+  startNumberingFrom: 1,
+  startAtPage: 1,
+  position: 'bottom-center',
+  shape: { ...DEFAULT_HEADER_ASSEMBLY.number },
+  textColor: '#ffffff',
+  fontFamily: 'Arial',
+  fontSize: 14,
+  bottomOffsetPx: 12,
+  sideOffsetPx: 12,
+};
 
 // Word List Settings
 export interface WordListSettings {
@@ -183,6 +258,13 @@ export interface PuzzlePageColors {
   puzzleColor: string;
   wordListTitleColor: string;
   wordListColor: string;
+  backgroundImage?: string;
+  backgroundImageOpacity?: number;
+  backgroundImageFit?: 'cover' | 'contain' | 'stretch';
+  backgroundImageFrameEnabled?: boolean;
+  backgroundImageFrameMargin?: number; // margin in inches where background shows through (default 0.56)
+  /** Modular header: independent number / title / subtitle shapes */
+  headerAssembly?: HeaderAssemblySettings;
 }
 
 export interface AnswerPageColors {
@@ -191,6 +273,11 @@ export interface AnswerPageColors {
   boxColor: string;
   lettersInSolutionColor: string;
   lettersNotInSolutionColor: string;
+  backgroundImage?: string;
+  backgroundImageOpacity?: number;
+  backgroundImageFit?: 'cover' | 'contain' | 'stretch';
+  backgroundImageFrameEnabled?: boolean;
+  backgroundImageFrameMargin?: number; // margin in inches where background shows through (default 0.56)
 
   // Solution Display Mode (fixed to line-highlight)
   
@@ -201,7 +288,6 @@ export interface AnswerPageColors {
   solutionFrameStyle: 'rounded' | 'square' | 'circle'; // style of the frame
   solutionFrameRadius: number; // border radius for rounded style (0-50)
   // Highlight mode fixed to box-frame, Line caps fixed to round (rounded ends)
-  onlyHighlightWordListWords: boolean; // only highlight words that are in the word list
 
   // Line highlight transparency (0-100). 100 = opaque, 0 = invisible. Default: 30
   solutionHighlightAlpha: number;
@@ -219,6 +305,15 @@ export interface ColorSettings {
   answerPage: AnswerPageColors;
 }
 
+/** Global page container frame (Color Settings tab) — separate from grid border. */
+export interface PageFrameSettings {
+  enabled: boolean;
+  marginSizeIn: number;
+  cornerRadiusPx: number;
+  strokeThicknessPx: number;
+  borderColor: string;
+}
+
 // Combined Word Search Settings
 export interface WordSearchSettings {
   bookCanvas: BookCanvasSettings;
@@ -226,6 +321,8 @@ export interface WordSearchSettings {
   typography: TypographySpacingSettings;
   wordList: WordListSettings;
   colors: ColorSettings;
+  /** Global page margin / container frame for puzzle and solution pages. */
+  pageFrameSettings?: PageFrameSettings;
 }
 
 // Book/Export Settings (Legacy/General)
@@ -277,6 +374,11 @@ export interface WordSearchPuzzle {
   displayWords: string[]; // Original words with spaces preserved for display
   solution: Map<string, Position[]>;
   puzzleNumber?: number;
+  /** 0-based index within the source document (for fun facts / custom titles). */
+  puzzleIndexInDocument?: number;
+  /** Source document module id (multi-document book builder) */
+  pageId?: string;
+  pageName?: string;
 }
 
 // Batch Puzzle for preview
@@ -381,6 +483,8 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
       useCustomTrim: false,
       customWidth: 8.5,
       customHeight: 11,
+      trimSizePreset: '8_5X11IN',
+      measurementUnits: 'INCHES',
       puzzleType: 'word-search',
       answersPerPage: 4,
       includePageBetweenPuzzleAndSolutions: false,
@@ -401,6 +505,11 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
       noBoxAroundPuzzle: false,
       addGridLines: true,
       borderStrokeThickness: 2,
+      borderCornerRadius: 4,
+      gridBorderPadding: 8,
+      solutionBorderStrokeThickness: 2,
+      solutionBorderCornerRadius: 4,
+      solutionGridBorderPadding: 8,
       gridLinesStrokeThickness: 1,
       innerGridOpacity: 0,
         // customLetters removed
@@ -409,23 +518,27 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
       selectTitleOption: 'puzzle-number',
       titleText: 'Word Search',
       puzzleNumberingStyle: 'none',
+      pageNumber: { ...DEFAULT_PAGE_NUMBER_SETTINGS },
       solutionTitleStyle: 'same_as_puzzle',
       customSolutionTitle: 'Solution',
       solutionNumberingStyle: 'none',
       includeFunFacts: false,
       funFactsText: '',
       subtitleFontSize: 14,
+      subtitleFontFamily: 'Arial',
       subtitleTextScale: 500,
+      subtitleMaxWidthPercent: 100,
+      subtitleBoxMargin: 0,
       subtitleToTitleGap: 10,
       subtitleToPuzzleGap: 10,
-      puzzleTitleFontFamily: 'Inter',
+      puzzleTitleFontFamily: 'Arial',
       puzzleTitleFontSize: 24,
       answerTitleFontSize: 18,
-      titleStartAt: 50,
+      titleStartAt: 20,
       spaceBetweenTitleAndPuzzle: 20,
       spaceBetweenTitleAndAnswer: 20,
       puzzleGridCase: 'upper',
-      puzzleGridFontFamily: 'Inter',
+      puzzleGridFontFamily: 'Arial',
         puzzleGridFontSize: 18,
       // Manual Letter Calibration Offsets
       uiOffsetX: 0,
@@ -433,7 +546,7 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
       pdfOffsetX: 0,
       pdfOffsetY: 0,
       setFontForAnswerPages: false,
-      answerGridFontFamily: 'Inter',
+      answerGridFontFamily: 'Arial',
       setFontSizeForAnswerPages: false,
       answerGridFontSize: 18,
       spaceBetweenPuzzleAndWordList: 20,
@@ -446,7 +559,7 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
       aiLanguage: 'English',
       aiAgeLevel: 'Adult',
       aiMaxWordLength: 10,
-      wordListFontFamily: 'Inter',
+      wordListFontFamily: 'Arial',
       wordListFontSize: 18,
       wordListCase: 'upper',
       wordListDirection: 'vertical',
@@ -467,6 +580,12 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
         puzzleColor: '#1f2937',
         wordListTitleColor: '#374151',
         wordListColor: '#4b5563',
+        backgroundImage: undefined,
+        backgroundImageOpacity: 100,
+        backgroundImageFit: 'cover',
+        backgroundImageFrameEnabled: true,
+        backgroundImageFrameMargin: 0.56,
+        headerAssembly: { ...DEFAULT_HEADER_ASSEMBLY },
       },
       answerPage: {
         backgroundColor: '#ffffff',
@@ -480,13 +599,24 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
         solutionFrameStyle: 'rounded',
         solutionFrameRadius: 4,
         solutionHighlightAlpha: 30,
-        onlyHighlightWordListWords: true,
         answerTitlePrefix: 'Solution',
-        answerTitleFontFamily: 'Inter',
+        answerTitleFontFamily: 'Arial',
         answerTitleFontSize: 20,
         answerTitleAlignment: 'center',
         showAnswerNumber: true,
+        backgroundImage: undefined,
+        backgroundImageOpacity: 100,
+        backgroundImageFit: 'cover',
+        backgroundImageFrameEnabled: true,
+        backgroundImageFrameMargin: 0.56,
       },
+    },
+    pageFrameSettings: {
+      enabled: true,
+      marginSizeIn: 0.56,
+      cornerRadiusPx: 4,
+      strokeThicknessPx: 2,
+      borderColor: '#1f2937',
     },
   };
 }

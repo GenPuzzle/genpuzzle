@@ -23,7 +23,7 @@ export function getFallbackStandardFont(fontFamily: string, bold: boolean = fals
     return StandardFonts.HelveticaBold;
   }
 
-  if (/verdana|inter|patrick/.test(family)) {
+  if (/verdana|patrick/.test(family)) {
     return bold ? StandardFonts.HelveticaBold : StandardFonts.Helvetica;
   }
 

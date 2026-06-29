@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { Toaster } from "@/components/ui/sonner";
-import GlobalClientEffects from "@/components/GlobalClientEffects";
-import Header from "@/components/Header";
+import AppShell from "@/components/AppShell";
 
 import "./globals.css";
 import { PUBLISHING_FONTS_GOOGLE_CSS_URL } from "@/lib/publishing-fonts";
@@ -22,9 +21,9 @@ export const metadata: Metadata = {
   title: "GenPuzzle",
   description: "GenPuzzle - Puzzle and worksheet generator",
   icons: [
-    { rel: "icon", url: "/genpuzzle-icon.svg" },
-    { rel: "shortcut icon", url: "/genpuzzle-icon.svg" },
-    { rel: "apple-touch-icon", url: "/genpuzzle-icon.svg" },
+    { rel: "icon", url: "/favicon.svg", type: "image/svg+xml" },
+    { rel: "shortcut icon", url: "/favicon.svg" },
+    { rel: "apple-touch-icon", url: "/favicon.svg" },
   ],
 };
 
@@ -34,25 +33,23 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   const content = (
-    <>
-      <Header />
+    <AppShell>
       {children}
-      <GlobalClientEffects />
-    </>
+    </AppShell>
   );
 
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
         <link rel="stylesheet" href={PUBLISHING_FONTS_GOOGLE_CSS_URL} />
-        <link rel="icon" href="/genpuzzle-icon.svg" />
-        <link rel="shortcut icon" href="/genpuzzle-icon.svg" />
-        <link rel="apple-touch-icon" href="/genpuzzle-icon.svg" />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link rel="shortcut icon" href="/favicon.svg" />
+        <link rel="apple-touch-icon" href="/favicon.svg" />
         <meta name="application-name" content="GenPuzzle" />
-        <meta name="theme-color" content="#000000" />
+        <meta name="theme-color" content="#1a5a8c" />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased `}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased overflow-hidden h-screen`}
       >
         <Toaster />
         <ThemeProvider

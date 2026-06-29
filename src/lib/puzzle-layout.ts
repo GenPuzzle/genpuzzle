@@ -18,6 +18,10 @@ export function pointsToCssPx(points: number): number {
   return points * PT_TO_CSS_PX;
 }
 
+export function cssPxToPoints(cssPx: number): number {
+  return cssPx / PT_TO_CSS_PX;
+}
+
 export function getPageDimensionsInches(settings: WordSearchSettings): {
   width: number;
   height: number;
@@ -383,7 +387,7 @@ export function getWordListStyleConfig(
   const spacing = getWordListSpacing(wordListSettings);
 
   return {
-    fontFamily: wordListSettings.wordListFontFamily || 'Inter',
+    fontFamily: wordListSettings.wordListFontFamily || 'Arial',
     fontSize,
     lineHeight: getWordListLineHeightPt(fontSize, spacing.vertical),
     color: wordListColor,

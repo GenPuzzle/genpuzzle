@@ -17,12 +17,12 @@ export function WordMatchDisplay({ puzzle, showSolution = false }: WordMatchDisp
           {puzzle.leftColumn.map((word, index) => (
             <div
               key={`left-${index}`}
-              className="flex items-center gap-3 min-w-[120px]"
+              className="flex items-center gap-3"
             >
-              <span className="w-8 h-8 flex items-center justify-center rounded-full text-sm font-bold" style={{background: `rgba(34, 118, 180, 0.1)`, color: `#2276B4`}}>
+              <span className="w-8 h-8 flex flex-shrink-0 items-center justify-center rounded-full text-sm font-bold" style={{background: `rgba(34, 118, 180, 0.1)`, color: `#404040`}}>
                 {index + 1}
               </span>
-              <span className="text-lg font-medium">{word}</span>
+              <span className="text-lg font-medium whitespace-nowrap">{word}</span>
             </div>
           ))}
         </div>
@@ -32,14 +32,14 @@ export function WordMatchDisplay({ puzzle, showSolution = false }: WordMatchDisp
           {puzzle.rightColumn.map((word, index) => (
             <div
               key={`right-${index}`}
-              className="flex items-center gap-3 min-w-[120px]"
+              className="flex items-center gap-3"
             >
               {showSolution && (
-                <span className="w-8 h-8 flex items-center justify-center bg-green-100 rounded-full text-sm font-bold text-green-700">
+                <span className="w-8 h-8 flex flex-shrink-0 items-center justify-center bg-green-100 rounded-full text-sm font-bold text-green-700">
                   {puzzle.leftColumn.indexOf(word) + 1}
                 </span>
               )}
-              <span className="text-lg font-medium text-gray-700">{word}</span>
+              <span className="text-lg font-medium text-gray-700 whitespace-nowrap">{word}</span>
             </div>
           ))}
         </div>

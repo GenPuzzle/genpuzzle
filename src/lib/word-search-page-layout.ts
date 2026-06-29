@@ -18,6 +18,25 @@ import {
   PT_TO_CSS_PX,
   TITLE_TO_GRID_GAP_PT,
 } from './puzzle-layout';
+import {
+  resolvePuzzleGridBorder,
+  resolveSolutionGridBorder,
+} from './grid-border-settings';
+import {
+  normalizeHeaderAssemblySettings,
+  migrateLegacyHeaderLayout,
+  type HeaderAssemblySettings,
+} from './header-assembly/types';
+import { getPuzzleContentLine } from './puzzle-line-index';
+import { resolveHeaderTextParts } from './header-assembly/resolve-parts';
+import {
+  resolveHeaderBlockGeometry,
+  resolveHeaderSubtitleTextWidthPt,
+  resolvePageContentTopInsetPt,
+} from './header-assembly/geometry';
+import { cssPxToPt } from './header-assembly/compute-row';
+import { measureHeaderAssemblyHeightPt } from './header-assembly/measure';
+import { resolvePageHeaderTitleFontSizePt } from './header-assembly/book-title-size';
 
 export { pointsToCssPx, PT_TO_CSS_PX, getPageDimensionsInches, getPageMarginInches };
 
@@ -36,6 +55,30 @@ export interface UnifiedSubtitleBlock {
   topPt: number;
   color: string;
   fontFamily: string;
+  /** Pre-wrapped lines computed by the UI canvas (exact visual breaks) */
+  wrappedLines: string[];
+  /** Left X of the subtitle box (pt) */
+  leftPt: number;
+  /** Width of the subtitle box (pt) */
+  widthPt: number;
+}
+
+/** Modular header assembly (number + title + subtitle shape containers). */
+export interface UnifiedHeaderAssemblyBlock {
+  topPt: number;
+  leftPt: number;
+  widthPt: number;
+  heightPt: number;
+  parts: ReturnType<typeof resolveHeaderTextParts>;
+  subtitleLines: string[];
+  titleFontSizePt: number;
+  subtitleFontSizePt: number;
+  titleColor: string;
+  subtitleColor: string;
+  fontFamily: string;
+  subtitleFontFamily: string;
+  settings: HeaderAssemblySettings;
+  subtitleTextWidthPt: number;
 }
 
 export interface UnifiedGridBlock {
@@ -54,6 +97,8 @@ export interface UnifiedGridBlock {
   noBox: boolean;
   innerGridOpacity: number; // 0-100
   gridLinesThicknessPt: number;
+  /** Padding between outer frame and letters, in points */
+  framePaddingPt: number;
 }
 
 export interface UnifiedWordListBlock {
@@ -96,6 +141,7 @@ export interface UnifiedPageLayout {
   };
   title: UnifiedTitleBlock | null;
   subtitle: UnifiedSubtitleBlock | null;
+  headerAssembly: UnifiedHeaderAssemblyBlock | null;
   grid: UnifiedGridBlock;
   wordList: UnifiedWordListBlock | null;
   showSolution: boolean;
@@ -111,8 +157,8 @@ const GRID_SIDE_INSET_PT = 0;
 const WORD_LIST_BOTTOM_RESERVE_PT = 24;
 const MAX_CELL_SIZE_PT = 20;
 
-/** Preview estimate: average character width × font size (pt). */
-const WORD_LIST_CHAR_WIDTH_EM = 0.55;
+/** Preview estimate: average character width × font size (pt). Higher value accounts for spaces in multi-word entries */
+const WORD_LIST_CHAR_WIDTH_EM = 0.65;
 
 export const DEFAULT_WORD_SPACING_HORIZONTAL = 50;
 export const MAX_WORD_SPACING_HORIZONTAL = 100;
@@ -136,6 +182,7 @@ export function estimateWordListColumnWidthPt(
   checkboxSizePt: number,
   checkboxGapPt: number
 ): number {
+  // Find the longest entry by character count (accounts for multi-word entries like "Summer time")
   const longest = columnWords.reduce((max, w) => Math.max(max, w.length), 0);
   let width = longest * fontSizePt * WORD_LIST_CHAR_WIDTH_EM;
   if (addCheckboxes) width += checkboxSizePt + checkboxGapPt;
@@ -220,7 +267,7 @@ function resolveTitleText(
             .split(/\r?\n/)
             .map((line) => line.trim())
             .filter(Boolean);
-          baseTitle = lines.length > 0 ? (lines[puzzleNum - 1] ?? lines[lines.length - 1]) : '';
+          baseTitle = getPuzzleContentLine(lines, puzzle, settings, true);
           break;
         }
         default:
@@ -261,7 +308,7 @@ function resolveTitleText(
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean);
-      baseTitle = lines.length > 0 ? (lines[puzzleNum - 1] ?? lines[lines.length - 1]) : '';
+      baseTitle = getPuzzleContentLine(lines, puzzle, settings, true);
       break;
     }
     default:
@@ -282,10 +329,42 @@ function resolveTitleText(
   return baseTitle;
 }
 
+/** Word-wrap subtitle text to a max width in points. */
+function wrapSubtitleLinesPt(
+  text: string,
+  fontSizePt: number,
+  fontFamily: string,
+  maxWidthPt: number
+): string[] {
+  if (!text) return [];
+  const canvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+  const ctx = canvas?.getContext('2d');
+  if (!ctx) return [text];
+
+  const maxWidthCssPx = maxWidthPt * PT_TO_CSS_PX;
+  ctx.font = `${fontSizePt * PT_TO_CSS_PX}px ${fontFamily}`;
+  const words = text.split(/\s+/);
+  const lines: string[] = [];
+  let current = '';
+
+  for (const word of words) {
+    const test = current ? `${current} ${word}` : word;
+    if (ctx.measureText(test).width <= maxWidthCssPx) {
+      current = test;
+    } else {
+      if (current) lines.push(current);
+      current = ctx.measureText(word).width <= maxWidthCssPx ? word : word;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.length > 0 ? lines : [text];
+}
+
 /** Resolve fun fact/quote text for a specific puzzle. */
 function resolveFunFactText(
   puzzle: WordSearchPuzzle,
-  typography: any
+  typography: WordSearchSettings['typography'],
+  settings?: WordSearchSettings
 ): string {
   if (!typography.includeFunFacts || !typography.funFactsText) return '';
   
@@ -294,8 +373,7 @@ function resolveFunFactText(
     .map((line: string) => line.trim())
     .filter((line: string) => line);
   
-  const puzzleNum = puzzle.puzzleNumber || 1;
-  return lines.length > 0 ? (lines[puzzleNum - 1] ?? '') : '';
+  return getPuzzleContentLine(lines, puzzle, settings);
 }
 
 /** Convert top-down distance from page top to pdf-lib baseline/box Y (bottom origin). */
@@ -311,7 +389,9 @@ export function computeWordSearchPageLayout(
   settings: WordSearchSettings,
   titleWords: TitleWordsSettings,
   showSolution: boolean,
-  puzzleScale: number = 70
+  puzzleScale: number = 70,
+  titleToAnswerGap: number = 10,
+  bookHeaderTitleFontSizePt?: number | null
 ): UnifiedPageLayout {
   const { core, typography, wordList, colors } = settings;
   const pageColors = showSolution ? colors.answerPage : colors.puzzlePage;
@@ -321,24 +401,103 @@ export function computeWordSearchPageLayout(
   const marginPt = getPageMarginInches(settings) * 72;
   const contentWidthPt = pageWidthPt - marginPt * 2;
 
-  const titleStartAtPt = (typography.titleStartAt !== undefined && typography.titleStartAt !== null) ? typography.titleStartAt : 40;
+  const titleStartAtPt = (typography.titleStartAt !== undefined && typography.titleStartAt !== null) ? typography.titleStartAt : 20;
   const spaceTitleToGridPt = (typography.spaceBetweenTitleAndPuzzle !== undefined && typography.spaceBetweenTitleAndPuzzle !== null) ? typography.spaceBetweenTitleAndPuzzle : 20;
   const spaceGridToWordListPt = typography.spaceBetweenPuzzleAndWordList ?? 30;
 
-  let yPt = marginPt + titleStartAtPt;
+  const contentTopInsetPt = resolvePageContentTopInsetPt(settings);
+  let yPt = contentTopInsetPt + titleStartAtPt;
 
-  const titleText = resolveTitleText(puzzle, settings, titleWords, showSolution);
+  const titleAlign = showSolution
+    ? (colors.answerPage.answerTitleAlignment || 'center')
+    : 'center';
   const titleSizePt = showSolution
     ? colors.answerPage.answerTitleFontSize || 20
     : typography.puzzleTitleFontSize || 20;
   const titleFontFamily = showSolution
-    ? colors.answerPage.answerTitleFontFamily || 'Inter'
-    : typography.puzzleTitleFontFamily || 'Inter';
-  const titleAlign = showSolution
-    ? (colors.answerPage.answerTitleAlignment || 'center')
-    : 'center';
+    ? colors.answerPage.answerTitleFontFamily || 'Arial'
+    : typography.puzzleTitleFontFamily || 'Arial';
+  const subtitleFontFamily =
+    typography.subtitleFontFamily || typography.puzzleTitleFontFamily || 'Arial';
+
+  const rawHeaderAssembly =
+    (colors.puzzlePage as { headerAssembly?: Partial<HeaderAssemblySettings>; headerLayout?: unknown })
+      .headerAssembly ??
+    migrateLegacyHeaderLayout(
+      (colors.puzzlePage as { headerLayout?: Record<string, unknown> }).headerLayout
+    );
+  const headerAssemblySettings = normalizeHeaderAssemblySettings(rawHeaderAssembly);
+  const useHeaderAssembly = !showSolution && headerAssemblySettings.enabled;
 
   let title: UnifiedTitleBlock | null = null;
+  let subtitle: UnifiedSubtitleBlock | null = null;
+  let headerAssembly: UnifiedHeaderAssemblyBlock | null = null;
+
+  if (useHeaderAssembly) {
+    const parts = resolveHeaderTextParts(puzzle, settings, titleWords);
+    const hasContent = !!(parts.titleText || parts.showNumber || parts.subtitleText);
+
+    if (hasContent) {
+      const subtitleSizePt = typography.subtitleFontSize || 14;
+      const subtitleToTitleGapPt = typography.subtitleToTitleGap ?? 10;
+      const subtitleBoxMarginPt = typography.subtitleBoxMargin ?? 0;
+      const subtitleMaxWidthPercent = typography.subtitleMaxWidthPercent ?? 100;
+      const headerGeometry = resolveHeaderBlockGeometry(pageWidthPt, settings);
+      const subtitleTextWidthPt = resolveHeaderSubtitleTextWidthPt(
+        headerGeometry.widthPt,
+        subtitleMaxWidthPercent,
+        subtitleBoxMarginPt
+      );
+      const subtitleInnerWidthPt = Math.max(
+        24,
+        subtitleTextWidthPt - cssPxToPt(20)
+      );
+      const subtitleLines = wrapSubtitleLinesPt(
+        parts.subtitleText,
+        subtitleSizePt,
+        subtitleFontFamily,
+        subtitleInnerWidthPt
+      );
+        const subtitleLineCount =
+        subtitleLines.length > 0 ? subtitleLines.length : parts.subtitleText ? 1 : 0;
+
+      const fittedTitleSizePt =
+        bookHeaderTitleFontSizePt != null
+          ? bookHeaderTitleFontSizePt
+          : resolvePageHeaderTitleFontSizePt(puzzle, settings, titleWords);
+
+      const headerHeightPt = measureHeaderAssemblyHeightPt(
+        headerAssemblySettings,
+        fittedTitleSizePt,
+        subtitleSizePt,
+        subtitleLineCount,
+        parts.showNumber,
+        subtitleToTitleGapPt
+      );
+
+      headerAssembly = {
+        topPt: Math.max(yPt, headerGeometry.minTopPt + titleStartAtPt),
+        leftPt: headerGeometry.leftPt,
+        widthPt: headerGeometry.widthPt,
+        heightPt: headerHeightPt,
+        parts,
+        subtitleLines,
+        titleFontSizePt: fittedTitleSizePt,
+        subtitleFontSizePt: subtitleSizePt,
+        titleColor: pageColors.titleColor || '#000000',
+        subtitleColor: colors.puzzlePage.subtitleColor || '#6b7280',
+        fontFamily: titleFontFamily,
+        subtitleFontFamily,
+        settings: headerAssemblySettings,
+        subtitleTextWidthPt,
+      };
+      yPt = headerAssembly.topPt + headerHeightPt + spaceTitleToGridPt;
+    } else {
+      yPt += TITLE_TO_GRID_GAP_PT + spaceTitleToGridPt;
+    }
+  } else {
+  const titleText = resolveTitleText(puzzle, settings, titleWords, showSolution);
+
   if (titleText) {
     title = {
       text: titleText,
@@ -348,42 +507,46 @@ export function computeWordSearchPageLayout(
       color: pageColors.titleColor || '#000000',
       fontFamily: titleFontFamily,
     };
-    // Step 2: Advance yPt after title
     yPt += titleSizePt;
   }
 
   // Step 2: Check for subtitle and add appropriate gap
-  let subtitle: UnifiedSubtitleBlock | null = null;
+  
+  // ===== CALCULATE GRID DIMENSIONS EARLY (needed for subtitle max width) =====
+  const gridRowsEarly = puzzle.grid.length;
+  const gridColsEarly = puzzle.grid[0].length;
+  const maxAvailableWidthPtEarly = contentWidthPt;
+  const scaleFactorEarly = Math.max(0.5, Math.min(puzzleScale / 100, 2.0));
+  const scaledGridWidthPtEarly = maxAvailableWidthPtEarly * scaleFactorEarly;
+  
   if (!showSolution) {
-    const funFactText = resolveFunFactText(puzzle, typography);
+    const funFactText = resolveFunFactText(puzzle, typography, settings);
     if (funFactText) {
       const subtitleSizePt = typography.subtitleFontSize || 14;
-      const subtitleTextScalePx = typography.subtitleTextScale ?? 500; // CSS pixels
-      const subtitleTextScalePt = subtitleTextScalePx / PT_TO_CSS_PX; // Convert to points
-      const subtitleToTitleGapPt = typography.subtitleToTitleGap ?? 10;
-      const subtitleToPuzzleGapPt = typography.subtitleToPuzzleGap ?? 10;
       
-      // Step 2a: Add gap from title to subtitle
+      const subtitleMaxWidthPercent = typography.subtitleMaxWidthPercent ?? 100;
+      const subtitleBoxMarginPt = typography.subtitleBoxMargin ?? 0;
+      let subtitleMaxWidthPt = (scaledGridWidthPtEarly * subtitleMaxWidthPercent) / 100;
+      subtitleMaxWidthPt = Math.max(50, subtitleMaxWidthPt - (2 * subtitleBoxMarginPt));
+      const subtitleMaxWidthCssPx = subtitleMaxWidthPt * PT_TO_CSS_PX;
+      
+      const subtitleToTitleGapPt = typography.subtitleToTitleGap ?? 10;
+
       yPt += subtitleToTitleGapPt;
       
-      // ====== Strict Rendering & Text Wrapping Logic (Exact Conditional Algorithm) ======
-      // IF subtitle text exists, THEN use subtitleTextScale as wrap boundary and calculate centered position
-      const startX = (pageWidthPt - subtitleTextScalePt) / 2; // Center the text box on page
+      const startX = (pageWidthPt - subtitleMaxWidthPt) / 2;
       
-      // Text measurement using canvas context
       const canvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
       const ctx = canvas?.getContext('2d');
       let wrappedLines: string[] = [];
       
       if (ctx && funFactText) {
-        ctx.font = `${subtitleSizePt * PT_TO_CSS_PX}px ${titleFontFamily}`;
-        // Use subtitleTextScale directly as CSS pixels
-        const maxWidthCssPx = subtitleTextScalePx;
+        ctx.font = `${subtitleSizePt * PT_TO_CSS_PX}px ${subtitleFontFamily}`;
+        const maxWidthCssPx = subtitleMaxWidthCssPx;
         
-        const words = funFactText.split(' ');
+        const words = funFactText.split(/\s+/);
         let currentLine = '';
         
-        // Word-by-word loop: build lines and wrap when they exceed max width
         for (const word of words) {
           const testLine = currentLine ? `${currentLine} ${word}` : word;
           const testWidth = ctx.measureText(testLine).width;
@@ -393,21 +556,45 @@ export function computeWordSearchPageLayout(
           } else {
             if (currentLine) {
               wrappedLines.push(currentLine);
+              currentLine = '';
             }
-            currentLine = word;
+            
+            const wordWidth = ctx.measureText(word).width;
+            if (wordWidth <= maxWidthCssPx) {
+              currentLine = word;
+            } else {
+              let remaining = word;
+              while (remaining.length > 0) {
+                let low = 1;
+                let high = remaining.length;
+                let bestFitIndex = 0;
+                
+                while (low <= high) {
+                  const mid = Math.floor((low + high) / 2);
+                  const chunk = remaining.slice(0, mid);
+                  const chunkWidth = ctx.measureText(chunk).width;
+                  if (chunkWidth <= maxWidthCssPx) {
+                    bestFitIndex = mid;
+                    low = mid + 1;
+                  } else {
+                    high = mid - 1;
+                  }
+                }
+                
+                if (bestFitIndex === 0) bestFitIndex = 1;
+                wrappedLines.push(remaining.slice(0, bestFitIndex));
+                remaining = remaining.slice(bestFitIndex);
+              }
+              currentLine = '';
+            }
           }
         }
-        
-        if (currentLine) {
-          wrappedLines.push(currentLine);
-        }
+        if (currentLine) wrappedLines.push(currentLine);
       } else {
-        // Fallback: use original text as single line
         wrappedLines = [funFactText];
       }
       
-      // Calculate subtitle height based on wrapped line count
-      const lineHeightPt = subtitleSizePt * 1.2; // Standard line height
+      const lineHeightPt = subtitleSizePt * 1.2;
       const subtitleHeightPt = wrappedLines.length * lineHeightPt;
       
       subtitle = {
@@ -415,32 +602,42 @@ export function computeWordSearchPageLayout(
         fontSizePt: subtitleSizePt,
         topPt: yPt,
         color: colors.puzzlePage.subtitleColor || '#666666',
-        fontFamily: titleFontFamily,
+        fontFamily: subtitleFontFamily,
+        wrappedLines,
+        leftPt: startX,
+        widthPt: subtitleMaxWidthPt,
       };
       
-      // Step 3: Advance yPt after subtitle
-      // IF multiple wrapped lines, THEN ensure proper spacing: advance currentY by line height for each line,
-      // THEN add gap only after the very last line
-      yPt += subtitleHeightPt + subtitleToPuzzleGapPt;
+      yPt += subtitleHeightPt + spaceTitleToGridPt;
     } else {
-      // No subtitle: just add the normal title-to-puzzle gap
       yPt += TITLE_TO_GRID_GAP_PT + spaceTitleToGridPt;
     }
   } else {
-    // Solution page: no subtitle, just normal gap
-    yPt += TITLE_TO_GRID_GAP_PT + spaceTitleToGridPt;
+    yPt += titleToAnswerGap;
+  }
   }
 
-  // If we have a subtitle, we've already added all the necessary gaps above
-  // If we don't have a subtitle, we've added the normal gap
-  // So we should NOT add spaceTitleToGridPt again here
-  
+  // ===== CALCULATE GRID DIMENSIONS =====
   const gridRows = puzzle.grid.length;
   const gridCols = puzzle.grid[0].length;
+  const maxAvailableWidthPt = contentWidthPt;
+  const scaleFactor = Math.max(0.5, Math.min(puzzleScale / 100, 2.0));
+  const scaledGridWidthPt = maxAvailableWidthPt * scaleFactor;
+
+  const puzzleIndexInDocument = Math.max(0, puzzle.puzzleIndexInDocument ?? 0);
+  const wordsPerPuzzle = Math.max(1, wordList.wordsPerPuzzle);
+  const titleWordSlice = titleWords.words.slice(
+    puzzleIndexInDocument * wordsPerPuzzle,
+    puzzleIndexInDocument * wordsPerPuzzle + wordsPerPuzzle
+  );
+  const listSourceWords =
+    !showSolution && titleWordSlice.some((word) => word.trim().length > 0)
+      ? titleWordSlice.filter((word) => word.trim().length > 0)
+      : puzzle.displayWords;
 
   const formattedWords =
-    !showSolution && !wordList.hideWordList && puzzle.displayWords.length > 0
-      ? formatWords(puzzle.displayWords, wordList)
+    !showSolution && !wordList.hideWordList && listSourceWords.length > 0
+      ? formatWords(listSourceWords, wordList)
       : [];
   const columns = wordList.wordListColumns || 2;
   const wordsPerColumn = formattedWords.length > 0 ? Math.ceil(formattedWords.length / columns) : 0;
@@ -455,11 +652,6 @@ export function computeWordSearchPageLayout(
   // ===== CRITICAL: Grid Scale Isolation =====
   // The grid size is ONLY determined by the puzzleGridScale slider.
   // It does NOT change based on title size, word list font size, vertical spacing, etc.
-  
-  // Step 1: Calculate grid width based on horizontal scale (LOCKED)
-  const maxAvailableWidthPt = contentWidthPt;
-  const scaleFactor = Math.max(0.5, Math.min(puzzleScale / 100, 2.0));
-  const scaledGridWidthPt = maxAvailableWidthPt * scaleFactor;
   
   // Step 2: Calculate cell size from width alone (HORIZONTAL ONLY)
   // This is now completely independent of all other layout controls
@@ -477,9 +669,13 @@ export function computeWordSearchPageLayout(
     : typography.puzzleGridFontSize || 12;
   const gridFontFamily = showSolution
     ? typography.setFontForAnswerPages
-      ? typography.answerGridFontFamily || typography.puzzleGridFontFamily || 'Inter'
-      : typography.puzzleGridFontFamily || 'Inter'
-    : typography.puzzleGridFontFamily || 'Inter';
+      ? typography.answerGridFontFamily || typography.puzzleGridFontFamily || 'Arial'
+      : typography.puzzleGridFontFamily || 'Arial'
+    : typography.puzzleGridFontFamily || 'Arial';
+
+  const activeGridBorder = showSolution
+    ? resolveSolutionGridBorder(core)
+    : resolvePuzzleGridBorder(core);
 
   const grid: UnifiedGridBlock = {
     topPt: gridTopPt,
@@ -495,15 +691,18 @@ export function computeWordSearchPageLayout(
       ? colors.answerPage.lettersInSolutionColor || '#000000'
       : colors.puzzlePage.puzzleColor || '#000000',
     boxColor: pageColors.boxColor || '#000000',
-    borderThicknessPt: core.borderStrokeThickness || 2,
+    borderThicknessPt: activeGridBorder.strokeThicknessPx,
     noBox: core.noBoxAroundPuzzle ?? false,
     innerGridOpacity: core.innerGridOpacity ?? 0,
     gridLinesThicknessPt: core.gridLinesStrokeThickness || 1,
+    framePaddingPt: activeGridBorder.paddingPx / PT_TO_CSS_PX,
   };
 
   // CRITICAL: Position word list relative to scaled grid bottom + constant gap
   const gridBottomYPt = gridTopPt + gridHeightPt;
-  const wordListTopYPt = gridBottomYPt + spaceGridToWordListPt;
+  // Apply frame padding so the word list is positioned after the outer frame
+  const framePaddingPt = activeGridBorder.paddingPx / PT_TO_CSS_PX;
+  const wordListTopYPt = gridBottomYPt + framePaddingPt + spaceGridToWordListPt;
 
   let wordListBlock: UnifiedWordListBlock | null = null;
   if (formattedWords.length > 0) {
@@ -544,7 +743,7 @@ export function computeWordSearchPageLayout(
       wordsPerColumn,
       words: formattedWords,
       color: colors.puzzlePage.wordListColor || '#4b5563',
-      fontFamily: wordList.wordListFontFamily || 'Inter',
+      fontFamily: wordList.wordListFontFamily || 'Arial',
       addCheckboxes: wordList.addCheckboxes || false,
       checkboxSizePt: 10,
       checkboxGapPt: 8,
@@ -564,6 +763,7 @@ export function computeWordSearchPageLayout(
     },
     title,
     subtitle,
+    headerAssembly,
     grid,
     wordList: wordListBlock,
     showSolution,

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -9,10 +9,26 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { SliderField } from '@/components/ui/slider-field';
-import { AlertCircle, CheckCircle, Save } from 'lucide-react';
+import { AlertCircle, CheckCircle, Save, Trash2, Upload, Zap, ChevronLeft, ChevronRight, RefreshCw, ArrowRight, ArrowLeft, ArrowDown, ArrowUp, ArrowDownRight, ArrowUpRight, ArrowUpLeft, ArrowDownLeft } from 'lucide-react';
 import { useApp } from '@/lib/app-context';
+import { TextModuleSettings, isTextModuleSettings } from '@/lib/document-model';
 import { PUBLISHING_FONTS } from '@/lib/publishing-fonts';
 import { cn } from '@/lib/utils';
+import { useWordGeneration, queuePrompt, onPasteData, onPasteFunFacts, isExtensionAvailable } from '@/lib/genpuzzle-extension-integration';
+import { resolvePageFrameSettings, applyPageFrameSettingsPatch } from '@/lib/page-frame-settings';
+import {
+  normalizeHeaderAssemblySettings,
+  type HeaderAssemblySettings,
+} from '@/lib/header-assembly/types';
+import { HeaderAssemblyEditor } from '@/components/header/HeaderAssemblyEditor';
+import { PageNumberShapeEditor } from '@/components/page-number/PageNumberShapeEditor';
+import { normalizePageNumberSettings } from '@/lib/page-number/settings';
+import { TRIM_SIZE_PRESETS, type TrimSizePresetId } from '@/lib/trim-size-layout';
+import type { PageNumberSettings } from '@/lib/puzzles/types';
+import { useDebouncedCallback } from '@/hooks/useDebouncedCallback';
+import { usePersistedState } from '@/hooks/usePersistedState';
+import { SETTINGS_TAB_STORAGE_KEY } from '@/lib/settings-persistence';
+import { computeWordSearchGenerationFingerprint } from '@/lib/generation-fingerprint';
 
 const LANGUAGES = ['English', 'Spanish', 'French', 'German', 'Italian', 'Portuguese', 'Arabic'];
 const AGE_LEVELS = ['Children (6-8)', 'Children (9-12)', 'Teen', 'Adult', 'Senior'];
@@ -23,17 +39,43 @@ const AGE_LEVELS = ['Children (6-8)', 'Children (9-12)', 'Teen', 'Adult', 'Senio
 const DecimalInput = ({
   value,
   onChange,
+  onCommit,
   placeholder,
   min,
 }: {
   value: number;
   onChange: (val: number) => void;
+  onCommit?: (val: number) => void;
   placeholder?: string;
   min?: number;
 }) => {
   const [localValue, setLocalValue] = React.useState(String(value ?? ''));
   const inputRef = React.useRef<HTMLInputElement>(null);
   const isFocused = React.useRef(false);
+
+  const commitValue = React.useCallback(
+    (raw: string) => {
+      const trimmed = raw.trim();
+      const fallback = min ?? 0;
+      if (trimmed === '') {
+        const next = fallback;
+        setLocalValue(String(next));
+        onChange(next);
+        return;
+      }
+      let num = parseFloat(trimmed);
+      if (Number.isNaN(num)) {
+        num = fallback;
+      }
+      if (min !== undefined && num < min) num = min;
+      setLocalValue(String(num));
+      onChange(num);
+      onCommit?.(num);
+    },
+    [min, onChange, onCommit]
+  );
+
+  const debouncedCommit = useDebouncedCallback(commitValue, 300);
 
   // Update local value when external value changes (only when not focused)
   React.useEffect(() => {
@@ -42,30 +84,22 @@ const DecimalInput = ({
     }
   }, [value]);
 
+  React.useEffect(() => () => debouncedCommit.flush(), [debouncedCommit]);
+
   const handleFocus = () => {
     isFocused.current = true;
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // Let user type freely - only update local state
-    setLocalValue(e.target.value);
+    const next = e.target.value;
+    setLocalValue(next);
+    debouncedCommit(next);
   };
 
   const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
     isFocused.current = false;
-    const val = e.target.value.trim();
-    if (val === '') {
-      setLocalValue(String(min ?? 0));
-      onChange(min ?? 0);
-      return;
-    }
-    let num = parseFloat(val);
-    if (isNaN(num)) {
-      num = min ?? 0;
-    }
-    if (min !== undefined && num < min) num = min;
-    setLocalValue(String(num));
-    onChange(num);
+    debouncedCommit.cancel();
+    commitValue(e.target.value);
   };
 
   return (
@@ -100,30 +134,37 @@ const IntegerInput = ({
   const [localValue, setLocalValue] = React.useState(String(value ?? ''));
   const isFocused = React.useRef(false);
 
+  const commitValue = React.useCallback(
+    (raw: string) => {
+      const trimmed = raw.trim();
+      const fallback = min ?? 0;
+      if (trimmed === '') {
+        const next = fallback;
+        setLocalValue(String(next));
+        onChange(next);
+        return;
+      }
+      let num = parseInt(trimmed, 10);
+      if (Number.isNaN(num)) {
+        num = fallback;
+      }
+      if (min !== undefined && num < min) num = min;
+      if (max !== undefined && num > max) num = max;
+      setLocalValue(String(num));
+      onChange(num);
+    },
+    [min, max, onChange]
+  );
+
+  const debouncedCommit = useDebouncedCallback(commitValue, 300);
+
   React.useEffect(() => {
     if (!isFocused.current) {
       setLocalValue(String(value ?? ''));
     }
   }, [value]);
 
-  const commitValue = (raw: string) => {
-    const trimmed = raw.trim();
-    const fallback = min ?? 0;
-    if (trimmed === '') {
-      const next = fallback;
-      setLocalValue(String(next));
-      onChange(next);
-      return;
-    }
-    let num = parseInt(trimmed, 10);
-    if (Number.isNaN(num)) {
-      num = fallback;
-    }
-    if (min !== undefined && num < min) num = min;
-    if (max !== undefined && num > max) num = max;
-    setLocalValue(String(num));
-    onChange(num);
-  };
+  React.useEffect(() => () => debouncedCommit.flush(), [debouncedCommit]);
 
   return (
     <Input
@@ -138,15 +179,18 @@ const IntegerInput = ({
         const next = e.target.value;
         if (next === '' || /^\d+$/.test(next)) {
           setLocalValue(next);
+          debouncedCommit(next);
         }
       }}
       onBlur={(e) => {
         isFocused.current = false;
+        debouncedCommit.cancel();
         commitValue(e.target.value);
       }}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
           isFocused.current = false;
+          debouncedCommit.cancel();
           commitValue((e.target as HTMLInputElement).value);
           (e.target as HTMLInputElement).blur();
         }
@@ -167,7 +211,7 @@ function ColorInput({
   disabled?: boolean;
 }) {
   return (
-    <div className={cn('flex items-center gap-3 p-3 rounded-lg dark:from-slate-700 dark:to-slate-600 dark:border-slate-600 transition-all duration-200 border', disabled && 'opacity-50 pointer-events-none')} style={{background: `linear-gradient(to right, #F0F5F6, #F0F5F6)`, borderColor: `rgba(34, 118, 180, 0.2)`}}>
+    <div className={cn('flex items-center gap-3 p-3 rounded-lg dark:from-slate-700 dark:to-slate-600 dark:border-slate-600 transition-all duration-200 border', disabled && 'opacity-50 pointer-events-none')} style={{ background: `linear-gradient(to right, #F0F5F6, #F0F5F6)` }}>
       <div className="flex-1">
         <Label className={cn('text-sm font-medium', disabled ? 'text-gray-400 dark:text-gray-500' : 'text-gray-700 dark:text-gray-200')}>{label}</Label>
         <div className="flex items-center gap-2 mt-1">
@@ -191,32 +235,209 @@ function ColorInput({
   );
 }
 
-// Icon components
+function BackgroundImageControl({
+  label,
+  image,
+  opacity,
+  fit,
+  onImageChange,
+  onOpacityChange,
+  onFitChange,
+  onRemove,
+}: {
+  label: string;
+  image?: string;
+  opacity?: number;
+  fit?: 'cover' | 'contain' | 'stretch';
+  onImageChange: (base64: string) => void;
+  onOpacityChange: (value: number) => void;
+  onFitChange: (value: 'cover' | 'contain' | 'stretch') => void;
+  onRemove: () => void;
+}) {
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === 'string') {
+        onImageChange(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  return (
+    <div className="p-3 bg-white dark:bg-slate-700/50 rounded-lg border border-gray-200 dark:border-slate-700 space-y-3">
+      <div className="flex items-center justify-between">
+        <Label className="text-xs font-semibold text-gray-700 dark:text-gray-200">{label} Image</Label>
+        {image && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onRemove}
+            className="h-8 px-2 text-[var(--gp-grey-800)] hover:text-[var(--gp-black)] hover:bg-[var(--gp-grey-100)] transition-colors"
+          >
+            <Trash2 className="w-3.5 h-3.5 mr-1" />
+            Remove
+          </Button>
+        )}
+      </div>
+
+      {!image ? (
+        <div>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            accept="image/png, image/jpeg, image/jpg"
+            className="hidden"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            className="w-full h-16 border-dashed border-2 border-gray-300 dark:border-slate-600 hover:border-blue-400 hover:bg-blue-50/10 transition-all flex flex-col items-center justify-center gap-1 text-gray-500 hover:text-blue-500"
+          >
+            <Upload className="w-5 h-5" />
+            <span className="text-xs font-medium">Upload Background Image</span>
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <div 
+              className="w-12 h-12 rounded border border-gray-200 dark:border-slate-600 bg-gray-100 dark:bg-slate-800 bg-center bg-no-repeat bg-contain"
+              style={{ backgroundImage: `url(${image})` }}
+            />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-gray-500 truncate">Background Image Active</p>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-[10px] bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-gray-300 px-1.5 py-0.5 rounded">
+                  {fit ? fit.charAt(0).toUpperCase() + fit.slice(1) : 'Cover'}
+                </span>
+                <span className="text-[10px] bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-gray-300 px-1.5 py-0.5 rounded">
+                  {opacity ?? 100}% Opacity
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <div className="space-y-1">
+              <Label className="text-[11px] text-gray-500">Image Fit</Label>
+              <Select 
+                value={fit || 'cover'} 
+                onValueChange={(val) => onFitChange(val as any)}
+              >
+                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cover" className="text-xs">Cover</SelectItem>
+                  <SelectItem value="contain" className="text-xs">Contain</SelectItem>
+                  <SelectItem value="stretch" className="text-xs">Stretch</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <SliderField
+                label="Opacity"
+                value={opacity ?? 100}
+                onValueChange={onOpacityChange}
+                min={0}
+                max={100}
+                step={1}
+                format="percent"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Icon components (modern, animated, two-tone)
 function Book({ className }: { className?: string }) {
-  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>;
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path className="icon-base" d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path className="icon-base" d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <g className="icon-accent">
+        <rect x="5" y="6" width="6" height="2" rx="0.8" fill="#0EA5E9" opacity="0.95" />
+      </g>
+    </svg>
+  );
 }
 function Grid3X3({ className }: { className?: string }) {
-  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>;
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="3" y="3" width="7" height="7" stroke="currentColor" strokeWidth="1.6" rx="1" />
+      <rect x="14" y="3" width="7" height="7" stroke="currentColor" strokeWidth="1.6" rx="1" />
+      <rect x="14" y="14" width="7" height="7" stroke="currentColor" strokeWidth="1.6" rx="1" />
+      <rect x="3" y="14" width="7" height="7" stroke="currentColor" strokeWidth="1.6" rx="1" />
+      <circle className="icon-accent" cx="12" cy="12" r="2" fill="#0EA5E9" opacity="0.95" />
+    </svg>
+  );
 }
 function Type({ className }: { className?: string }) {
-  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="4,7 4,4 20,4 20,7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>;
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M4 7V4H20V7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9 20H15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12 4V20" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <g className="icon-accent">
+        <circle cx="12" cy="6" r="1.4" fill="#0EA5E9" opacity="0.95" />
+      </g>
+    </svg>
+  );
 }
 function List({ className }: { className?: string }) {
-  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>;
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M8 6H21" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M8 12H21" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M8 18H21" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <g className="icon-accent">
+        <circle cx="3" cy="6" r="1.6" fill="#0EA5E9" />
+        <circle cx="3" cy="12" r="1.6" fill="#0EA5E9" />
+        <circle cx="3" cy="18" r="1.6" fill="#0EA5E9" />
+      </g>
+    </svg>
+  );
 }
 function Palette({ className }: { className?: string }) {
-  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.555C21.965 6.012 17.461 2 12 2z"/></svg>;
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.555C21.965 6.012 17.461 2 12 2z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <g className="icon-accent">
+        <circle cx="8.5" cy="7.5" r="1.2" fill="#0EA5E9" />
+        <circle cx="13.5" cy="6.5" r="1.2" fill="#0EA5E9" />
+        <circle cx="17.5" cy="10.5" r="1.2" fill="#0EA5E9" />
+      </g>
+    </svg>
+  );
 }
 function Sparkles({ className }: { className?: string }) {
-  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>;
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <g className="icon-accent">
+        <path d="M6 4 L7.2 6.8 L10 8 L7.2 9.2 L6 12 L4.8 9.2 L2 8 L4.8 6.8 Z" fill="#0EA5E9" opacity="0.95" />
+      </g>
+    </svg>
+  );
 }
 
 /** Bulletproof Word List Textarea: Handles Space and Enter keys even with global event listeners */
-function WordListTextarea({ 
-  value, 
-  onChange 
-}: { 
-  value: string; 
+function WordListTextarea({
+  value,
+  onChange
+}: {
+  value: string;
   onChange: (value: string) => void;
 }) {
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -235,7 +456,7 @@ function WordListTextarea({
       // CRITICAL: stop propagation to prevent global event listeners from interfering
       e.stopPropagation();
       // NOTE: Do NOT call preventDefault() - we want the browser to insert the character
-      
+
       const textarea = textareaRef.current;
       if (!textarea) return;
 
@@ -275,39 +496,204 @@ export function WordSearchSidebar() {
     generatePuzzle,
     savePuzzle,
     validationError,
+    batchPuzzles,
+    activeDocumentPageId,
+    puzzleGenerationVersion,
     puzzleGridScale,
     setPuzzleGridScale,
     titleToAnswerGap,
     setTitleToAnswerGap,
+    solutionToSolutionGap,
+    setSolutionToSolutionGap,
     pageMargin,
     setPageMargin,
+    bookSettings,
+    activeDocumentPage,
+    updateActiveTextModuleSettings,
+    applyTrimSizeLayoutChange,
   } = useApp();
+
+  const moduleIsWordSearch = activeDocumentPage?.moduleType === 'word-search';
+  const activeTextSettings =
+    activeDocumentPage && !moduleIsWordSearch && isTextModuleSettings(activeDocumentPage.settings)
+      ? (activeDocumentPage.settings as TextModuleSettings)
+      : null;
+
+  // Local state for AI word generation loading
+  const [isGeneratingWordsFromExtension, setIsGeneratingWordsFromExtension] = React.useState(false);
+  const [isGeneratingPuzzles, setIsGeneratingPuzzles] = React.useState(false);
+
+  // Collapsed/expanded sidebar state
+  const [collapsed, setCollapsed] = React.useState(false);
+  // Persist active settings tab across tab switches and page refresh
+  const [activeTab, setActiveTab] = usePersistedState<string>(
+    SETTINGS_TAB_STORAGE_KEY,
+    'book',
+    { debounceMs: 300 }
+  );
+
+  // Chrome Extension Integration for AI Word Generation
+  const { generateWords: generateWordsFromExtension, isLoading: isGeneratingWords, data: generatedWordsData, error: generationError } = useWordGeneration();
+
+  const handleTabChange = (value: string) => {
+    // When switching tabs, set active tab and ensure sidebar is expanded
+    setActiveTab(value);
+    setCollapsed(false);
+  };
+
+  const handleTriggerClick = (value: string) => {
+    // If user clicks the already-active tab, toggle collapse/expand
+    if (activeTab === value) {
+      setCollapsed((prev) => !prev);
+    }
+    // Otherwise do nothing here; onValueChange will fire and open the panel
+  };
+
+  const handleTriggerPointerDown = (e: React.PointerEvent, value: string) => {
+    // pointerdown fires before Radix's onValueChange; use it to detect clicks on the
+    // currently-active tab and toggle collapse without letting Radix re-select.
+    if (activeTab === value) {
+      e.preventDefault();
+      setCollapsed((prev) => !prev);
+    }
+  };
+
+  // Handle generated words - update the word list when words are received from extension
+  React.useEffect(() => {
+    if (generatedWordsData && generatedWordsData.words) {
+      // Extract all words from the structured response
+      const allWords: string[] = [];
+      generatedWordsData.words.forEach((item: any) => {
+        if (item.words && Array.isArray(item.words)) {
+          allWords.push(...item.words);
+        }
+      });
+      
+      if (allWords.length > 0) {
+        console.log('[WordSearchSidebar] Updated word list with', allWords.length, 'words');
+        setTitleWords({ ...titleWords, words: allWords });
+      }
+    }
+  }, [generatedWordsData, titleWords, setTitleWords]);
 
   const { bookCanvas, core, typography, wordList, colors } = wordSearchSettings;
 
-  const updateBookCanvas = (updates: Partial<typeof bookCanvas>) => {
-    updateWordSearchSettings({ bookCanvas: { ...bookCanvas, ...updates } });
-  };
+  const updateBookCanvas = React.useCallback(
+    (updates: Partial<typeof bookCanvas>) => {
+      updateWordSearchSettings({ bookCanvas: { ...bookCanvas, ...updates } });
+    },
+    [bookCanvas, updateWordSearchSettings]
+  );
 
-  const updateCore = (updates: Partial<typeof core>) => {
-    updateWordSearchSettings({ core: { ...core, ...updates } });
-  };
+  const applyCustomTrimLayout = React.useCallback(
+    (width: number, height: number) => {
+      applyTrimSizeLayoutChange(
+        { useCustomTrim: true, customWidth: width, customHeight: height },
+        { width, height }
+      );
+    },
+    [applyTrimSizeLayoutChange]
+  );
 
-  const updateTypography = (updates: Partial<typeof typography>) => {
-    updateWordSearchSettings({ typography: { ...typography, ...updates } });
-  };
+  const updateCore = React.useCallback(
+    (updates: Partial<typeof core>) => {
+      updateWordSearchSettings({ core: { ...core, ...updates } });
+    },
+    [core, updateWordSearchSettings]
+  );
 
-  const updateWordListSettings = (updates: Partial<typeof wordList>) => {
-    updateWordSearchSettings({ wordList: { ...wordList, ...updates } });
-  };
+  const updateTypography = React.useCallback(
+    (updates: Partial<typeof typography>) => {
+      updateWordSearchSettings({ typography: { ...typography, ...updates } });
+    },
+    [typography, updateWordSearchSettings]
+  );
 
-  const updateColors = (updates: Partial<typeof colors>) => {
-    updateWordSearchSettings({ colors: { ...colors, ...updates } });
-  };
+  const updateWordListSettings = React.useCallback(
+    (updates: Partial<typeof wordList>) => {
+      updateWordSearchSettings({ wordList: { ...wordList, ...updates } });
+    },
+    [wordList, updateWordSearchSettings]
+  );
+
+  const customTitleLines = React.useMemo(() => {
+    if (typography.selectTitleOption !== 'custom') return 0;
+    return typography.titleText
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0).length;
+  }, [typography.selectTitleOption, typography.titleText]);
+
+  const missingCustomTitles = Math.max(0, (core.numberOfPuzzles || 0) - customTitleLines);
+
+  const gridMaxWordLength = Math.max(core.lettersAcross || 0, core.lettersDown || 0, 3);
+
+  React.useEffect(() => {
+    if (wordList.aiMaxWordLength > gridMaxWordLength) {
+      updateWordListSettings({ aiMaxWordLength: gridMaxWordLength });
+    }
+  }, [core.lettersAcross, core.lettersDown, gridMaxWordLength, updateWordListSettings, wordList.aiMaxWordLength]);
+
+  const updateColors = React.useCallback(
+    (updates: Partial<typeof colors>) => {
+      updateWordSearchSettings({ colors: { ...colors, ...updates } });
+    },
+    [colors, updateWordSearchSettings]
+  );
+
+  const defaultsInitialized = React.useRef(false);
+
+  React.useEffect(() => {
+    if (defaultsInitialized.current) return;
+
+    const trimDefaults = bookCanvas.trimSizePreset === '8_5X11IN' && bookCanvas.useCustomTrim === false;
+    const titleDefaults = typography.selectTitleOption === 'custom';
+    const numberingDefaults = typography.puzzleNumberingStyle === 'prefix';
+
+    if (!trimDefaults) {
+      updateBookCanvas({ trimSizePreset: '8_5X11IN', customWidth: 8.5, customHeight: 11, useCustomTrim: false });
+    }
+
+    if (!titleDefaults) {
+      updateTypography({ selectTitleOption: 'custom' });
+    }
+
+    if (!numberingDefaults) {
+      updateTypography({ puzzleNumberingStyle: 'prefix' });
+    }
+
+    defaultsInitialized.current = true;
+  }, [bookCanvas.trimSizePreset, bookCanvas.useCustomTrim, typography.selectTitleOption, typography.puzzleNumberingStyle, updateBookCanvas, updateTypography]);
+
+  // If the AI-generated theme changes, update the titleText only when the
+  // current mode is already `custom`. This preserves explicit user choices
+  // for `one-custom-title` and `none`.
+  React.useEffect(() => {
+    if (!wordList.aiTheme) return;
+    if (typography.selectTitleOption === 'custom' && typography.titleText !== wordList.aiTheme) {
+      updateTypography({ titleText: wordList.aiTheme });
+    }
+  }, [wordList.aiTheme, typography.selectTitleOption, typography.titleText, updateTypography]);
 
   const updatePuzzlePageColors = (updates: Partial<typeof colors.puzzlePage>) => {
     updateColors({
       puzzlePage: { ...colors.puzzlePage, ...updates },
+    });
+  };
+
+  const headerAssembly = normalizeHeaderAssemblySettings(colors.puzzlePage.headerAssembly);
+
+  const pageNumber = normalizePageNumberSettings(typography.pageNumber);
+
+  const updatePageNumber = (updates: Partial<PageNumberSettings>) => {
+    updateTypography({
+      pageNumber: normalizePageNumberSettings({ ...pageNumber, ...updates }),
+    });
+  };
+
+  const updateHeaderAssembly = (updates: Partial<HeaderAssemblySettings>) => {
+    updatePuzzlePageColors({
+      headerAssembly: normalizeHeaderAssemblySettings({ ...headerAssembly, ...updates }),
     });
   };
 
@@ -317,56 +703,649 @@ export function WordSearchSidebar() {
     });
   };
 
+  const pageFrame = resolvePageFrameSettings(wordSearchSettings);
+
+  const updatePageFrameSettings = (updates: Parameters<typeof applyPageFrameSettingsPatch>[1]) => {
+    updateWordSearchSettings(applyPageFrameSettingsPatch(wordSearchSettings, updates));
+  };
+
+  // Handle PASTE_DATA from extension - switch mode and inject formatted text
+  React.useEffect(() => {
+    const unsubscribe = onPasteData((formattedText: string) => {
+      console.log('[WordSearchSidebar] Received PASTE_DATA with', formattedText.split('\n').length, 'lines');
+      
+      // Step 1: Switch to manual mode
+      console.log('[WordSearchSidebar] Switching to manual word entry mode');
+      updateWordListSettings({ selectWordListOption: 'manual' });
+      
+      // Step 2: Convert vertical format back to word array
+      const words = formattedText
+        .split('\n')
+        .map(w => w.trim())
+        .filter(w => w.length > 0);
+      
+      if (words.length > 0) {
+        console.log('[WordSearchSidebar] Injecting', words.length, 'words into word list');
+        
+        // Step 3: Update titleWords with the pasted words
+        setTitleWords({
+          ...titleWords,
+          words: words
+        });
+      }
+    });
+
+    return unsubscribe;
+  }, [titleWords, setTitleWords, updateWordListSettings]);
+
+  // Handle PASTE_FUN_FACTS from extension - inject fun facts into typography
+  React.useEffect(() => {
+    const unsubscribe = onPasteFunFacts((funFactsText: string) => {
+      console.log('[WordSearchSidebar] Received PASTE_FUN_FACTS with', funFactsText.split('\n').length, 'facts');
+      
+      if (funFactsText && funFactsText.length > 0) {
+        console.log('[WordSearchSidebar] Injecting fun facts into funFactsText');
+        
+        // Update typography with the pasted fun facts
+        updateTypography({
+          funFactsText: funFactsText
+        });
+      }
+    });
+
+    return unsubscribe;
+  }, [updateTypography]);
+
   const handleSave = () => {
     const name = `${titleWords.title || 'word-search'} - ${new Date().toLocaleDateString()}`;
     savePuzzle(name);
   };
 
+  // Handler for AI word generation from extension
+  // Track if a generation is already in progress to prevent double calls
+  const isGenerationInProgress = React.useRef(false);
+  
+  // SPEC 1: State for inline theme validation error messages
+  const [themeError, setThemeError] = useState("");
+  const [showExtensionMissingPrompt, setShowExtensionMissingPrompt] = useState(false);
+
+  // SPEC 1: computeThemeValidation remains for informational purposes only (do not auto-apply error state)
+  const computeThemeValidation = React.useMemo(() => {
+    if (!wordList.aiTheme.trim()) {
+      return { enteredThemesCount: 0, requiredPuzzles: 0, isDisabled: true, errorMsg: "" };
+    }
+
+    const enteredThemesCount = wordList.aiTheme
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0).length;
+    
+    const requiredPuzzles = (core && core.numberOfPuzzles) ? core.numberOfPuzzles : 0;
+    
+    const isDisabled = enteredThemesCount < requiredPuzzles;
+    const errorMsg = isDisabled 
+      ? `Need ${requiredPuzzles - enteredThemesCount} more theme(s)` 
+      : "";
+    
+    return { enteredThemesCount, requiredPuzzles, isDisabled, errorMsg };
+  }, [wordList.aiTheme, core]);
+
+  // Restore live themeError from computeThemeValidation so the alert appears under the button
+  React.useEffect(() => {
+    if (themeError === "Ready" && !computeThemeValidation.errorMsg) {
+      return;
+    }
+    setThemeError(computeThemeValidation.errorMsg);
+  }, [computeThemeValidation.errorMsg, themeError]);
+
+  // Poll for extension availability and hide missing prompt when installed
+  React.useEffect(() => {
+    let mounted = true;
+    let interval = setInterval(async () => {
+      try {
+        const available = await isExtensionAvailable();
+        if (mounted && available) {
+          setShowExtensionMissingPrompt(false);
+          clearInterval(interval);
+        }
+      } catch (e) {
+        // ignore
+      }
+    }, 2000);
+
+    // also check immediately once
+    (async () => {
+      try {
+        const available = await isExtensionAvailable();
+        if (mounted && available) {
+          setShowExtensionMissingPrompt(false);
+          clearInterval(interval);
+        }
+      } catch {}
+    })();
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const handleSuccess = () => {
+      setThemeError("Ready");
+      setIsGeneratingWordsFromExtension(false);
+      isGenerationInProgress.current = false;
+      console.log('[WordSearchSidebar] EXTENSION_GENERATION_SUCCESS received; local state reset.');
+    };
+
+    window.addEventListener("EXTENSION_GENERATION_SUCCESS", handleSuccess);
+    return () => window.removeEventListener("EXTENSION_GENERATION_SUCCESS", handleSuccess);
+  }, []);
+
+  /**
+   * REQUIREMENT 4: Parse words from both horizontal and vertical formats
+   * Detects format automatically:
+   * - Horizontal: "Word, word, word, word..."
+   * - Vertical: "Word\nWord\nWord..."
+   */
+  const parseWordListFromBothFormats = (value: string): string[] => {
+    if (!value || value.trim().length === 0) return [];
+    
+    // Check if content contains commas (horizontal format indicator)
+    if (value.includes(',')) {
+      // Horizontal format: split by commas
+      const words = value
+        .split(',')
+        .map(w => w.trim())
+        .filter(w => w.length > 0);
+      console.log('[WordSearchSidebar] Parsed horizontal format:', words.length, 'words');
+      return words;
+    } else {
+      // Vertical format: split by newlines
+      const words = value
+        .split('\n')
+        .map(w => w.trim())
+        .filter(w => w.length > 0);
+      console.log('[WordSearchSidebar] Parsed vertical format:', words.length, 'words');
+      return words;
+    }
+  };
+
+  // Theme history management - tracks submitted themes to prevent repetition
+  const getThemeHistory = (): string[] => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const stored = localStorage.getItem('genpuzzle_theme_history');
+      return stored ? JSON.parse(stored) : [];
+    } catch (e) {
+      console.warn('[WordSearchSidebar] Failed to load theme history:', e);
+      return [];
+    }
+  };
+
+  const addThemesToHistory = (themes: string[]): void => {
+    if (typeof window === 'undefined' || themes.length === 0) return;
+    try {
+      const existing = getThemeHistory();
+      const combined = [...themes, ...existing];
+      // Keep only unique themes, limited to 500
+      const unique = Array.from(new Set(combined)).slice(0, 500);
+      localStorage.setItem('genpuzzle_theme_history', JSON.stringify(unique));
+    } catch (e) {
+      console.warn('[WordSearchSidebar] Failed to save theme history:', e);
+    }
+  };
+
+  const getSubmittedThemesExamples = (numberOfPuzzles: number): string => {
+    const history = getThemeHistory();
+    const toInclude = Math.min(numberOfPuzzles, history.length);
+    
+    if (toInclude === 0) return '';
+    
+    const examples = history.slice(0, toInclude);
+    return `\n### PREVIOUSLY SUBMITTED THEMES (DO NOT REPEAT - Use only as reference for niche/style):
+${examples.map((t, i) => `- ${t}`).join('\n')}`;
+  };
+
+  const handleGenerateWordsFromAI = async () => {
+    // STRICT DOM-BASED PRE-SUBMISSION VALIDATION (run immediately at handler start)
+    // Extract values directly from DOM elements to ensure accurate submission criteria
+    console.log('[WordSearchSidebar] Starting DOM-based pre-submission validation...');
+
+    // Pre-check: if GenPuzzle extension is not available, show download prompt
+    try {
+      const available = await isExtensionAvailable();
+      if (!available) {
+        console.warn('[WordSearchSidebar] GenPuzzle extension not available - showing download prompt');
+        setShowExtensionMissingPrompt(true);
+        setIsGeneratingWordsFromExtension(false);
+        isGenerationInProgress.current = false;
+        return;
+      }
+      // Hide prompt if it was previously shown
+      if (showExtensionMissingPrompt) setShowExtensionMissingPrompt(false);
+    } catch (e) {
+      console.warn('[WordSearchSidebar] Error checking extension availability', e);
+    }
+
+    // Step 1: Use the current app state instead of DOM selectors
+    const requiredPuzzles = core?.numberOfPuzzles || 0;
+    console.log('[WordSearchSidebar] Required puzzles from state:', requiredPuzzles);
+
+    // Step 2: Parse themes array count from current theme textarea state
+    const enteredThemesCount = wordList.aiTheme
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0).length;
+    console.log('[WordSearchSidebar] Entered themes count from state:', enteredThemesCount);
+
+    // Rule Matrix: If insufficient themes, set error and ABORT immediately (do not modify other state)
+    if (enteredThemesCount < requiredPuzzles) {
+      const missingCount = requiredPuzzles - enteredThemesCount;
+      console.error('[WordSearchSidebar] ❌ VALIDATION FAILED: Insufficient themes');
+      setThemeError('Need ' + missingCount + ' more themes');
+      return; // STRICT ABORT — do not proceed further
+    }
+
+    // Passed validation — clear any previous error
+    setThemeError('');
+
+    // Guard against double-calls from rapid clicks or React re-renders
+    if (isGenerationInProgress.current) {
+      console.warn('[WordSearchSidebar] Generation already in progress, ignoring duplicate call');
+      return;
+    }
+
+    // CRITICAL: Ensure all required state objects are initialized before proceeding
+    if (!wordSearchSettings || !wordList || !core) {
+      console.error('[WordSearchSidebar] INITIALIZATION ERROR: State objects not ready', { 
+        hasWordSearchSettings: !!wordSearchSettings,
+        hasWordList: !!wordList,
+        hasCore: !!core 
+      });
+      alert('Settings not yet loaded. Please wait a moment and try again.');
+      return;
+    }
+
+    if (!wordList.aiTheme || !wordList.aiTheme.trim()) {
+      alert('Please enter a theme for word generation');
+      return;
+    }
+
+    try {
+      // Mark generation as in progress BEFORE any async operations
+      isGenerationInProgress.current = true;
+      setIsGeneratingWordsFromExtension(true);
+      
+      // REQUIREMENT 1: Immediately switch Word Source from 'ai' to 'manual'
+      // This happens before the extension navigates to Gemini
+      console.log('[WordSearchSidebar] Switching Word Source to manual mode');
+      updateWordListSettings({ selectWordListOption: 'manual' });
+      
+      // Enable "Add Fun Facts / Quotes" checkbox so fun facts will be populated automatically
+      console.log('[WordSearchSidebar] Enabling Add Fun Facts / Quotes');
+      updateTypography({ includeFunFacts: true });
+
+      // Grab all live state variables right at click time with defensive null checks and fallbacks
+      // This prevents undefined values from appearing in the prompt sent to Gemini
+      const numberOfPuzzles = (core && core.numberOfPuzzles) ? Math.max(1, core.numberOfPuzzles) : 10;
+      const wordsPerPuzzle = (wordList && wordList.wordsPerPuzzle) ? Math.max(1, wordList.wordsPerPuzzle) : 10;
+      const maxLength = (wordList && wordList.aiMaxWordLength) ? Math.max(1, wordList.aiMaxWordLength) : 15;
+      const caseValue = (wordList && wordList.wordListCase) ? wordList.wordListCase : 'mixed';
+      const charCase = caseValue === 'upper' ? 'UPPERCASE' : caseValue === 'lower' ? 'lowercase' : 'mixed case';
+      const ageLevel = (wordList && wordList.aiAgeLevel) ? wordList.aiAgeLevel : 'Adult';
+      const language = (wordList && wordList.aiLanguage) ? wordList.aiLanguage : 'English';
+      const theme = (wordList && wordList.aiTheme) ? wordList.aiTheme.trim() : 'General Theme';
+
+      // STRICT VALIDATION: Ensure no variable is undefined, null, empty, or the string "undefined"
+      // This is critical to prevent "undefined" from being injected into Gemini
+      const validationErrors: string[] = [];
+      
+      if (!numberOfPuzzles || numberOfPuzzles <= 0) {
+        validationErrors.push('numberOfPuzzles must be a positive number');
+      }
+      if (!wordsPerPuzzle || wordsPerPuzzle <= 0) {
+        validationErrors.push('wordsPerPuzzle must be a positive number');
+      }
+      if (!maxLength || maxLength <= 0) {
+        validationErrors.push('maxLength must be a positive number');
+      }
+      if (!charCase || charCase === 'undefined') {
+        validationErrors.push('charCase is invalid');
+      }
+      if (!ageLevel || ageLevel === 'undefined') {
+        validationErrors.push('ageLevel is invalid');
+      }
+      if (!language || language === 'undefined') {
+        validationErrors.push('language is invalid');
+      }
+      if (!theme || theme === 'undefined') {
+        validationErrors.push('theme is invalid or empty');
+      }
+      
+      if (validationErrors.length > 0) {
+        throw new Error('Validation failed: ' + validationErrors.join(', '));
+      }
+
+      // AUTO-LIMIT: Extract only the first N themes (where N = numberOfPuzzles)
+      // If user submitted 100 themes but selected 50 puzzles, use only the first 50
+      const allThemes = theme
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0);
+      
+      const limitedThemes = allThemes.slice(0, numberOfPuzzles);
+      const finalTheme = limitedThemes.join('\n');
+      
+      console.log('[WordSearchSidebar] Theme limiting: extracted', allThemes.length, 'themes, using first', limitedThemes.length, 'for', numberOfPuzzles, 'puzzles');
+
+      // Build strict, anti-hallucination prompt with explicit rules
+      // Ensure all variables are stringified and checked for "undefined"
+      const dynamicPrompt = `Generate ${String(numberOfPuzzles)} word lists for the themes below. Each list must contain exactly ${String(wordsPerPuzzle)} words. Write one fun fact per theme (90–95 characters each).
+
+    Word Constraints: Max ${String(maxLength)} letters, ${String(charCase)}. Unique, non-duplicated words. No numbers allowed in the word lists (words must not contain digits).
+    Target Audience: ${String(ageLevel)}.
+    Language: ${String(language)}.
+    Multi-word Rule: Make sure to add space between words when we have 2 words based.
+
+    ### ALPHABETICAL SORTING (REQUIRED):
+    - Sort every word list A to Z before you output it.
+    - Use standard alphabetical order (A, B, C … Z). For multi-word entries, sort by the first word.
+    - Do NOT leave words in random or theme-logic order — the final list must read alphabetically from first word to last.
+    - Keep the 1., 2., 3. numbering in the output, but the words themselves must follow A–Z order (word #1 is the first alphabetically, word #2 is the second, and so on).
+
+    ### THEMES TO GENERATE:
+    ${finalTheme}
+
+    ### CRITICAL RULES:
+    1. Do NOT reuse, copy, or repeat any words or titles shown in previously submitted themes or example format section below.
+    2. Every single puzzle must have a completely unique, new title and a brand new list of words based strictly on the themes listed in "THEMES TO GENERATE" section above.
+    3. Output ONLY the raw puzzle data. No chat, no markdown formatting like ** or bolding, and no part numbers.
+    4. No numbers allowed in the words lists — words must contain only alphabetic characters (remove any entries that include digits).
+    5. Every word list MUST be sorted alphabetically (A–Z) before output. Double-check the order before submitting.
+
+    Follow these constraints:
+
+    No Duplicates: Keep a running list of ALL words used across all previous puzzle themes in this session. You are strictly forbidden from reusing any word that has already appeared in a previous puzzle.
+
+    Contextual Uniqueness: For each theme listed in THEMES TO GENERATE above, select ${String(wordsPerPuzzle)} words that represent that theme AND have never been used in any other puzzle.
+
+    Verification: Before outputting the final list, verify the new words against the 'Used Words List'. If a conflict is found, generate a fresh word that fits the theme. Then re-sort the list A–Z.
+
+    Output: Provide the alphabetically sorted list of words for the current theme, and update the internal 'Used Words List' for future puzzles.
+
+    ### EXCLUSIVE OUTPUT FORMAT (Follow this structure exactly):
+    -Theme 1 Title
+
+    1.word, 2.word, 3.word, 4.word, 5.word, ...  (words in A–Z order)
+
+    -Fun fact: write fun fact here
+
+    -Theme 2 Title
+
+    1.word, 2.word, 3.word, 4.word, 5.word, ...  (words in A–Z order)
+
+    -Fun fact: write fun fact here
+
+    -Theme 3 Title
+
+    1.word, 2.word, 3.word, 4.word, 5.word, ...  (words in A–Z order)
+
+    -Fun fact: write fun fact here`
+    ;
+    
+
+      // Final safeguard: verify the prompt does not contain the string "undefined"
+      if (dynamicPrompt.includes('undefined')) {
+        throw new Error('CRITICAL: Prompt contains the string "undefined" - this will break Gemini injection. Check state variables.');
+      }
+
+      console.log('[WordSearchSidebar] Queueing prompt in extension...', { numberOfPuzzles, wordsPerPuzzle, maxLength, charCase, ageLevel, language, finalTheme });
+
+      // Step 1: Queue the prompt in the extension FIRST
+      const queueResponse = await queuePrompt({
+        prompt: dynamicPrompt,
+        provider: 'gemini',
+      });
+
+      if (!queueResponse.success) {
+        throw new Error(queueResponse.error || 'Failed to queue prompt');
+      }
+
+      console.log('[WordSearchSidebar] Prompt queued successfully, requestId:', queueResponse.requestId);
+
+      // Step 2: Set up listener for this specific request ID BEFORE opening tab
+      // This ensures we catch the response when it comes back from the extension
+      let responseReceived = false;
+      const responseListener = (message: any) => {
+        if (
+          !responseReceived &&
+          message?.type === "RESPONSE_RECEIVED" &&
+          message?.requestId === queueResponse.requestId &&
+          (message?.action === "GENERATE_WORDS" || message?.action === "GENERATE_CONTENT") &&
+          message?.dataType === "text"
+        ) {
+          responseReceived = true;
+          console.log('[WordSearchSidebar] Received response for requestId:', queueResponse.requestId, message);
+          
+          // Extract words and update state
+          if (message.words && message.words.length > 0) {
+            const allWords: string[] = [];
+            const submittedThemes: string[] = [];
+            
+            message.words.forEach((item: any) => {
+              if (item.words && Array.isArray(item.words)) {
+                allWords.push(...item.words);
+              }
+              // Track the theme for history
+              if (item.theme) {
+                submittedThemes.push(item.theme);
+              }
+            });
+            
+            // Save submitted themes to history for future prompts
+            if (submittedThemes.length > 0) {
+              addThemesToHistory(submittedThemes);
+              console.log('[WordSearchSidebar] Added', submittedThemes.length, 'themes to history');
+            }
+            
+            if (allWords.length > 0) {
+              console.log('[WordSearchSidebar] Updated word list with', allWords.length, 'words');
+              setTitleWords({ ...titleWords, words: allWords });
+            }
+          }
+          
+          // Clean up listener and reset generation guard
+          if (typeof chrome !== 'undefined' && chrome?.runtime?.onMessage) {
+            chrome.runtime.onMessage.removeListener(responseListener);
+          }
+          
+          setIsGeneratingWordsFromExtension(false);
+          isGenerationInProgress.current = false; // IMPORTANT: Reset guard after response
+          
+          // Clear the "Ready" message after 2 seconds so user can generate again
+          setTimeout(() => {
+            setThemeError('');
+          }, 2000);
+        }
+      };
+
+      // Add listener using chrome API if available
+      if (typeof chrome !== 'undefined' && chrome?.runtime?.onMessage) {
+        chrome.runtime.onMessage.addListener(responseListener);
+      }
+
+      // Step 3: Tab is already opened via queuePrompt -> chrome.tabs.create()
+      // Do NOT call window.open() - that would create duplicate tabs
+      // The tab is automatically created and waits for content.js injection
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      console.error('[WordSearchSidebar] Failed to generate words:', errorMessage);
+      alert(`Failed to generate words: ${errorMessage}`);
+      setIsGeneratingWordsFromExtension(false);
+      isGenerationInProgress.current = false; // IMPORTANT: Reset guard on error
+    }
+  };
+
   const requiredWords = core.numberOfPuzzles * wordList.wordsPerPuzzle;
   const wordCount = titleWords.words.length;
+  const activeDocumentPuzzleCount = core.numberOfPuzzles || 1;
+  const activeDocumentHasPuzzles = batchPuzzles.some(
+    (puzzle) => puzzle.pageId === activeDocumentPageId
+  );
+  const hasWordList = wordCount > 0;
+  const isGenerateLocked = !activeDocumentHasPuzzles && !hasWordList;
+
+  const generationFingerprint = useMemo(
+    () => computeWordSearchGenerationFingerprint(wordSearchSettings, titleWords),
+    [wordSearchSettings, titleWords]
+  );
+
+  const [syncedFingerprintsByDoc, setSyncedFingerprintsByDoc] = useState<Record<string, string>>({});
+  const generationSnapshotRef = useRef({
+    pageId: activeDocumentPageId,
+    fingerprint: generationFingerprint,
+  });
+  generationSnapshotRef.current = {
+    pageId: activeDocumentPageId,
+    fingerprint: generationFingerprint,
+  };
+
+  useEffect(() => {
+    if (!activeDocumentHasPuzzles) return;
+    setSyncedFingerprintsByDoc((prev) => {
+      if (prev[activeDocumentPageId]) return prev;
+      return { ...prev, [activeDocumentPageId]: generationFingerprint };
+    });
+  }, [activeDocumentPageId, activeDocumentHasPuzzles, generationFingerprint]);
+
+  useEffect(() => {
+    const { pageId, fingerprint } = generationSnapshotRef.current;
+    setSyncedFingerprintsByDoc((prev) => ({
+      ...prev,
+      [pageId]: fingerprint,
+    }));
+  }, [puzzleGenerationVersion]);
+
+  const syncedFingerprint = syncedFingerprintsByDoc[activeDocumentPageId];
+  const needsRegeneration =
+    activeDocumentHasPuzzles &&
+    syncedFingerprint !== undefined &&
+    syncedFingerprint !== generationFingerprint;
+
+  const shouldPulseGenerate =
+    !isGenerateLocked &&
+    !isGeneratingPuzzles &&
+    ((!activeDocumentHasPuzzles && hasWordList) || needsRegeneration);
+
+  const generatePuzzlesLabel = activeDocumentHasPuzzles
+    ? `Update the ${activeDocumentPuzzleCount} ${activeDocumentPuzzleCount === 1 ? 'puzzle' : 'puzzles'}`
+    : `Generate the ${activeDocumentPuzzleCount} ${activeDocumentPuzzleCount === 1 ? 'puzzle' : 'puzzles'}`;
+
+  const handleGeneratePuzzles = async () => {
+    setIsGeneratingPuzzles(true);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    try {
+      generatePuzzle();
+    } finally {
+      setIsGeneratingPuzzles(false);
+    }
+  };
 
   return (
-    <div className="w-96 h-screen bg-gradient-to-b from-slate-50 to-white dark:from-slate-950 dark:to-slate-900 border-r border-gray-200 dark:border-slate-800 flex flex-col shadow-lg overflow-y-auto">
+    <div className={`word-search-sidebar relative transition-all duration-300 h-full bg-gradient-to-b from-slate-50 to-white dark:from-slate-950 dark:to-slate-900 border-r border-gray-200 dark:border-slate-800 flex flex-col shadow-lg overflow-visible ${
+      collapsed ? 'w-28' : 'w-96'
+    }`}>
+      {/* Edge-centre minimal collapse arrow — explicit inline SVG to avoid style overrides */}
+      <button
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        onClick={() => setCollapsed((c) => !c)}
+        className="absolute top-1/2 -right-2 z-50 flex items-center justify-center p-0 m-0 rounded-sm opacity-20 transition duration-100 hover:opacity-80 hover:scale-110"
+        style={{
+          transform: 'translateY(-50%)',
+          width: 20,
+          height: 22,
+          background: '#e8ecf0',
+          border: '1px solid #9ca3af',
+          boxShadow: '0 0 0 1px rgba(0,0,0,0.12)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 0,
+        }}
+      >
+        <div
+          style={{
+            width: 0,
+            height: 0,
+            borderTop: '4px solid transparent',
+            borderBottom: '4px solid transparent',
+            borderLeft: collapsed ? '8px solid #000' : '0 solid transparent',
+            borderRight: collapsed ? '0 solid transparent' : '8px solid #000',
+          }}
+        />
+      </button>
       <style>{`
-        /* Modern tab styling */
-        [role="tablist"] {
+        /* Modern tab styling — scoped to sidebar only */
+        .word-search-sidebar [role="tablist"] {
           display: flex;
-          flex-wrap: wrap;
-          gap: 4px;
-          padding: 12px 8px;
-          background: linear-gradient(135deg, rgba(241, 245, 249, 0.5) 0%, rgba(226, 232, 240, 0.5) 100%);
-          border-bottom: 2px solid rgba(226, 232, 240, 0.8);
+          flex-direction: column;
+          justify-content: flex-start;
+          gap: 2rem;
+          padding: 8px;
+          background: transparent;
+          border-right: 2px solid rgba(226, 232, 240, 0.8);
         }
         
-        button[role="tab"] {
-          flex: 1;
-          min-width: 60px;
-          padding: 10px 12px;
-          border-radius: 8px;
+        .word-search-sidebar button[role="tab"] {
+          flex: 0;
+          width: 4.25rem;
+          min-height: 4.25rem;
+          height: auto;
+          min-width: auto;
+          padding: 0.5rem 0;
+          border-radius: 0; /* square corners */
           font-weight: 500;
-          transition: all 300ms ease-out;
+          transition: all 200ms ease-out;
           border: 2px solid transparent;
           background: white;
           color: #64748b;
-          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex-direction: column;
         }
         
-        button[role="tab"]:hover {
-          background: linear-gradient(135deg, #eef2ff 0%, #dbeafe 100%);
-          color: #4f46e5;
-          box-shadow: 0 4px 12px rgba(79, 70, 229, 0.15);
+        .word-search-sidebar button[role="tab"]:hover {
+          background: var(--gp-grey-100);
+          color: var(--gp-blue);
+          box-shadow: 0 4px 12px rgba(26, 90, 140, 0.12);
           transform: translateY(-1px);
         }
         
-        button[role="tab"][data-state="active"] {
-          background: linear-gradient(135deg, #7D8183 0%, #5a5f61 100%);
-          color: white;
-          border-color: #4f46e5;
-          box-shadow: 0 8px 16px rgba(79, 70, 229, 0.3);
+        .word-search-sidebar button[role="tab"][data-state="active"] {
+          background: var(--gp-white);
+          color: var(--gp-blue);
+          border-color: var(--gp-grey-200);
+          box-shadow: 0 4px 12px rgba(26, 90, 140, 0.15);
         }
-        
-        [role="tabpanel"] {
-          padding: 20px;
+
+        /* Icon and accent animations */
+        .word-search-sidebar button[role="tab"] svg { transition: transform 260ms cubic-bezier(.2,.9,.2,1), opacity 180ms ease; transform-origin: center center; display: block; margin: 0 auto; }
+        .word-search-sidebar button[role="tab"]:hover svg { transform: scale(1.03); }
+        .word-search-sidebar button[role="tab"][data-state="active"] svg { transform: scale(1.08); }
+
+        .word-search-sidebar button[role="tab"] svg .icon-accent { opacity: 0; transform-origin: center; transition: opacity 240ms ease, transform 320ms cubic-bezier(.2,.9,.2,1); }
+        .word-search-sidebar button[role="tab"][data-state="active"] svg .icon-accent { opacity: 1; transform: scale(1.06); animation: gp-pulse 1.6s ease-in-out infinite; }
+
+        @keyframes gp-pulse {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.08); }
+          100% { transform: scale(1); }
+        }
+
+        .word-search-sidebar [role="tabpanel"] {
           background: transparent;
           animation: slideDown 300ms ease-out;
         }
@@ -381,33 +1360,207 @@ export function WordSearchSidebar() {
             transform: translateY(0);
           }
         }
+
+        .word-search-sidebar .sidebar-generate-wrap {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 0.3rem;
+          flex-shrink: 0;
+          width: 3.5rem;
+        }
+
+        .word-search-sidebar .sidebar-generate-btn {
+          flex: 0;
+          width: 3.5rem;
+          min-height: 3.5rem;
+          height: auto;
+          min-width: auto;
+          padding: 0.4rem 0;
+          border-radius: 0.5rem;
+          font-weight: 500;
+          transition: all 200ms ease-out;
+          border: 2px solid var(--gp-blue, #1a5a8c);
+          background: var(--gp-blue, #1a5a8c);
+          color: #ffffff;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex-direction: column;
+          cursor: pointer;
+        }
+
+        .word-search-sidebar .sidebar-generate-btn svg {
+          display: block;
+          margin: 0 auto;
+          color: #ffffff;
+          stroke: #ffffff;
+          transition: transform 260ms cubic-bezier(.2,.9,.2,1), opacity 180ms ease;
+          transform-origin: center center;
+        }
+
+        .word-search-sidebar .sidebar-generate-btn:hover:not(:disabled) svg {
+          transform: scale(1.03);
+        }
+
+        .word-search-sidebar .sidebar-generate-btn:hover:not(:disabled) {
+          background: var(--gp-blue-dark, #144a75);
+          border-color: var(--gp-blue-dark, #144a75);
+          box-shadow: 0 4px 12px rgba(26, 90, 140, 0.25);
+          transform: translateY(-1px);
+        }
+
+        .word-search-sidebar .sidebar-generate-btn:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
+          background: #94a3b8;
+          border-color: #94a3b8;
+        }
+
+        .word-search-sidebar .sidebar-generate-btn--pulse {
+          animation: sidebar-generate-pulse 1.4s ease-in-out infinite;
+        }
+
+        @keyframes sidebar-generate-pulse {
+          0%, 100% {
+            transform: scale(1);
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+          }
+          50% {
+            transform: scale(1.1);
+            box-shadow: 0 6px 16px rgba(26, 90, 140, 0.35);
+          }
+        }
+
+        .word-search-sidebar .sidebar-generate-caption {
+          margin: 0;
+          padding: 0;
+          font-size: 13px;
+          font-weight: 600;
+          line-height: 1.35;
+          letter-spacing: 0;
+          text-align: center;
+          color: #64748b;
+          max-width: 4rem;
+        }
+
+        .word-search-sidebar .direction-toggle {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 100%;
+          height: 2.5rem;
+          min-height: 2.5rem !important;
+          min-width: 0 !important;
+          padding: 0 !important;
+          border-radius: 0.5rem;
+          border: 2px solid #e2e8f0;
+          background: #ffffff !important;
+          color: #0f172a !important;
+          box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+          transition: all 200ms ease-out;
+          cursor: pointer;
+        }
+
+        .word-search-sidebar .direction-toggle:hover:not(.direction-toggle--active) {
+          border-color: #cbd5e1;
+          background: #f8fafc !important;
+        }
+
+        .word-search-sidebar .direction-toggle--active {
+          border-color: var(--gp-blue, #1a5a8c) !important;
+          background: linear-gradient(
+            180deg,
+            var(--gp-blue-light, #2276b4) 0%,
+            var(--gp-blue, #1a5a8c) 100%
+          ) !important;
+          color: #ffffff !important;
+          box-shadow:
+            0 0 0 2px rgba(34, 118, 180, 0.2),
+            0 0 16px rgba(34, 118, 180, 0.55),
+            0 2px 6px rgba(26, 90, 140, 0.35);
+        }
+
+        .word-search-sidebar .direction-toggle--active:hover {
+          box-shadow:
+            0 0 0 2px rgba(34, 118, 180, 0.3),
+            0 0 20px rgba(34, 118, 180, 0.65),
+            0 2px 8px rgba(26, 90, 140, 0.4);
+        }
+
+        .word-search-sidebar .direction-toggle svg {
+          width: 1.25rem;
+          height: 1.25rem;
+          stroke-width: 2.25;
+        }
+
+        .word-search-sidebar .direction-toggle--active svg {
+          color: #ffffff;
+          stroke: #ffffff;
+          filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.35));
+        }
+
+        .word-search-sidebar .direction-toggle:not(.direction-toggle--active) svg {
+          color: #0f172a;
+          stroke: #0f172a;
+        }
       `}</style>
 
-      <Tabs defaultValue="book" className="w-full flex-1">
-        <TabsList className="w-full grid grid-cols-5 bg-transparent">
-          <TabsTrigger value="book" title="Book" className="transition-all duration-200">
-            <Book className="w-4 h-4" />
+      {moduleIsWordSearch ? (
+      <Tabs defaultValue="book" orientation="vertical" className="w-full flex-1 flex min-h-0" onValueChange={handleTabChange}>
+        <TabsList className="flex h-auto flex-col w-24 gap-3 bg-transparent shrink-0">
+          <TabsTrigger value="book" title="Book" className="transition-all duration-200" onPointerDown={(e) => handleTriggerPointerDown(e, 'book')}>
+            <Book className="w-6 h-6" />
           </TabsTrigger>
-          <TabsTrigger value="words" title="Words" className="transition-all duration-200">
-            <List className="w-4 h-4" />
+          <TabsTrigger value="design" title="Design" className="transition-all duration-200" onPointerDown={(e) => handleTriggerPointerDown(e, 'design')}>
+            <Type className="w-6 h-6" />
           </TabsTrigger>
-          <TabsTrigger value="design" title="Design" className="transition-all duration-200">
-            <Type className="w-4 h-4" />
+          <TabsTrigger value="words" title="Words" className="transition-all duration-200" onPointerDown={(e) => handleTriggerPointerDown(e, 'words')}>
+            <List className="w-6 h-6" />
           </TabsTrigger>
-          <TabsTrigger value="colors" title="Colors" className="transition-all duration-200">
-            <Palette className="w-4 h-4" />
+          <TabsTrigger value="puzzle" title="Puzzle" className="transition-all duration-200" onPointerDown={(e) => handleTriggerPointerDown(e, 'puzzle')}>
+            <Grid3X3 className="w-6 h-6" />
           </TabsTrigger>
-          <TabsTrigger value="puzzle" title="Puzzle" className="transition-all duration-200">
-            <Grid3X3 className="w-4 h-4" />
+          <TabsTrigger value="colors" title="Colors" className="transition-all duration-200" onPointerDown={(e) => handleTriggerPointerDown(e, 'colors')}>
+            <Palette className="w-6 h-6" />
           </TabsTrigger>
+          <div className="sidebar-generate-wrap">
+            <button
+              type="button"
+              className={cn(
+                'sidebar-generate-btn',
+                shouldPulseGenerate && 'sidebar-generate-btn--pulse'
+              )}
+              onClick={handleGeneratePuzzles}
+              disabled={isGenerateLocked || isGeneratingPuzzles}
+              title={
+                isGenerateLocked
+                  ? 'Add a word list to enable puzzle generation'
+                  : generatePuzzlesLabel
+              }
+              aria-label={
+                isGenerateLocked
+                  ? 'Add a word list to enable puzzle generation'
+                  : generatePuzzlesLabel
+              }
+            >
+              {activeDocumentHasPuzzles ? (
+                <RefreshCw className={cn('w-5 h-5', isGeneratingPuzzles && 'animate-spin')} />
+              ) : (
+                <Zap className="w-5 h-5" />
+              )}
+            </button>
+            <p className="sidebar-generate-caption">{generatePuzzlesLabel}</p>
+          </div>
         </TabsList>
 
         {/* ==================== PUZZLE SETTINGS ==================== */}
-        <TabsContent value="puzzle" className="p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2">
+        <TabsContent value="puzzle" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', collapsed && 'hidden')}>
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <h3 className="font-semibold text-gray-900 dark:text-white">Puzzle Settings</h3>
-              <Button variant="outline" size="sm" onClick={handleSave} className="transition-all duration-200 border-gray-300 dark:border-slate-600" style={{borderColor: `#7D8183`}}>
+              <Button variant="outline" size="sm" onClick={handleSave} className="transition-all duration-200 border-gray-300 dark:border-slate-600">
                 <Save className="w-4 h-4 mr-2" />Save
               </Button>
             </div>
@@ -467,20 +1620,20 @@ export function WordSearchSidebar() {
             <div className="space-y-3">
               <Label className="text-sm font-medium">Word Directions</Label>
               <div className="grid grid-cols-4 gap-2">
-                <DirectionCheckbox label="Right" checked={core.allowRight} onCheckedChange={(v) => updateCore({ allowRight: v })} />
-                <DirectionCheckbox label="Left" checked={core.allowLeft} onCheckedChange={(v) => updateCore({ allowLeft: v })} />
-                <DirectionCheckbox label="Down" checked={core.allowDown} onCheckedChange={(v) => updateCore({ allowDown: v })} />
-                <DirectionCheckbox label="Up" checked={core.allowUp} onCheckedChange={(v) => updateCore({ allowUp: v })} />
-                <DirectionCheckbox label="Diag Down" checked={core.allowDiagonalDown} onCheckedChange={(v) => updateCore({ allowDiagonalDown: v })} />
-                <DirectionCheckbox label="Diag Up" checked={core.allowDiagonalUp} onCheckedChange={(v) => updateCore({ allowDiagonalUp: v })} />
-                <DirectionCheckbox label="Diag Down Rev" checked={core.allowDiagonalDownReverse} onCheckedChange={(v) => updateCore({ allowDiagonalDownReverse: v })} />
-                <DirectionCheckbox label="Diag Up Rev" checked={core.allowDiagonalUpReverse} onCheckedChange={(v) => updateCore({ allowDiagonalUpReverse: v })} />
+                <DirectionToggle label="Right" icon={ArrowRight} checked={core.allowRight} onCheckedChange={(v) => updateCore({ allowRight: v })} />
+                <DirectionToggle label="Left" icon={ArrowLeft} checked={core.allowLeft} onCheckedChange={(v) => updateCore({ allowLeft: v })} />
+                <DirectionToggle label="Down" icon={ArrowDown} checked={core.allowDown} onCheckedChange={(v) => updateCore({ allowDown: v })} />
+                <DirectionToggle label="Up" icon={ArrowUp} checked={core.allowUp} onCheckedChange={(v) => updateCore({ allowUp: v })} />
+                <DirectionToggle label="Diagonal down" icon={ArrowDownRight} checked={core.allowDiagonalDown} onCheckedChange={(v) => updateCore({ allowDiagonalDown: v })} />
+                <DirectionToggle label="Diagonal up" icon={ArrowUpRight} checked={core.allowDiagonalUp} onCheckedChange={(v) => updateCore({ allowDiagonalUp: v })} />
+                <DirectionToggle label="Diagonal down reverse" icon={ArrowUpLeft} checked={core.allowDiagonalDownReverse} onCheckedChange={(v) => updateCore({ allowDiagonalDownReverse: v })} />
+                <DirectionToggle label="Diagonal up reverse" icon={ArrowDownLeft} checked={core.allowDiagonalUpReverse} onCheckedChange={(v) => updateCore({ allowDiagonalUpReverse: v })} />
               </div>
             </div>
 
-            {/* Grid Options */}
+            {/* Puzzle Grid Border */}
             <div className="space-y-3">
-              <Label className="text-sm font-medium">Grid Options</Label>
+              <Label className="text-sm font-medium">Puzzle Grid Border</Label>
               <div className="space-y-2">
                 <CheckboxItem label="No Box Around Puzzle" checked={core.noBoxAroundPuzzle} onCheckedChange={(v) => updateCore({ noBoxAroundPuzzle: v })} />
                 <SliderField
@@ -489,6 +1642,58 @@ export function WordSearchSidebar() {
                   onValueChange={(v) => updateCore({ borderStrokeThickness: v })}
                   min={1}
                   max={10}
+                  step={1}
+                  format="px"
+                />
+                <SliderField
+                  label="Border Corner Radius"
+                  value={core.borderCornerRadius}
+                  onValueChange={(v) => updateCore({ borderCornerRadius: v })}
+                  min={0}
+                  max={40}
+                  step={1}
+                  format="px"
+                />
+                <SliderField
+                  label="Border Padding"
+                  value={core.gridBorderPadding}
+                  onValueChange={(v) => updateCore({ gridBorderPadding: v })}
+                  min={0}
+                  max={40}
+                  step={1}
+                  format="px"
+                />
+              </div>
+            </div>
+
+            {/* Solution Grid Border */}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">Solution Grid Border</Label>
+              <div className="space-y-2">
+                <SliderField
+                  label="Border Stroke Thickness"
+                  value={core.solutionBorderStrokeThickness ?? core.borderStrokeThickness}
+                  onValueChange={(v) => updateCore({ solutionBorderStrokeThickness: v })}
+                  min={1}
+                  max={10}
+                  step={1}
+                  format="px"
+                />
+                <SliderField
+                  label="Border Corner Radius"
+                  value={core.solutionBorderCornerRadius ?? core.borderCornerRadius}
+                  onValueChange={(v) => updateCore({ solutionBorderCornerRadius: v })}
+                  min={0}
+                  max={40}
+                  step={1}
+                  format="px"
+                />
+                <SliderField
+                  label="Border Padding"
+                  value={core.solutionGridBorderPadding}
+                  onValueChange={(v) => updateCore({ solutionGridBorderPadding: v })}
+                  min={0}
+                  max={40}
                   step={1}
                   format="px"
                 />
@@ -562,7 +1767,7 @@ export function WordSearchSidebar() {
         </TabsContent>
 
         {/* ==================== DESIGN SETTINGS ==================== */}
-        <TabsContent value="design" className="p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2">
+        <TabsContent value="design" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', collapsed && 'hidden')}>
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <h3 className="font-semibold text-gray-900">Design Settings</h3>
@@ -574,23 +1779,23 @@ export function WordSearchSidebar() {
             {/* Title Options */}
             <div className="space-y-3">
               <Label className="text-sm font-medium">Title</Label>
-              <Select 
-                value={typography.selectTitleOption} 
+              <Select
+                value={typography.selectTitleOption}
                 onValueChange={(value) => {
                   const updates: any = { selectTitleOption: value as any };
-                  
+
                   // When switching to "one-custom-title", extract only the first line
                   if (value === 'one-custom-title' && typography.titleText) {
                     const firstLine = typography.titleText.split('\n')[0] || 'Word Search';
                     updates.titleText = firstLine;
                   }
-                  
+
                   // When switching to "custom", keep multiline text as-is
                   // When switching to "none", clear the title text
                   if (value === 'none') {
                     updates.titleText = '';
                   }
-                  
+
                   updateTypography(updates);
                 }}
               >
@@ -606,7 +1811,13 @@ export function WordSearchSidebar() {
                 <div className="space-y-2">
                   <Input
                     value={typography.titleText}
-                    onChange={(e) => updateTypography({ titleText: e.target.value })}
+                    onChange={(e) => {
+                      const inputValue = e.target.value;
+                      updateTypography({ titleText: inputValue });
+                      if (wordList.aiTheme !== inputValue) {
+                        updateWordListSettings({ aiTheme: inputValue });
+                      }
+                    }}
                     placeholder="Enter the master title for all puzzles..."
                   />
                   <p className="text-xs text-gray-500">This title will be used for all puzzle pages.</p>
@@ -617,11 +1828,22 @@ export function WordSearchSidebar() {
                 <div className="space-y-2">
                   <Textarea
                     value={typography.titleText}
-                    onChange={(e) => updateTypography({ titleText: e.target.value })}
+                    onChange={(e) => {
+                      const inputValue = e.target.value;
+                      updateTypography({ titleText: inputValue });
+                      if (wordList.aiTheme !== inputValue) {
+                        updateWordListSettings({ aiTheme: inputValue });
+                      }
+                    }}
                     placeholder="Enter one title per line..."
                     className="h-28"
                   />
                   <p className="text-xs text-gray-500">Enter one title per line. The first line is for Puzzle 1, the second for Puzzle 2, etc.</p>
+                  {missingCustomTitles > 0 && (
+                    <p className="text-sm font-medium text-rose-700">
+                      {missingCustomTitles} more needed
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -640,23 +1862,99 @@ export function WordSearchSidebar() {
                 </div>
               )}
 
-              {/* Fun Facts / Quotes Section */}
-              <div className="space-y-2 pt-2 border-t">
-                <div className="flex items-center space-x-2">
-                  <Checkbox id="includeFunFacts" checked={typography.includeFunFacts} onCheckedChange={(checked) => updateTypography({ includeFunFacts: checked === true })} />
-                  <Label htmlFor="includeFunFacts" className="text-sm font-medium">Add Fun Facts / Quotes</Label>
+              <div className="space-y-3 pt-2 border-t">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="page-number-enabled"
+                    checked={pageNumber.enabled}
+                    onCheckedChange={(checked) => updatePageNumber({ enabled: !!checked })}
+                  />
+                  <Label htmlFor="page-number-enabled" className="text-sm font-medium cursor-pointer select-none">
+                    Page Number
+                  </Label>
                 </div>
 
-                {typography.includeFunFacts && (
-                  <>
-                    <Textarea
-                      value={typography.funFactsText}
-                      onChange={(e) => updateTypography({ funFactsText: e.target.value })}
-                      placeholder="Enter one fun fact or quote per line..."
-                      className="h-28"
+                {pageNumber.enabled && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs text-gray-500">Start numbering from</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          value={pageNumber.startNumberingFrom}
+                          onChange={(e) =>
+                            updatePageNumber({ startNumberingFrom: Number(e.target.value) || 1 })
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-gray-500">Start at page</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          value={pageNumber.startAtPage}
+                          onChange={(e) =>
+                            updatePageNumber({ startAtPage: Number(e.target.value) || 1 })
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-xs text-gray-500">Position</Label>
+                      <Select
+                        value={pageNumber.position}
+                        onValueChange={(value) =>
+                          updatePageNumber({ position: value as PageNumberSettings['position'] })
+                        }
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="bottom-center">Bottom centre</SelectItem>
+                          <SelectItem value="bottom-left">Bottom left</SelectItem>
+                          <SelectItem value="bottom-right">Bottom right</SelectItem>
+                          <SelectItem value="alternating">Alternating (even left, odd right)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <SliderField
+                        label="Bottom offset"
+                        value={pageNumber.bottomOffsetPx}
+                        onValueChange={(v) => updatePageNumber({ bottomOffsetPx: v })}
+                        min={0}
+                        max={80}
+                        step={1}
+                        format="px"
+                      />
+                      <SliderField
+                        label="Side offset"
+                        value={pageNumber.sideOffsetPx}
+                        onValueChange={(v) => updatePageNumber({ sideOffsetPx: v })}
+                        min={0}
+                        max={80}
+                        step={1}
+                        format="px"
+                        disabled={pageNumber.position === 'bottom-center'}
+                      />
+                    </div>
+
+                    <PageNumberShapeEditor
+                      shape={pageNumber.shape}
+                      textColor={pageNumber.textColor}
+                      fontFamily={pageNumber.fontFamily}
+                      fontSize={pageNumber.fontSize}
+                      fontOptions={PUBLISHING_FONTS}
+                      onShapeChange={(patch) =>
+                        updatePageNumber({ shape: { ...pageNumber.shape, ...patch } })
+                      }
+                      onTextColorChange={(v) => updatePageNumber({ textColor: v })}
+                      onFontFamilyChange={(v) => updatePageNumber({ fontFamily: v })}
+                      onFontSizeChange={(v) => updatePageNumber({ fontSize: v })}
                     />
-                    <p className="text-xs text-gray-500">Enter one fun fact or quote per line. Each line appears under the corresponding puzzle (Line 1 under Puzzle 1, Line 2 under Puzzle 2, etc.)</p>
-                  </>
+                  </div>
                 )}
               </div>
             </div>
@@ -698,6 +1996,16 @@ export function WordSearchSidebar() {
                   format="px"
                   disabled={!typography.includeFunFacts}
                 />
+                <SliderField
+                  label="Subtitle Box Margin"
+                  value={typography.subtitleBoxMargin}
+                  onValueChange={(v) => updateTypography({ subtitleBoxMargin: v })}
+                  min={0}
+                  max={100}
+                  step={1}
+                  format="pt"
+                  disabled={!typography.includeFunFacts}
+                />
               </div>
             </div>
 
@@ -737,26 +2045,6 @@ export function WordSearchSidebar() {
                   disabled={!typography.includeFunFacts}
                 />
                 <SliderField
-                  label="Title to Puzzle"
-                  value={typography.spaceBetweenTitleAndPuzzle}
-                  onValueChange={(v) => updateTypography({ spaceBetweenTitleAndPuzzle: v })}
-                  min={0}
-                  max={100}
-                  step={1}
-                  format="px"
-                  disabled={typography.includeFunFacts}
-                />
-                <SliderField
-                  label="Subtitle to Puzzle"
-                  value={typography.subtitleToPuzzleGap}
-                  onValueChange={(v) => updateTypography({ subtitleToPuzzleGap: v })}
-                  min={0}
-                  max={100}
-                  step={1}
-                  format="px"
-                  disabled={!typography.includeFunFacts}
-                />
-                <SliderField
                   label="Puzzle to Word List"
                   value={typography.spaceBetweenPuzzleAndWordList}
                   onValueChange={(v) => updateTypography({ spaceBetweenPuzzleAndWordList: v })}
@@ -783,16 +2071,25 @@ export function WordSearchSidebar() {
                   format="px"
                 />
                 <SliderField
-                  label="Page Margin"
+                  label="Solution to Solution"
+                  value={solutionToSolutionGap}
+                  onValueChange={setSolutionToSolutionGap}
+                  min={6}
+                  max={80}
+                  step={1}
+                  format="px"
+                />
+                <SliderField
+                  label="Solution Page Margin"
                   value={pageMargin}
                   onValueChange={setPageMargin}
-                  min={10}
-                  max={100}
+                  min={70}
+                  max={200}
                   step={5}
                   format="px"
                 />
               </div>
-              <p className="text-xs text-gray-500">Page Margin controls distance from page edges (KDP safe zone).</p>
+              <p className="text-xs text-gray-500">Solution Page Margin controls distance from solution page edges only (KDP safe zone).</p>
             </div>
 
             {/* Answer Page Fonts */}
@@ -816,10 +2113,6 @@ export function WordSearchSidebar() {
             <div className="space-y-3">
               <Label className="text-sm font-medium">Answer Page Title</Label>
               <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
-                <div>
-                  <Label className="text-xs text-gray-500">Title Prefix</Label>
-                  <Input value={colors.answerPage.answerTitlePrefix} onChange={(e) => updateAnswerPageColors({ answerTitlePrefix: e.target.value })} placeholder="Solution" />
-                </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <Label className="text-xs text-gray-500">Font</Label>
@@ -839,17 +2132,6 @@ export function WordSearchSidebar() {
                     step={1}
                     format="px"
                   />
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Alignment</Label>
-                  <Select value={colors.answerPage.answerTitleAlignment} onValueChange={(value) => updateAnswerPageColors({ answerTitleAlignment: value as any })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="left">Left</SelectItem>
-                      <SelectItem value="center">Center</SelectItem>
-                      <SelectItem value="right">Right</SelectItem>
-                    </SelectContent>
-                  </Select>
                 </div>
 
                 {/* Solution Title Style */}
@@ -903,9 +2185,10 @@ export function WordSearchSidebar() {
         </TabsContent>
 
         {/* ==================== WORD LIST SETTINGS ==================== */}
-        <TabsContent 
-          value="words" 
-          className="p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2"
+        <TabsContent
+          value="words"
+          style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
+          className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', collapsed && 'hidden')}
           onKeyDown={(e) => {
             // Allow Enter key to work in textareas without triggering tab navigation
             if (e.key === 'Enter' && (e.target as HTMLElement)?.tagName === 'TEXTAREA') {
@@ -935,16 +2218,8 @@ export function WordSearchSidebar() {
               </p>
             </div>
 
-            {/* Visibility */}
-            <div className="flex items-center space-x-2">
-              <Checkbox id="hideWordList" checked={wordList.hideWordList} onCheckedChange={(checked) => updateWordListSettings({ hideWordList: checked === true })} />
-              <Label htmlFor="hideWordList" className="text-sm font-normal">Hide Word List</Label>
-            </div>
-
-            {!wordList.hideWordList && (
-              <>
-                {/* Word Source */}
-                <div className="space-y-3">
+            {/* Word Source */}
+            <div className="space-y-3">
                   <Label className="text-sm font-medium">Word Source</Label>
                   <Select value={wordList.selectWordListOption} onValueChange={(value) => updateWordListSettings({ selectWordListOption: value as any })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -957,14 +2232,25 @@ export function WordSearchSidebar() {
 
                 {/* AI Generation */}
                 {wordList.selectWordListOption === 'ai' && (
-                  <div className="space-y-3 p-3 rounded-lg border" style={{background: `rgba(34, 118, 180, 0.08)`, borderColor: `rgba(34, 118, 180, 0.2)`}}>
+                  <div className="space-y-3 p-3 rounded-lg border" style={{ background: `rgba(34, 118, 180, 0.08)` }}>
                     <div className="flex items-center gap-2">
-                      <Sparkles className="w-4 h-4" style={{color: `#2276B4`}} />
-                      <Label className="text-sm font-medium" style={{color: `#2276B4`}}>AI Word Generation</Label>
+                      <Sparkles className="w-4 h-4" style={{ color: `#404040` }} />
+                      <Label className="text-sm font-medium" style={{ color: `#404040` }}>AI Word Generation</Label>
                     </div>
                     <div>
-                      <Label className="text-xs text-gray-500">Theme</Label>
-                      <Textarea value={wordList.aiTheme} onChange={(e) => updateWordListSettings({ aiTheme: e.target.value })} placeholder="Animals, Space, Food..." className="h-20" />
+                      <Label className="text-xs text-gray-500">Themes (one per line)</Label>
+                      <Textarea
+                        value={wordList.aiTheme}
+                        onChange={(e) => {
+                          const inputValue = e.target.value;
+                          updateWordListSettings({ aiTheme: inputValue });
+                          if (typography.titleText !== inputValue || typography.selectTitleOption !== 'custom') {
+                            updateTypography({ selectTitleOption: 'custom', titleText: inputValue });
+                          }
+                        }}
+                        placeholder="Animals\nSpace\nFood..."
+                        className="h-20"
+                      />
                     </div>
                     <div className="grid grid-cols-3 gap-3">
                       <div>
@@ -990,20 +2276,91 @@ export function WordSearchSidebar() {
                         value={wordList.aiMaxWordLength}
                         onValueChange={(v) => updateWordListSettings({ aiMaxWordLength: v })}
                         min={3}
-                        max={15}
+                        max={gridMaxWordLength}
                         step={1}
                       />
                     </div>
+
+                    {/* Generate Words Button */}
+                    <Button
+                      onClick={handleGenerateWordsFromAI}
+                      disabled={computeThemeValidation.isDisabled}
+                      className="w-full cursor-pointer inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2 w-full"
+                      style={{
+                        background: computeThemeValidation.isDisabled ? '#d1d5db' : '#2276b4',
+                        color: 'white',
+                      }}
+                    >
+                      <Zap className="w-4 h-4 mr-2" />
+                      Generate Words with AI
+                    </Button>
+
+                    {/* SPEC 1: Inline theme validation error display directly under the button */}
+                    {themeError && (
+                      <p style={{ color: themeError === "Ready" ? "green" : "red", fontSize: "12px", marginTop: "4px" }}>
+                        {themeError}
+                      </p>
+                    )}
+
+                    {/* Error message: show download prompt when Chrome extension API is missing */}
+                    {showExtensionMissingPrompt && (
+                      (() => {
+                        const genPuzzleExtensionUrl = 'https://chromewebstore.google.com/detail/genpuzzle/pkokhbpdkolfhcbbghmopfcfbiamioie';
+                        return (
+                          <div className="p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+                            <div>GenPuzzle Chrome extension not detected. Install the extension to use AI word generation.</div>
+                            <div className="mt-2">
+                              <Button onClick={() => window.open(genPuzzleExtensionUrl, '_blank')} variant="outline">
+                                Download GenPuzzle Extension
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })()
+                    )}
+                    {generationError && (
+                      (() => {
+                        const missingExtension = typeof generationError === 'string' && generationError.includes('Chrome extension API not available');
+                        const genPuzzleExtensionUrl = 'https://chromewebstore.google.com/detail/genpuzzle/pkokhbpdkolfhcbbghmopfcfbiamioie';
+
+                        if (missingExtension) {
+                          return (
+                            <div className="p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+                              <div>Failed to generate words: Chrome extension API not available. Make sure the extension is installed.</div>
+                              <div className="mt-2">
+                                <Button onClick={() => window.open(genPuzzleExtensionUrl, '_blank')} variant="outline">
+                                  Download GenPuzzle Extension
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="p-2 bg-[var(--gp-grey-100)] border border-[var(--gp-grey-200)] rounded text-xs text-[var(--gp-black)]">
+                            <strong>Error:</strong> {generationError}
+                          </div>
+                        );
+                      })()
+                    )}
+
+                    {/* Success message */}
+                    {generatedWordsData && generatedWordsData.words && (
+                      <div className="p-2 bg-green-50 border border-green-200 rounded text-xs text-green-700">
+                        <strong>✓ Success!</strong> Generated {generatedWordsData.words.reduce((total: number, item: any) => total + (item.words?.length || 0), 0)} words
+                      </div>
+                    )}
                   </div>
                 )}
 
                 {/* Manual Word Input */}
                 {wordList.selectWordListOption === 'manual' && (
                   <>
-                    <WordListTextarea 
-                      value={titleWords.words.join('\n')} 
+                    <WordListTextarea
+                      value={titleWords.words.join('\n')}
                       onChange={(value) => {
-                        const words = value.split('\n').map(w => w.trim()).filter(w => w);
+                        // REQUIREMENT 4: Parse both horizontal and vertical formats
+                        const words = parseWordListFromBothFormats(value);
                         setTitleWords({ ...titleWords, words });
                       }}
                     />
@@ -1012,10 +2369,32 @@ export function WordSearchSidebar() {
                         Enter one word per line. {wordCount} words {wordCount >= requiredWords ? (
                           <span className="text-green-600 flex items-center gap-1 inline"><CheckCircle className="w-3 h-3" /> Ready</span>
                         ) : (
-                          <span className="text-red-500 flex items-center gap-1 inline"><AlertCircle className="w-3 h-3" /> Need {requiredWords - wordCount} more</span>
+                          <span className="text-[var(--gp-blue)] flex items-center gap-1 inline"><AlertCircle className="w-3 h-3" /> Need {requiredWords - wordCount} more</span>
                         )}
                       </p>
                     </div>
+
+                    {/* Fun Facts / Quotes Section 1 */}
+                    <div className="space-y-2 pt-2 border-t">
+                      <div className="flex items-center space-x-2">
+                        <Checkbox id="includeFunFacts1" checked={typography.includeFunFacts} onCheckedChange={(checked) => updateTypography({ includeFunFacts: checked === true })} />
+                        <Label htmlFor="includeFunFacts1" className="text-sm font-medium">Add Fun Facts / Quotes</Label>
+                      </div>
+
+                      {typography.includeFunFacts && (
+                        <>
+                          <Textarea
+                            value={typography.funFactsText}
+                            onChange={(e) => updateTypography({ funFactsText: e.target.value })}
+                            placeholder="Enter one fun fact or quote per line..."
+                            className="h-28"
+                          />
+                          <p className="text-xs text-gray-500">Enter one fun fact or quote per line. Each line appears under the corresponding puzzle (Line 1 under Puzzle 1, Line 2 under Puzzle 2, etc.)</p>
+                        </>
+                      )}
+                    </div>
+
+
                   </>
                 )}
 
@@ -1107,13 +2486,11 @@ export function WordSearchSidebar() {
                     <CheckboxItem label="Add Checkboxes" checked={wordList.addCheckboxes} onCheckedChange={(v) => updateWordListSettings({ addCheckboxes: v })} />
                   </div>
                 </div>
-              </>
-            )}
           </div>
         </TabsContent>
 
         {/* ==================== COLOR SETTINGS ==================== */}
-        <TabsContent value="colors" className="p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2">
+        <TabsContent value="colors" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', collapsed && 'hidden')}>
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <h3 className="font-semibold text-gray-900">Color Settings</h3>
@@ -1122,13 +2499,106 @@ export function WordSearchSidebar() {
               </Button>
             </div>
 
+            {/* Global Page Frame (puzzle + solution pages) */}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">Page Frame</Label>
+              <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="page-frame-enabled"
+                    checked={pageFrame.enabled}
+                    onCheckedChange={(checked) => updatePageFrameSettings({ enabled: !!checked })}
+                  />
+                  <Label htmlFor="page-frame-enabled" className="text-xs font-medium cursor-pointer select-none">
+                    Enable page container frame
+                  </Label>
+                </div>
+                {pageFrame.enabled && (
+                  <>
+                    <SliderField
+                      label="Frame Margin"
+                      value={pageFrame.marginSizeIn}
+                      onValueChange={(v) => updatePageFrameSettings({ marginSizeIn: v })}
+                      min={0.5}
+                      max={1}
+                      step={0.0625}
+                      format="inches"
+                    />
+                    <SliderField
+                      label="Corner Radius"
+                      value={pageFrame.cornerRadiusPx}
+                      onValueChange={(v) => updatePageFrameSettings({ cornerRadiusPx: v })}
+                      min={0}
+                      max={40}
+                      step={1}
+                      format="px"
+                    />
+                    <SliderField
+                      label="Stroke Thickness"
+                      value={pageFrame.strokeThicknessPx}
+                      onValueChange={(v) => updatePageFrameSettings({ strokeThicknessPx: v })}
+                      min={1}
+                      max={10}
+                      step={1}
+                      format="px"
+                    />
+                    <ColorInput
+                      label="Frame Border Color"
+                      value={pageFrame.borderColor}
+                      onChange={(v) => updatePageFrameSettings({ borderColor: v })}
+                    />
+                    <p className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight">
+                      Outer boundary around the full puzzle/solution page. Grid border is configured separately under Puzzle → Grid Options.
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+
             {/* Puzzle Page Colors */}
             <div className="space-y-3">
               <Label className="text-sm font-medium">Puzzle Page</Label>
               <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
                 <ColorInput label="Background" value={colors.puzzlePage.backgroundColor} onChange={(v) => updatePuzzlePageColors({ backgroundColor: v })} />
+                <BackgroundImageControl
+                  label="Puzzle Page"
+                  image={colors.puzzlePage.backgroundImage}
+                  opacity={colors.puzzlePage.backgroundImageOpacity}
+                  fit={colors.puzzlePage.backgroundImageFit}
+                  onImageChange={(base64) => updatePuzzlePageColors({ backgroundImage: base64 })}
+                  onOpacityChange={(v) => updatePuzzlePageColors({ backgroundImageOpacity: v })}
+                  onFitChange={(v) => updatePuzzlePageColors({ backgroundImageFit: v })}
+                  onRemove={() => updatePuzzlePageColors({ backgroundImage: undefined })}
+                />
                 <ColorInput label="Title" value={colors.puzzlePage.titleColor} onChange={(v) => updatePuzzlePageColors({ titleColor: v })} />
                 <ColorInput label="Subtitle" value={colors.puzzlePage.subtitleColor} onChange={(v) => updatePuzzlePageColors({ subtitleColor: v })} disabled={!typography.includeFunFacts} />
+
+                <div className="space-y-3 pt-2 border-t border-gray-200 dark:border-slate-700">
+                  <Label className="text-sm font-medium">Header Assembly</Label>
+                  <div className="space-y-3 p-3 bg-gray-50 rounded-lg dark:bg-slate-900/40">
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="header-assembly-enabled"
+                        checked={headerAssembly.enabled}
+                        onCheckedChange={(checked) => updateHeaderAssembly({ enabled: !!checked })}
+                      />
+                      <Label htmlFor="header-assembly-enabled" className="text-xs font-medium cursor-pointer select-none">
+                        Enable modular header (mix &amp; match shapes)
+                      </Label>
+                    </div>
+                    {headerAssembly.enabled && (
+                      <HeaderAssemblyEditor
+                        value={headerAssembly}
+                        onChange={updateHeaderAssembly}
+                      />
+                    )}
+                    <p className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight">
+                      Pick shapes independently for Number, Title, and Subtitle. Text colors use Title/Subtitle above.
+                      Header sits inside the page frame margin + 0.25&quot; inner pad.
+                    </p>
+                  </div>
+                </div>
+
                 <ColorInput label="Box" value={colors.puzzlePage.boxColor} onChange={(v) => updatePuzzlePageColors({ boxColor: v })} />
                 <ColorInput label="Puzzle Letters" value={colors.puzzlePage.puzzleColor} onChange={(v) => updatePuzzlePageColors({ puzzleColor: v })} />
                 <ColorInput label="Word List" value={colors.puzzlePage.wordListColor} onChange={(v) => updatePuzzlePageColors({ wordListColor: v })} />
@@ -1140,22 +2610,41 @@ export function WordSearchSidebar() {
               <Label className="text-sm font-medium">Answer Page</Label>
               <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
                 <ColorInput label="Background" value={colors.answerPage.backgroundColor} onChange={(v) => updateAnswerPageColors({ backgroundColor: v })} />
+                <BackgroundImageControl
+                  label="Answer Page"
+                  image={colors.answerPage.backgroundImage}
+                  opacity={colors.answerPage.backgroundImageOpacity}
+                  fit={colors.answerPage.backgroundImageFit}
+                  onImageChange={(base64) => updateAnswerPageColors({ backgroundImage: base64 })}
+                  onOpacityChange={(v) => updateAnswerPageColors({ backgroundImageOpacity: v })}
+                  onFitChange={(v) => updateAnswerPageColors({ backgroundImageFit: v })}
+                  onRemove={() => updateAnswerPageColors({ backgroundImage: undefined })}
+                />
                 <ColorInput label="Title" value={colors.answerPage.titleColor} onChange={(v) => updateAnswerPageColors({ titleColor: v })} />
                 <ColorInput label="Box" value={colors.answerPage.boxColor} onChange={(v) => updateAnswerPageColors({ boxColor: v })} />
               </div>
             </div>
 
-            <Button variant="outline" onClick={() => updateColors({
-              puzzlePage: { backgroundColor: '#ffffff', titleColor: '#1f2937', subtitleColor: '#6b7280', boxColor: '#1f2937', puzzleColor: '#1f2937', wordListTitleColor: '#374151', wordListColor: '#4b5563' },
-              answerPage: { backgroundColor: '#ffffff', titleColor: '#1f2937', boxColor: '#1f2937', lettersInSolutionColor: '#22c55e', lettersNotInSolutionColor: '#d1d5db', solutionStrokeThickness: 12, solutionStrokePadding: 2, solutionFrameColor: '#22c55e', solutionFrameStyle: 'rounded', solutionFrameRadius: 6, solutionHighlightAlpha: 30, onlyHighlightWordListWords: false, answerTitlePrefix: 'Solution', answerTitleFontFamily: 'Inter', answerTitleFontSize: 20, answerTitleAlignment: 'center', showAnswerNumber: true }
-            })} className="w-full hover:bg-gradient-to-r hover:from-gray-100 hover:to-gray-200 dark:hover:from-slate-700 dark:hover:to-slate-600 transition-all duration-200 border-gray-300 dark:border-slate-600">
+            <Button variant="outline" onClick={() => {
+              updateWordSearchSettings(applyPageFrameSettingsPatch(wordSearchSettings, {
+                enabled: true,
+                marginSizeIn: 0.56,
+                cornerRadiusPx: 4,
+                strokeThicknessPx: 2,
+                borderColor: '#1f2937',
+              }));
+              updateColors({
+              puzzlePage: { backgroundColor: '#ffffff', titleColor: '#1f2937', subtitleColor: '#6b7280', boxColor: '#1f2937', puzzleColor: '#1f2937', wordListTitleColor: '#374151', wordListColor: '#4b5563', backgroundImage: undefined, backgroundImageOpacity: 100, backgroundImageFit: 'cover', backgroundImageFrameEnabled: true, backgroundImageFrameMargin: 0.56 },
+              answerPage: { backgroundColor: '#ffffff', titleColor: '#1f2937', boxColor: '#1f2937', lettersInSolutionColor: '#22c55e', lettersNotInSolutionColor: '#d1d5db', solutionStrokeThickness: 12, solutionStrokePadding: 2, solutionFrameColor: '#22c55e', solutionFrameStyle: 'rounded', solutionFrameRadius: 6, solutionHighlightAlpha: 30, answerTitlePrefix: 'Solution', answerTitleFontFamily: 'Arial', answerTitleFontSize: 20, answerTitleAlignment: 'center', showAnswerNumber: true, backgroundImage: undefined, backgroundImageOpacity: 100, backgroundImageFit: 'cover', backgroundImageFrameEnabled: true, backgroundImageFrameMargin: 0.56 }
+            });
+            }} className="w-full hover:bg-gradient-to-r hover:from-gray-100 hover:to-gray-200 dark:hover:from-slate-700 dark:hover:to-slate-600 transition-all duration-200 border-gray-300 dark:border-slate-600">
               Reset Colors
             </Button>
           </div>
         </TabsContent>
 
         {/* ==================== BOOK SETTINGS ==================== */}
-        <TabsContent value="book" className="p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2">
+        <TabsContent value="book" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', collapsed && 'hidden')}>
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <h3 className="font-semibold text-gray-900">Book Settings</h3>
@@ -1211,26 +2700,34 @@ export function WordSearchSidebar() {
                 <div className="pl-6 grid grid-cols-2 gap-3">
                   <div>
                     <Label className="text-xs text-gray-500">Width ({bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'})</Label>
-                    <DecimalInput 
-                      value={bookCanvas.measurementUnits === 'CENTIMETERS' ? (bookCanvas.customWidth || 0) * 2.54 : (bookCanvas.customWidth || 0)} 
+                    <DecimalInput
+                      value={bookCanvas.measurementUnits === 'CENTIMETERS' ? (bookCanvas.customWidth || 0) * 2.54 : (bookCanvas.customWidth || 0)}
                       onChange={(val) => {
                         const inchesValue = bookCanvas.measurementUnits === 'CENTIMETERS' ? val / 2.54 : val;
                         updateBookCanvas({ customWidth: inchesValue });
-                      }} 
-                      placeholder={bookCanvas.measurementUnits === 'CENTIMETERS' ? '21.59' : '8.5'} 
-                      min={0} 
+                      }}
+                      onCommit={(val) => {
+                        const inchesValue = bookCanvas.measurementUnits === 'CENTIMETERS' ? val / 2.54 : val;
+                        applyCustomTrimLayout(inchesValue, bookCanvas.customHeight || 11);
+                      }}
+                      placeholder={bookCanvas.measurementUnits === 'CENTIMETERS' ? '21.59' : '8.5'}
+                      min={0}
                     />
                   </div>
                   <div>
                     <Label className="text-xs text-gray-500">Length ({bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'})</Label>
-                    <DecimalInput 
-                      value={bookCanvas.measurementUnits === 'CENTIMETERS' ? (bookCanvas.customHeight || 0) * 2.54 : (bookCanvas.customHeight || 0)} 
+                    <DecimalInput
+                      value={bookCanvas.measurementUnits === 'CENTIMETERS' ? (bookCanvas.customHeight || 0) * 2.54 : (bookCanvas.customHeight || 0)}
                       onChange={(val) => {
                         const inchesValue = bookCanvas.measurementUnits === 'CENTIMETERS' ? val / 2.54 : val;
                         updateBookCanvas({ customHeight: inchesValue });
-                      }} 
-                      placeholder={bookCanvas.measurementUnits === 'CENTIMETERS' ? '27.94' : '11'} 
-                      min={0} 
+                      }}
+                      onCommit={(val) => {
+                        const inchesValue = bookCanvas.measurementUnits === 'CENTIMETERS' ? val / 2.54 : val;
+                        applyCustomTrimLayout(bookCanvas.customWidth || 8.5, inchesValue);
+                      }}
+                      placeholder={bookCanvas.measurementUnits === 'CENTIMETERS' ? '27.94' : '11'}
+                      min={0}
                     />
                   </div>
                 </div>
@@ -1243,28 +2740,12 @@ export function WordSearchSidebar() {
                 <Label className="text-sm font-medium">Trim Size</Label>
                 <Select value={bookCanvas.trimSizePreset || ''} onValueChange={(value) => {
                   if (value) {
-                    // Set dimensions based on preset (in inches)
-                    const presets: { [key: string]: { width: number; height: number } } = {
-                      '5X8IN': { width: 5, height: 8 },
-                      '5_25X8IN': { width: 5.25, height: 8 },
-                      '5_5X8_5IN': { width: 5.5, height: 8.5 },
-                      '6X9IN': { width: 6, height: 9 },
-                      '5_06X7_81IN': { width: 5.06, height: 7.81 },
-                      '6_14X9_21IN': { width: 6.14, height: 9.21 },
-                      '6_69X9_61IN': { width: 6.69, height: 9.61 },
-                      '7X10IN': { width: 7, height: 10 },
-                      '7_44X9_69IN': { width: 7.44, height: 9.69 },
-                      '7_5X9_25IN': { width: 7.5, height: 9.25 },
-                      '8X10IN': { width: 8, height: 10 },
-                      '8_5X11IN': { width: 8.5, height: 11 },
-                      '8_27X11_69IN': { width: 8.27, height: 11.69 },
-                      '8_25X6IN': { width: 8.25, height: 6 },
-                      '8_25X8_25IN': { width: 8.25, height: 8.25 },
-                      '8_5X8_5IN': { width: 8.5, height: 8.5 },
-                    };
-                    const dims = presets[value];
+                    const dims = TRIM_SIZE_PRESETS[value as TrimSizePresetId];
                     if (dims) {
-                      updateBookCanvas({ trimSizePreset: value, customWidth: dims.width, customHeight: dims.height });
+                      applyTrimSizeLayoutChange(
+                        { trimSizePreset: value as TrimSizePresetId, useCustomTrim: false },
+                        dims
+                      );
                     }
                   }
                 }}>
@@ -1305,6 +2786,86 @@ export function WordSearchSidebar() {
           </div>
         </TabsContent>
       </Tabs>
+      ) : (
+        <div className={cn('flex-1 min-h-0 p-4 space-y-4 overflow-y-auto', collapsed && 'hidden')}>
+          <h3 className="font-semibold text-gray-900 dark:text-white">{activeDocumentPage?.name ?? 'Text Page'}</h3>
+          {activeTextSettings && (
+            <>
+              <div className="space-y-2">
+                <Label>Page Title</Label>
+                <Input
+                  value={activeTextSettings.title}
+                  onChange={(e) => updateActiveTextModuleSettings({ title: e.target.value })}
+                />
+              </div>
+              {activeDocumentPage?.moduleType === 'table-of-contents' && (
+                <div className="space-y-2">
+                  <Label>TOC Mode</Label>
+                  <Select
+                    value={activeTextSettings.tocMode ?? 'auto'}
+                    onValueChange={(value) =>
+                      updateActiveTextModuleSettings({ tocMode: value as 'auto' | 'manual' })
+                    }
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auto">Auto (from book map)</SelectItem>
+                      <SelectItem value="manual">Manual</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <div className="space-y-2">
+                <Label>Font</Label>
+                <Select
+                  value={activeTextSettings.fontFamily}
+                  onValueChange={(value) => updateActiveTextModuleSettings({ fontFamily: value })}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {PUBLISHING_FONTS.map((font) => (
+                      <SelectItem key={font} value={font}>{font}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <SliderField
+                label="Font Size"
+                value={activeTextSettings.fontSize}
+                onValueChange={(v) => updateActiveTextModuleSettings({ fontSize: v })}
+                min={10}
+                max={48}
+                step={1}
+              />
+              <div className="space-y-2">
+                <Label>Alignment</Label>
+                <Select
+                  value={activeTextSettings.alignment}
+                  onValueChange={(value) =>
+                    updateActiveTextModuleSettings({ alignment: value as 'left' | 'center' | 'right' })
+                  }
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="left">Left</SelectItem>
+                    <SelectItem value="center">Center</SelectItem>
+                    <SelectItem value="right">Right</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Content</Label>
+                <Textarea
+                  value={activeTextSettings.content}
+                  onChange={(e) => updateActiveTextModuleSettings({ content: e.target.value })}
+                  rows={12}
+                  placeholder="Enter page content..."
+                />
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1320,29 +2881,34 @@ function CheckboxItem({
   onCheckedChange: (checked: boolean) => void;
 }) {
   return (
-    <div className="flex items-center space-x-2">
-      <Checkbox id={label} checked={checked} onCheckedChange={onCheckedChange} />
-      <Label htmlFor={label} className="text-sm font-normal cursor-pointer">{label}</Label>
-    </div>
+    <Checkbox label={label} checked={checked} onCheckedChange={onCheckedChange} />
   );
 }
 
-function DirectionCheckbox({
+function DirectionToggle({
   label,
+  icon: Icon,
   checked,
   onCheckedChange,
 }: {
   label: string;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
 }) {
   return (
     <button
+      type="button"
+      aria-label={label}
+      aria-pressed={checked}
+      title={checked ? `${label} (enabled)` : `${label} (disabled)`}
       onClick={() => onCheckedChange(!checked)}
-      className={`px-2 py-1.5 text-xs font-semibold rounded-lg border-2 transition-all duration-200 transform hover:scale-110 active:scale-95 ${checked ? 'text-white' : 'bg-white dark:bg-slate-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-slate-600 dark:hover:bg-slate-600'}`}
-      style={checked ? {background: `linear-gradient(to right, #2276B4, #1a5a8c)`, borderColor: `#2276B4`, boxShadow: `0 0 12px rgba(34, 118, 180, 0.3)`} : {borderColor: `#7D8183`}}
+      className={cn(
+        'direction-toggle',
+        checked ? 'direction-toggle--active' : 'direction-toggle--inactive'
+      )}
     >
-      {label}
+      <Icon strokeWidth={2.25} />
     </button>
   );
 }

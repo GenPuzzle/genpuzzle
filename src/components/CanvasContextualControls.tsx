@@ -1,0 +1,1165 @@
+'use client';
+
+import React, { useCallback } from 'react';
+import { Trash2, Upload, X } from 'lucide-react';
+import { PUBLISHING_FONTS } from '@/lib/publishing-fonts';
+import { SliderField } from '@/components/ui/slider-field';
+import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Button } from '@/components/ui/button';
+import { HeaderAssemblyEditor } from '@/components/header/HeaderAssemblyEditor';
+import { normalizeHeaderAssemblySettings } from '@/lib/header-assembly/types';
+import { PageNumberShapeEditor } from '@/components/page-number/PageNumberShapeEditor';
+import { normalizePageNumberSettings } from '@/lib/page-number/settings';
+import { applyPageFrameSettingsPatch, resolvePageFrameSettings } from '@/lib/page-frame-settings';
+import type { PageNumberSettings, TitleWordsSettings, WordSearchSettings } from '@/lib/puzzles/types';
+import { CanvasPageWordListEditor } from '@/components/CanvasPageWordListEditor';
+import { patchWordSearchSettings } from '@/lib/canvas-edit-session';
+import type { CanvasEditTarget } from '@/lib/canvas-edit-session';
+import './canvas-contextual-controls.css';
+
+export type { CanvasEditTarget } from '@/lib/canvas-edit-session';
+
+interface CanvasContextualControlsProps {
+  target: CanvasEditTarget;
+  pageKind: 'puzzle' | 'solution';
+  pageIndex: number;
+  draftSettings: WordSearchSettings;
+  onDraftSettingsChange: (updater: (prev: WordSearchSettings) => WordSearchSettings) => void;
+  draftPuzzleGridScale: number;
+  onDraftPuzzleGridScaleChange: (scale: number) => void;
+  draftTitleWords: TitleWordsSettings;
+  onDraftTitleWordsChange: (titleWords: TitleWordsSettings) => void;
+  onCommitPage: () => void;
+  onCommitAll: () => void;
+  onCancel: () => void;
+  hasUnsavedChanges: boolean;
+  canApplyToAllPages: boolean;
+}
+
+function CanvasEditActions({
+  onCommitPage,
+  onCommitAll,
+  onCancel,
+  showPageOnly,
+  hasUnsavedChanges,
+  canApplyToAllPages,
+}: {
+  onCommitPage: () => void;
+  onCommitAll: () => void;
+  onCancel: () => void;
+  showPageOnly: boolean;
+  hasUnsavedChanges: boolean;
+  canApplyToAllPages: boolean;
+}) {
+  return (
+    <div className="canvas-context-panel__footer">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="canvas-context-panel__footer-btn canvas-context-panel__footer-btn--cancel"
+        onClick={onCancel}
+      >
+        Cancel
+      </Button>
+      {showPageOnly && (
+        <Button
+          type="button"
+          size="sm"
+          className="canvas-context-panel__footer-btn canvas-context-panel__footer-btn--page"
+          onClick={onCommitPage}
+          disabled={!hasUnsavedChanges}
+        >
+          Update this page only
+        </Button>
+      )}
+      <Button
+        type="button"
+        size="sm"
+        className="canvas-context-panel__footer-btn canvas-context-panel__footer-btn--all"
+        onClick={onCommitAll}
+        disabled={!hasUnsavedChanges || !canApplyToAllPages}
+      >
+        Apply to all pages
+      </Button>
+    </div>
+  );
+}
+
+function MiniColorInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <Label className="text-xs text-gray-500 shrink-0">{label}</Label>
+      <input
+        type="color"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-7 w-10 cursor-pointer rounded border border-gray-200"
+      />
+    </div>
+  );
+}
+
+function CanvasBackgroundImageControl({
+  label,
+  image,
+  opacity,
+  fit,
+  onImageChange,
+  onOpacityChange,
+  onFitChange,
+  onRemove,
+}: {
+  label: string;
+  image?: string;
+  opacity?: number;
+  fit?: 'cover' | 'contain' | 'stretch';
+  onImageChange: (base64: string) => void;
+  onOpacityChange: (value: number) => void;
+  onFitChange: (value: 'cover' | 'contain' | 'stretch') => void;
+  onRemove: () => void;
+}) {
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === 'string') {
+        onImageChange(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  return (
+    <div className="canvas-context-panel__card space-y-3">
+      <div className="flex items-center justify-between">
+        <Label className="text-xs font-semibold">{label} Background</Label>
+        {image && (
+          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={onRemove}>
+            <Trash2 className="w-3 h-3 mr-1" />
+            Remove
+          </Button>
+        )}
+      </div>
+      {!image ? (
+        <>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            accept="image/png, image/jpeg, image/jpg"
+            className="hidden"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            className="w-full h-14 border-dashed text-xs"
+          >
+            <Upload className="w-4 h-4 mr-1" />
+            Upload Image
+          </Button>
+        </>
+      ) : (
+        <div className="grid grid-cols-2 gap-2">
+          <Select value={fit || 'cover'} onValueChange={(val) => onFitChange(val as 'cover' | 'contain' | 'stretch')}>
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="cover">Cover</SelectItem>
+              <SelectItem value="contain">Contain</SelectItem>
+              <SelectItem value="stretch">Stretch</SelectItem>
+            </SelectContent>
+          </Select>
+          <SliderField
+            label="Opacity"
+            value={opacity ?? 100}
+            onValueChange={onOpacityChange}
+            min={0}
+            max={100}
+            step={1}
+            format="percent"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function CanvasContextualControls({
+  target,
+  pageKind,
+  pageIndex,
+  draftSettings: wordSearchSettings,
+  onDraftSettingsChange,
+  draftPuzzleGridScale: puzzleGridScale,
+  onDraftPuzzleGridScaleChange: setPuzzleGridScale,
+  draftTitleWords,
+  onDraftTitleWordsChange,
+  onCommitPage,
+  onCommitAll,
+  onCancel,
+  hasUnsavedChanges,
+  canApplyToAllPages,
+}: CanvasContextualControlsProps) {
+  const applySettingsUpdate = useCallback(
+    (updates: Partial<WordSearchSettings>) => {
+      onDraftSettingsChange((prev) => patchWordSearchSettings(prev, updates));
+    },
+    [onDraftSettingsChange]
+  );
+
+  const { bookCanvas: _bc, core, typography, wordList, colors } = wordSearchSettings;
+
+  const updateCore = (updates: Partial<typeof core>) => {
+    applySettingsUpdate({ core: { ...core, ...updates } });
+  };
+
+  const updateTypography = (updates: Partial<typeof typography>) => {
+    applySettingsUpdate({ typography: { ...typography, ...updates } });
+  };
+
+  const updateWordListSettings = (updates: Partial<typeof wordList>) => {
+    applySettingsUpdate({ wordList: { ...wordList, ...updates } });
+  };
+
+  const updatePuzzlePageColors = (updates: Partial<typeof colors.puzzlePage>) => {
+    applySettingsUpdate({
+      colors: {
+        ...colors,
+        puzzlePage: { ...colors.puzzlePage, ...updates },
+      },
+    });
+  };
+
+  const updateAnswerPageColors = (updates: Partial<typeof colors.answerPage>) => {
+    applySettingsUpdate({
+      colors: {
+        ...colors,
+        answerPage: { ...colors.answerPage, ...updates },
+      },
+    });
+  };
+
+  const pageNumber = normalizePageNumberSettings(typography.pageNumber);
+  const updatePageNumber = (updates: Partial<PageNumberSettings>) => {
+    updateTypography({
+      pageNumber: normalizePageNumberSettings({ ...pageNumber, ...updates }),
+    });
+  };
+
+  const pageFrame = resolvePageFrameSettings(wordSearchSettings);
+  const updatePageFrameSettings = (updates: Parameters<typeof applyPageFrameSettingsPatch>[1]) => {
+    const patched = applyPageFrameSettingsPatch(wordSearchSettings, updates);
+    applySettingsUpdate({ pageFrameSettings: patched.pageFrameSettings });
+  };
+
+  const headerAssembly = normalizeHeaderAssemblySettings(colors.puzzlePage.headerAssembly);
+
+  const updateHeaderAssembly = (updates: Partial<typeof headerAssembly>) => {
+    updatePuzzlePageColors({
+      headerAssembly: normalizeHeaderAssemblySettings({ ...headerAssembly, ...updates }),
+    });
+  };
+
+  const showPuzzleWordList = pageKind === 'puzzle' && (target === 'grid' || target === 'word-list');
+
+  const titles: Record<CanvasEditTarget, string> = {
+    title: 'Title & Header',
+    grid: 'Puzzle Grid',
+    'word-list': 'Word List',
+    'page-number': 'Page Number',
+    'page-background': 'Page Frame & Background',
+    'solution-title': 'Solution Title',
+    'solution-grid': 'Solution Grid',
+  };
+
+  return (
+    <div className="canvas-context-panel" role="dialog" aria-label={titles[target]}>
+      <div className="canvas-context-panel__header">
+        <span className="canvas-context-panel__title">{titles[target]}</span>
+        <button type="button" className="canvas-context-panel__close" onClick={onCancel} aria-label="Cancel">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <div className="canvas-context-panel__body">
+        {target === 'title' && (
+          <div className="canvas-context-panel__section">
+            <Label className="canvas-context-panel__section-label">Title Font</Label>
+            <Select
+              value={typography.puzzleTitleFontFamily}
+              onValueChange={(value) => updateTypography({ puzzleTitleFontFamily: value })}
+            >
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PUBLISHING_FONTS.map((font) => (
+                  <SelectItem key={font} value={font} style={{ fontFamily: font }}>
+                    {font}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {headerAssembly.enabled && (
+              <Select
+                value={headerAssembly.number.fontFamily || typography.puzzleTitleFontFamily}
+                onValueChange={(value) =>
+                  updateHeaderAssembly({
+                    number: { ...headerAssembly.number, fontFamily: value },
+                  })
+                }
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="Number font" />
+                </SelectTrigger>
+                <SelectContent>
+                  {PUBLISHING_FONTS.map((font) => (
+                    <SelectItem key={`number-${font}`} value={font} style={{ fontFamily: font }}>
+                      Number: {font}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+
+            <div className="canvas-context-panel__grid-2">
+              <SliderField
+                label="Title Size"
+                value={typography.puzzleTitleFontSize}
+                onValueChange={(v) => updateTypography({ puzzleTitleFontSize: v })}
+                min={8}
+                max={50}
+                step={1}
+                format="px"
+              />
+              <SliderField
+                label="Subtitle Size"
+                value={typography.subtitleFontSize}
+                onValueChange={(v) => updateTypography({ subtitleFontSize: v })}
+                min={10}
+                max={24}
+                step={1}
+                format="px"
+                disabled={!typography.includeFunFacts}
+              />
+              {headerAssembly.enabled && (
+                <SliderField
+                  label="Number Size"
+                  value={
+                    headerAssembly.number.fontSizePt > 0
+                      ? headerAssembly.number.fontSizePt
+                      : typography.puzzleTitleFontSize
+                  }
+                  onValueChange={(v) =>
+                    updateHeaderAssembly({
+                      number: { ...headerAssembly.number, fontSizePt: v },
+                    })
+                  }
+                  min={8}
+                  max={50}
+                  step={1}
+                  format="px"
+                />
+              )}
+            </div>
+
+            <Label className="canvas-context-panel__section-label">Colors</Label>
+            <div className="canvas-context-panel__grid-2">
+              <MiniColorInput
+                label="Title color"
+                value={colors.puzzlePage.titleColor || '#1f2937'}
+                onChange={(v) => updatePuzzlePageColors({ titleColor: v })}
+              />
+              <MiniColorInput
+                label="Subtitle color"
+                value={colors.puzzlePage.subtitleColor || '#6b7280'}
+                onChange={(v) => updatePuzzlePageColors({ subtitleColor: v })}
+              />
+              {headerAssembly.enabled && (
+                <MiniColorInput
+                  label="Number color"
+                  value={headerAssembly.number.textColor}
+                  onChange={(v) =>
+                    updateHeaderAssembly({
+                      number: { ...headerAssembly.number, textColor: v },
+                    })
+                  }
+                />
+              )}
+            </div>
+
+            <Label className="canvas-context-panel__section-label">Subtitle Font</Label>
+            <Select
+              value={typography.subtitleFontFamily || typography.puzzleTitleFontFamily}
+              onValueChange={(value) => updateTypography({ subtitleFontFamily: value })}
+              disabled={!typography.includeFunFacts && !headerAssembly.enabled}
+            >
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PUBLISHING_FONTS.map((font) => (
+                  <SelectItem key={font} value={font} style={{ fontFamily: font }}>
+                    {font}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Label className="canvas-context-panel__section-label">Title Spacing</Label>
+            <div className="canvas-context-panel__grid-2">
+              <SliderField
+                label="Title Start At"
+                value={typography.titleStartAt}
+                onValueChange={(v) => updateTypography({ titleStartAt: v })}
+                min={0}
+                max={200}
+                step={1}
+                format="px"
+              />
+              <SliderField
+                label="Title to Subtitle"
+                value={typography.subtitleToTitleGap}
+                onValueChange={(v) => updateTypography({ subtitleToTitleGap: v })}
+                min={0}
+                max={100}
+                step={1}
+                format="px"
+                disabled={!typography.includeFunFacts && !headerAssembly.enabled}
+              />
+              <SliderField
+                label="Subtitle Box Margin"
+                value={typography.subtitleBoxMargin}
+                onValueChange={(v) => updateTypography({ subtitleBoxMargin: v })}
+                min={0}
+                max={100}
+                step={1}
+                format="pt"
+                disabled={!typography.includeFunFacts}
+              />
+            </div>
+
+            <Label className="canvas-context-panel__section-label">Header Assembly</Label>
+            <div className="canvas-context-panel__card">
+              <div className="flex items-center gap-2 mb-2">
+                <Checkbox
+                  id="canvas-header-assembly"
+                  checked={headerAssembly.enabled}
+                  onCheckedChange={(checked) => updateHeaderAssembly({ enabled: checked === true })}
+                />
+                <Label htmlFor="canvas-header-assembly" className="text-xs font-normal cursor-pointer">
+                  Modular header shapes
+                </Label>
+              </div>
+              {headerAssembly.enabled && (
+                <HeaderAssemblyEditor value={headerAssembly} onChange={updateHeaderAssembly} />
+              )}
+            </div>
+          </div>
+        )}
+
+        {target === 'grid' && (
+          <div className="canvas-context-panel__section">
+            <Label className="canvas-context-panel__section-label">Grid Scale</Label>
+            <div className="flex items-center gap-1 border border-slate-200 rounded-md mb-3">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2"
+                onClick={() => setPuzzleGridScale(Math.max(puzzleGridScale - 10, 50))}
+              >
+                −
+              </Button>
+              <span className="flex-1 text-center text-xs font-semibold">{puzzleGridScale}%</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2"
+                onClick={() => setPuzzleGridScale(Math.min(puzzleGridScale + 10, 200))}
+              >
+                +
+              </Button>
+            </div>
+
+            <Label className="canvas-context-panel__section-label">Grid Size</Label>
+            <div className="canvas-context-panel__grid-2">
+              <SliderField
+                label="Letters Across"
+                value={core.lettersAcross}
+                onValueChange={(v) => updateCore({ lettersAcross: v })}
+                min={8}
+                max={30}
+                step={1}
+              />
+              <SliderField
+                label="Letters Down"
+                value={core.lettersDown}
+                onValueChange={(v) => updateCore({ lettersDown: v })}
+                min={8}
+                max={30}
+                step={1}
+              />
+            </div>
+
+            <Label className="canvas-context-panel__section-label">Grid Letters</Label>
+            <Select
+              value={typography.puzzleGridFontFamily}
+              onValueChange={(value) => updateTypography({ puzzleGridFontFamily: value })}
+            >
+              <SelectTrigger className="h-8 text-xs mb-2">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PUBLISHING_FONTS.map((font) => (
+                  <SelectItem key={font} value={font} style={{ fontFamily: font }}>
+                    {font}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="canvas-context-panel__grid-2">
+              <SliderField
+                label="Grid Font Size"
+                value={typography.puzzleGridFontSize}
+                onValueChange={(v) => updateTypography({ puzzleGridFontSize: v })}
+                min={8}
+                max={50}
+                step={1}
+                format="px"
+              />
+              <div>
+                <Label className="text-xs text-gray-500 mb-1 block">Letter Case</Label>
+                <Select
+                  value={typography.puzzleGridCase}
+                  onValueChange={(value) => updateTypography({ puzzleGridCase: value as 'upper' | 'lower' })}
+                >
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="upper">UPPERCASE</SelectItem>
+                    <SelectItem value="lower">lowercase</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <Label className="canvas-context-panel__section-label">Puzzle Grid Border</Label>
+            <div className="canvas-context-panel__grid-2">
+              <SliderField
+                label="Border Thickness"
+                value={core.borderStrokeThickness}
+                onValueChange={(v) => updateCore({ borderStrokeThickness: v })}
+                min={1}
+                max={10}
+                step={1}
+                format="px"
+              />
+              <SliderField
+                label="Corner Radius"
+                value={core.borderCornerRadius}
+                onValueChange={(v) => updateCore({ borderCornerRadius: v })}
+                min={0}
+                max={40}
+                step={1}
+                format="px"
+              />
+              <SliderField
+                label="Border Padding"
+                value={core.gridBorderPadding}
+                onValueChange={(v) => updateCore({ gridBorderPadding: v })}
+                min={0}
+                max={40}
+                step={1}
+                format="px"
+              />
+              <SliderField
+                label="Grid Lines"
+                value={core.gridLinesStrokeThickness}
+                onValueChange={(v) => updateCore({ gridLinesStrokeThickness: v })}
+                min={0}
+                max={4}
+                step={1}
+                format="px"
+              />
+            </div>
+
+            <Label className="canvas-context-panel__section-label">Spacing</Label>
+            <SliderField
+              label="Puzzle to Word List"
+              value={typography.spaceBetweenPuzzleAndWordList}
+              onValueChange={(v) => updateTypography({ spaceBetweenPuzzleAndWordList: v })}
+              min={0}
+              max={100}
+              step={1}
+              format="px"
+            />
+
+            {showPuzzleWordList && (
+              <CanvasPageWordListEditor
+                pageIndex={pageIndex}
+                draftTitleWords={draftTitleWords}
+                onDraftTitleWordsChange={onDraftTitleWordsChange}
+                draftWordListSettings={wordList}
+                onDraftWordListSettingsChange={(nextWordList) =>
+                  applySettingsUpdate({ wordList: nextWordList })
+                }
+              />
+            )}
+          </div>
+        )}
+
+        {target === 'word-list' && (
+          <div className="canvas-context-panel__section">
+            <Label className="canvas-context-panel__section-label">Formatting</Label>
+            <Select
+              value={wordList.wordListFontFamily}
+              onValueChange={(value) => updateWordListSettings({ wordListFontFamily: value })}
+            >
+              <SelectTrigger className="h-8 text-xs mb-2">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PUBLISHING_FONTS.map((font) => (
+                  <SelectItem key={font} value={font} style={{ fontFamily: font }}>
+                    {font}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="canvas-context-panel__grid-2">
+              <SliderField
+                label="Font Size"
+                value={wordList.wordListFontSize}
+                onValueChange={(v) => updateWordListSettings({ wordListFontSize: v })}
+                min={8}
+                max={50}
+                step={1}
+                format="px"
+              />
+              <div>
+                <Label className="text-xs text-gray-500 mb-1 block">Case</Label>
+                <Select
+                  value={wordList.wordListCase}
+                  onValueChange={(value) =>
+                    updateWordListSettings({ wordListCase: value as 'upper' | 'lower' | 'title' })
+                  }
+                >
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="upper">UPPERCASE</SelectItem>
+                    <SelectItem value="lower">lowercase</SelectItem>
+                    <SelectItem value="title">Title Case</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <Label className="canvas-context-panel__section-label">Layout</Label>
+            <div className="canvas-context-panel__grid-2">
+              <div>
+                <Label className="text-xs text-gray-500 mb-1 block">Direction</Label>
+                <Select
+                  value={wordList.wordListDirection}
+                  onValueChange={(value) =>
+                    updateWordListSettings({ wordListDirection: value as 'vertical' | 'horizontal' })
+                  }
+                >
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="vertical">Vertical</SelectItem>
+                    <SelectItem value="horizontal">Horizontal</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs text-gray-500 mb-1 block">Columns</Label>
+                <Select
+                  value={wordList.wordListColumns.toString()}
+                  onValueChange={(value) => updateWordListSettings({ wordListColumns: parseInt(value, 10) })}
+                >
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[1, 2, 3, 4].map((n) => (
+                      <SelectItem key={n} value={n.toString()}>
+                        {n} col{n > 1 ? 's' : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <SliderField
+                label="Space Horizontal"
+                value={wordList.wordSpacingHorizontal ?? 50}
+                onValueChange={(v) => updateWordListSettings({ wordSpacingHorizontal: v })}
+                min={0}
+                max={100}
+                step={1}
+                format="px"
+              />
+              <SliderField
+                label="Space Vertical"
+                value={wordList.wordSpacingVertical ?? 8}
+                onValueChange={(v) => updateWordListSettings({ wordSpacingVertical: v })}
+                min={0}
+                max={40}
+                step={1}
+                format="px"
+              />
+            </div>
+
+            <Label className="canvas-context-panel__section-label">Options</Label>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="canvas-checkboxes"
+                  checked={wordList.addCheckboxes}
+                  onCheckedChange={(checked) => updateWordListSettings({ addCheckboxes: checked === true })}
+                />
+                <Label htmlFor="canvas-checkboxes" className="text-xs font-normal cursor-pointer">
+                  Add checkboxes
+                </Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="canvas-no-alpha"
+                  checked={wordList.dontAlphabetize}
+                  onCheckedChange={(checked) => updateWordListSettings({ dontAlphabetize: checked === true })}
+                />
+                <Label htmlFor="canvas-no-alpha" className="text-xs font-normal cursor-pointer">
+                  Don&apos;t alphabetize
+                </Label>
+              </div>
+            </div>
+
+            {showPuzzleWordList && (
+              <CanvasPageWordListEditor
+                pageIndex={pageIndex}
+                draftTitleWords={draftTitleWords}
+                onDraftTitleWordsChange={onDraftTitleWordsChange}
+                draftWordListSettings={wordList}
+                onDraftWordListSettingsChange={(nextWordList) =>
+                  applySettingsUpdate({ wordList: nextWordList })
+                }
+              />
+            )}
+          </div>
+        )}
+
+        {target === 'page-number' && (
+          <div className="canvas-context-panel__section">
+            <div className="flex items-center gap-2 mb-2">
+              <Checkbox
+                id="canvas-page-number-enabled"
+                checked={pageNumber.enabled}
+                onCheckedChange={(checked) => updatePageNumber({ enabled: !!checked })}
+              />
+              <Label htmlFor="canvas-page-number-enabled" className="text-xs font-normal cursor-pointer">
+                Show page number
+              </Label>
+            </div>
+
+            {pageNumber.enabled && (
+              <>
+                <div className="canvas-context-panel__grid-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-gray-500">Start numbering from</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      className="h-8 text-xs"
+                      value={pageNumber.startNumberingFrom}
+                      onChange={(e) =>
+                        updatePageNumber({ startNumberingFrom: Number(e.target.value) || 1 })
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-gray-500">Start at page</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      className="h-8 text-xs"
+                      value={pageNumber.startAtPage}
+                      onChange={(e) => updatePageNumber({ startAtPage: Number(e.target.value) || 1 })}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <Label className="text-xs text-gray-500">Position</Label>
+                  <Select
+                    value={pageNumber.position}
+                    onValueChange={(value) =>
+                      updatePageNumber({ position: value as PageNumberSettings['position'] })
+                    }
+                  >
+                    <SelectTrigger className="h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="bottom-center">Bottom centre</SelectItem>
+                      <SelectItem value="bottom-left">Bottom left</SelectItem>
+                      <SelectItem value="bottom-right">Bottom right</SelectItem>
+                      <SelectItem value="alternating">Alternating</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="canvas-context-panel__grid-2">
+                  <SliderField
+                    label="Bottom offset"
+                    value={pageNumber.bottomOffsetPx}
+                    onValueChange={(v) => updatePageNumber({ bottomOffsetPx: v })}
+                    min={0}
+                    max={80}
+                    step={1}
+                    format="px"
+                  />
+                  <SliderField
+                    label="Side offset"
+                    value={pageNumber.sideOffsetPx}
+                    onValueChange={(v) => updatePageNumber({ sideOffsetPx: v })}
+                    min={0}
+                    max={80}
+                    step={1}
+                    format="px"
+                    disabled={pageNumber.position === 'bottom-center'}
+                  />
+                </div>
+
+                <PageNumberShapeEditor
+                  shape={pageNumber.shape}
+                  textColor={pageNumber.textColor}
+                  fontFamily={pageNumber.fontFamily}
+                  fontSize={pageNumber.fontSize}
+                  fontOptions={PUBLISHING_FONTS}
+                  onShapeChange={(patch) =>
+                    updatePageNumber({ shape: { ...pageNumber.shape, ...patch } })
+                  }
+                  onTextColorChange={(v) => updatePageNumber({ textColor: v })}
+                  onFontFamilyChange={(v) => updatePageNumber({ fontFamily: v })}
+                  onFontSizeChange={(v) => updatePageNumber({ fontSize: v })}
+                />
+              </>
+            )}
+          </div>
+        )}
+
+        {target === 'page-background' && (
+          <div className="canvas-context-panel__section">
+            <Label className="canvas-context-panel__section-label">Page Frame</Label>
+            <div className="canvas-context-panel__card space-y-3">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="canvas-page-frame-enabled"
+                  checked={pageFrame.enabled}
+                  onCheckedChange={(checked) => updatePageFrameSettings({ enabled: !!checked })}
+                />
+                <Label htmlFor="canvas-page-frame-enabled" className="text-xs font-normal cursor-pointer">
+                  Enable page container frame
+                </Label>
+              </div>
+              {pageFrame.enabled && (
+                <>
+                  <SliderField
+                    label="Frame Margin"
+                    value={pageFrame.marginSizeIn}
+                    onValueChange={(v) => updatePageFrameSettings({ marginSizeIn: v })}
+                    min={0.5}
+                    max={1}
+                    step={0.0625}
+                    format="inches"
+                  />
+                  <div className="canvas-context-panel__grid-2">
+                    <SliderField
+                      label="Corner Radius"
+                      value={pageFrame.cornerRadiusPx}
+                      onValueChange={(v) => updatePageFrameSettings({ cornerRadiusPx: v })}
+                      min={0}
+                      max={40}
+                      step={1}
+                      format="px"
+                    />
+                    <SliderField
+                      label="Stroke"
+                      value={pageFrame.strokeThicknessPx}
+                      onValueChange={(v) => updatePageFrameSettings({ strokeThicknessPx: v })}
+                      min={1}
+                      max={10}
+                      step={1}
+                      format="px"
+                    />
+                  </div>
+                  <MiniColorInput
+                    label="Frame color"
+                    value={pageFrame.borderColor}
+                    onChange={(v) => updatePageFrameSettings({ borderColor: v })}
+                  />
+                </>
+              )}
+            </div>
+
+            <Label className="canvas-context-panel__section-label">
+              {pageKind === 'solution' ? 'Solution Page' : 'Puzzle Page'}
+            </Label>
+            {pageKind === 'solution' ? (
+              <>
+                <MiniColorInput
+                  label="Background"
+                  value={colors.answerPage.backgroundColor || '#ffffff'}
+                  onChange={(v) => updateAnswerPageColors({ backgroundColor: v })}
+                />
+                <CanvasBackgroundImageControl
+                  label="Solution Page"
+                  image={colors.answerPage.backgroundImage}
+                  opacity={colors.answerPage.backgroundImageOpacity}
+                  fit={colors.answerPage.backgroundImageFit}
+                  onImageChange={(base64) => updateAnswerPageColors({ backgroundImage: base64 })}
+                  onOpacityChange={(v) => updateAnswerPageColors({ backgroundImageOpacity: v })}
+                  onFitChange={(v) => updateAnswerPageColors({ backgroundImageFit: v })}
+                  onRemove={() => updateAnswerPageColors({ backgroundImage: undefined })}
+                />
+              </>
+            ) : (
+              <>
+                <MiniColorInput
+                  label="Background"
+                  value={colors.puzzlePage.backgroundColor || '#ffffff'}
+                  onChange={(v) => updatePuzzlePageColors({ backgroundColor: v })}
+                />
+                <CanvasBackgroundImageControl
+                  label="Puzzle Page"
+                  image={colors.puzzlePage.backgroundImage}
+                  opacity={colors.puzzlePage.backgroundImageOpacity}
+                  fit={colors.puzzlePage.backgroundImageFit}
+                  onImageChange={(base64) => updatePuzzlePageColors({ backgroundImage: base64 })}
+                  onOpacityChange={(v) => updatePuzzlePageColors({ backgroundImageOpacity: v })}
+                  onFitChange={(v) => updatePuzzlePageColors({ backgroundImageFit: v })}
+                  onRemove={() => updatePuzzlePageColors({ backgroundImage: undefined })}
+                />
+              </>
+            )}
+          </div>
+        )}
+
+        {target === 'solution-title' && (
+          <div className="canvas-context-panel__section">
+            <Label className="canvas-context-panel__section-label">Title Font</Label>
+            <Select
+              value={colors.answerPage.answerTitleFontFamily || typography.puzzleTitleFontFamily}
+              onValueChange={(value) => updateAnswerPageColors({ answerTitleFontFamily: value })}
+            >
+              <SelectTrigger className="h-8 text-xs mb-2">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PUBLISHING_FONTS.map((font) => (
+                  <SelectItem key={font} value={font} style={{ fontFamily: font }}>
+                    {font}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="canvas-context-panel__grid-2">
+              <SliderField
+                label="Title Size"
+                value={colors.answerPage.answerTitleFontSize || 20}
+                onValueChange={(v) => updateAnswerPageColors({ answerTitleFontSize: v })}
+                min={8}
+                max={50}
+                step={1}
+                format="px"
+              />
+              <div>
+                <Label className="text-xs text-gray-500 mb-1 block">Alignment</Label>
+                <Select
+                  value={colors.answerPage.answerTitleAlignment || 'center'}
+                  onValueChange={(value) =>
+                    updateAnswerPageColors({
+                      answerTitleAlignment: value as 'left' | 'center' | 'right',
+                    })
+                  }
+                >
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="left">Left</SelectItem>
+                    <SelectItem value="center">Center</SelectItem>
+                    <SelectItem value="right">Right</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <MiniColorInput
+              label="Title color"
+              value={colors.answerPage.titleColor || '#000000'}
+              onChange={(v) => updateAnswerPageColors({ titleColor: v })}
+            />
+
+            <Label className="canvas-context-panel__section-label">Title Style</Label>
+            <Select
+              value={typography.solutionTitleStyle}
+              onValueChange={(value) => {
+                if (value === 'same_as_puzzle') {
+                  updateTypography({ solutionTitleStyle: value as 'same_as_puzzle' | 'custom', solutionNumberingStyle: 'none' });
+                } else {
+                  updateTypography({ solutionTitleStyle: value as 'same_as_puzzle' | 'custom' });
+                }
+              }}
+            >
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="same_as_puzzle">Same as Puzzle</SelectItem>
+                <SelectItem value="custom">Custom Title</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {typography.solutionTitleStyle === 'custom' && (
+              <>
+                <Input
+                  className="h-8 text-xs"
+                  value={typography.customSolutionTitle || ''}
+                  onChange={(e) => updateTypography({ customSolutionTitle: e.target.value })}
+                  placeholder="Custom solution title..."
+                />
+                <Select
+                  value={typography.solutionNumberingStyle}
+                  onValueChange={(value) =>
+                    updateTypography({ solutionNumberingStyle: value as 'none' | 'prefix' | 'suffix' })
+                  }
+                >
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No numbering</SelectItem>
+                    <SelectItem value="prefix">Prefix (1. Title)</SelectItem>
+                    <SelectItem value="suffix">Suffix (Title #1)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </>
+            )}
+          </div>
+        )}
+
+        {target === 'solution-grid' && (
+          <div className="canvas-context-panel__section">
+            <Label className="canvas-context-panel__section-label">Solution Marking</Label>
+            <MiniColorInput
+              label="Highlight color"
+              value={colors.answerPage.solutionFrameColor || '#22c55e'}
+              onChange={(v) => updateAnswerPageColors({ solutionFrameColor: v })}
+            />
+            <div className="canvas-context-panel__grid-2">
+              <SliderField
+                label="Stroke thickness"
+                value={colors.answerPage.solutionStrokeThickness || 12}
+                onValueChange={(v) => updateAnswerPageColors({ solutionStrokeThickness: v })}
+                min={1}
+                max={15}
+                step={1}
+                format="px"
+              />
+              <SliderField
+                label="Transparency"
+                value={colors.answerPage.solutionHighlightAlpha ?? 30}
+                onValueChange={(v) => updateAnswerPageColors({ solutionHighlightAlpha: v })}
+                min={0}
+                max={100}
+                step={1}
+                format="percent"
+              />
+            </div>
+
+            <Label className="canvas-context-panel__section-label">Solution Grid Border</Label>
+            <MiniColorInput
+              label="Border color"
+              value={colors.answerPage.boxColor || '#1f2937'}
+              onChange={(v) => updateAnswerPageColors({ boxColor: v })}
+            />
+            <div className="canvas-context-panel__grid-2">
+              <SliderField
+                label="Border thickness"
+                value={core.solutionBorderStrokeThickness ?? core.borderStrokeThickness}
+                onValueChange={(v) => updateCore({ solutionBorderStrokeThickness: v })}
+                min={1}
+                max={10}
+                step={1}
+                format="px"
+              />
+              <SliderField
+                label="Corner radius"
+                value={core.solutionBorderCornerRadius ?? core.borderCornerRadius}
+                onValueChange={(v) => updateCore({ solutionBorderCornerRadius: v })}
+                min={0}
+                max={40}
+                step={1}
+                format="px"
+              />
+              <SliderField
+                label="Border padding"
+                value={core.solutionGridBorderPadding}
+                onValueChange={(v) => updateCore({ solutionGridBorderPadding: v })}
+                min={0}
+                max={40}
+                step={1}
+                format="px"
+              />
+              <SliderField
+                label="Solution font size"
+                value={typography.answerGridFontSize}
+                onValueChange={(v) =>
+                  updateTypography({ answerGridFontSize: v, setFontSizeForAnswerPages: true })
+                }
+                min={8}
+                max={50}
+                step={1}
+                format="px"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      <CanvasEditActions
+        onCancel={onCancel}
+        onCommitPage={onCommitPage}
+        onCommitAll={onCommitAll}
+        showPageOnly
+        hasUnsavedChanges={hasUnsavedChanges}
+        canApplyToAllPages={canApplyToAllPages}
+      />
+    </div>
+  );
+}

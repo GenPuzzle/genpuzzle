@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "Puzzle Book Generator",
+  "version": "1.0.0",
+  "description": "Automate AI image generation and text scraping for puzzle creation directly from GenPuzzle",
+  "icons": {
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://gemini.google.com/*",
+    "http://localhost:*/*",
+    "http://127.0.0.1:*/*",
+    "https://*.puzzlertool.com/*"
+  ],
+  "externally_connectable": {
+    "matches": [
+      "http://localhost:*/*",
+      "http://127.0.0.1:*/*",
+      "https://puzzlertool.com/*",
+      "https://www.puzzlertool.com/*"
+    ]
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://gemini.google.com/*",
+        "https://flux-1-fill.replicate.com/*",
+        "https://huggingface.co/spaces/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "http://localhost:*/*",
+        "http://127.0.0.1:*/*"
+      ],
+      "js": [
+        "genpuzzle-content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}

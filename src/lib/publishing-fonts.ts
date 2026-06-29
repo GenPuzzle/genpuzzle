@@ -4,7 +4,7 @@
  */
 
 export const PUBLISHING_FONTS = [
-  'Inter',
+  'Arial',
   'Verdana',
   'Lora',
   'Courier New',
@@ -33,16 +33,7 @@ export interface PublishingFontConfig {
 }
 
 export const FONT_REGISTRY: Record<PublishingFont, PublishingFontConfig> = {
-  Inter: {
-    googleFamily: 'Inter',
-    regularWeight: 400,
-    boldWeight: 700,
-    ttfUrl: {
-      regular:
-        'https://fonts.gstatic.com/s/inter/v20/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuLyfMZg.ttf',
-      bold: 'https://fonts.gstatic.com/s/inter/v20/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuFuYMZg.ttf',
-    },
-  },
+  Arial: { windows: { regular: 'arial.ttf', bold: 'arialbd.ttf' } },
   Verdana: { windows: { regular: 'verdana.ttf', bold: 'verdanab.ttf' } },
   Lora: {
     googleFamily: 'Lora',
@@ -112,13 +103,14 @@ export const FONT_REGISTRY: Record<PublishingFont, PublishingFontConfig> = {
 /** Maps legacy / removed dropdown values to a publishing font. */
 const LEGACY_FONT_ALIASES: Record<string, PublishingFont> = {
   'Fredoka One': 'Fredoka',
-  Roboto: 'Inter',
-  'Open Sans': 'Inter',
-  Lato: 'Inter',
+  Roboto: 'Arial',
+  'Open Sans': 'Arial',
+  Lato: 'Arial',
   Poppins: 'Montserrat',
   'Comic Sans MS': 'Fredoka',
   Quicksand: 'Fredoka',
-  Nunito: 'Inter',
+  Nunito: 'Arial',
+  'Inter': 'Arial',
   Tahoma: 'Verdana',
   'Trebuchet MS': 'Verdana',
   Georgia: 'Lora',
@@ -130,9 +122,9 @@ export function isPublishingFont(fontFamily: string): fontFamily is PublishingFo
 }
 
 export function normalizeFontFamily(fontFamily: string): PublishingFont {
-  const trimmed = (fontFamily || 'Inter').trim();
+  const trimmed = (fontFamily || 'Arial').trim();
   if (isPublishingFont(trimmed)) return trimmed;
-  return LEGACY_FONT_ALIASES[trimmed] ?? 'Inter';
+  return LEGACY_FONT_ALIASES[trimmed] ?? 'Arial';
 }
 
 /** Whether UI/PDF should request the bold TTF variant. */
@@ -164,7 +156,6 @@ export function getEmbeddingWeight(fontFamily: string, bold: boolean): number {
 export const PUBLISHING_FONTS_GOOGLE_CSS_URL =
   'https://fonts.googleapis.com/css2?' +
   [
-    'family=Inter:wght@400;700',
     'family=Lora:wght@400;700',
     'family=Montserrat:wght@400;700',
     'family=Oswald:wght@400;700',

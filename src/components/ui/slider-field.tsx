@@ -5,7 +5,7 @@ import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { cn } from '@/lib/utils';
 
-export type SliderValueFormat = 'number' | 'px' | 'percent';
+export type SliderValueFormat = 'number' | 'px' | 'percent' | 'inches';
 
 function formatSliderValue(value: number, format: SliderValueFormat): string {
   switch (format) {
@@ -13,6 +13,8 @@ function formatSliderValue(value: number, format: SliderValueFormat): string {
       return `${value}px`;
     case 'percent':
       return `${value}%`;
+    case 'inches':
+      return `${value.toFixed(2)}"`;
     default:
       return String(value);
   }

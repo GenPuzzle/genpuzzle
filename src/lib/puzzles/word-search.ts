@@ -138,7 +138,8 @@ function fillEmptyCells(grid: string[][], language: string = 'English'): void {
 
 export function generateWordSearch(
   words: string[],
-  gridSize: number = 15,
+  lettersAcross: number = 15,
+  lettersDown: number = 15,
   directions: Direction[] = DIRECTIONS,
   language: string = 'English'
 ): WordSearchPuzzle {
@@ -158,6 +159,8 @@ export function generateWordSearch(
   // Clean and process words based on language
   let cleanWords: string[];
   
+  const maxWordLength = Math.max(lettersAcross, lettersDown);
+
   if (language === 'Arabic') {
     // For Arabic: convert to uppercase (Arabic doesn't have case), keep only Arabic chars
     cleanWords = words
@@ -167,7 +170,7 @@ export function generateWordSearch(
         cleanToDisplay.set(cleaned, w);
         return cleaned;
       })
-      .filter((w) => w.length > 1 && w.length <= gridSize)
+      .filter((w) => w.length > 1 && w.length <= maxWordLength)
       .sort((a, b) => b.length - a.length);
   } else {
     // For English and other languages: convert to uppercase, keep only A-Z for grid
@@ -179,14 +182,14 @@ export function generateWordSearch(
         cleanToDisplay.set(cleaned, trimmed);
         return cleaned;
       })
-      .filter((w) => w.length > 1 && w.length <= gridSize)
+      .filter((w) => w.length > 1 && w.length <= maxWordLength)
       .sort((a, b) => b.length - a.length);
   }
 
-  // Initialize empty grid
-  const grid: string[][] = Array(gridSize)
+  // Initialize rectangular grid
+  const grid: string[][] = Array(lettersDown)
     .fill(null)
-    .map(() => Array(gridSize).fill(''));
+    .map(() => Array(lettersAcross).fill(''));
 
   const placements: WordPlacement[] = [];
   const usedWords = new Set<string>();
