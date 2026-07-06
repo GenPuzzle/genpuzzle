@@ -186,7 +186,7 @@ export function AppFileMenu({ onShare, shareEnabled = false }: AppFileMenuProps)
           </DropdownMenuItem>
           <DropdownMenuItem onClick={handleSaveProject} disabled={!hasDocuments}>
             <Save className="h-4 w-4" />
-            Save project{GP_FILE_EXTENSION}
+            Save project
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem

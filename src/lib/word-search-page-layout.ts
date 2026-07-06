@@ -7,6 +7,7 @@ import {
   WordSearchPuzzle,
   WordSearchSettings,
   TitleWordsSettings,
+  DEFAULT_TITLE_START_AT,
 } from './puzzles/types';
 import {
   formatWords,
@@ -97,6 +98,7 @@ export interface UnifiedGridBlock {
   noBox: boolean;
   innerGridOpacity: number; // 0-100
   gridLinesThicknessPt: number;
+  gridLinesColor: string;
   /** Padding between outer frame and letters, in points */
   framePaddingPt: number;
 }
@@ -401,7 +403,7 @@ export function computeWordSearchPageLayout(
   const marginPt = getPageMarginInches(settings) * 72;
   const contentWidthPt = pageWidthPt - marginPt * 2;
 
-  const titleStartAtPt = (typography.titleStartAt !== undefined && typography.titleStartAt !== null) ? typography.titleStartAt : 20;
+  const titleStartAtPt = (typography.titleStartAt !== undefined && typography.titleStartAt !== null) ? typography.titleStartAt : DEFAULT_TITLE_START_AT;
   const spaceTitleToGridPt = (typography.spaceBetweenTitleAndPuzzle !== undefined && typography.spaceBetweenTitleAndPuzzle !== null) ? typography.spaceBetweenTitleAndPuzzle : 20;
   const spaceGridToWordListPt = typography.spaceBetweenPuzzleAndWordList ?? 30;
 
@@ -694,7 +696,8 @@ export function computeWordSearchPageLayout(
     borderThicknessPt: activeGridBorder.strokeThicknessPx,
     noBox: core.noBoxAroundPuzzle ?? false,
     innerGridOpacity: core.innerGridOpacity ?? 0,
-    gridLinesThicknessPt: core.gridLinesStrokeThickness || 1,
+    gridLinesThicknessPt: core.gridLinesStrokeThickness ?? 0,
+    gridLinesColor: pageColors.gridLinesColor || pageColors.boxColor || '#d1d5db',
     framePaddingPt: activeGridBorder.paddingPx / PT_TO_CSS_PX,
   };
 

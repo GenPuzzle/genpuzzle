@@ -108,6 +108,23 @@ export function fitGridLetterSizePdf(
   return Math.max(4, fitGridLetterSizeWithWidth(size, cellSizePt, width, fillRatio));
 }
 
+/** PDF drawText position from cell centre using the requested size (no cell clamp). */
+export function getPdfLetterDrawCoordsAtRequestedSize(
+  font: PDFFont,
+  letter: string,
+  requestedFontSizePt: number,
+  cell: GridCellRect
+): { x: number; y: number; size: number } {
+  const size = Math.max(1, requestedFontSizePt);
+  const textWidth = font.widthOfTextAtSize(letter, size);
+  const visualTextHeight = size * PDF_CAP_HEIGHT_RATIO;
+  return {
+    x: cell.centerX - textWidth / 2,
+    y: cell.centerY - visualTextHeight / 2,
+    size,
+  };
+}
+
 /** PDF drawText position from cell centre (pdf-lib baseline coords). */
 export function getPdfLetterDrawCoords(
   font: PDFFont,

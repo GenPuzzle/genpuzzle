@@ -394,3 +394,85 @@
     box-shadow: none;
   }
 }
+
+/* Dark mode */
+.dark .preview-top-toolbar {
+  border-bottom-color: #334155;
+  background: #1e293b;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.dark .preview-compact-toolbar {
+  border-bottom-color: #334155;
+  background: #1e293b;
+}
+
+.dark .preview-compact-toolbar__label {
+  color: #94a3b8;
+}
+
+.dark .preview-compact-toolbar__zoom {
+  border-top-color: #334155;
+}
+
+.dark .preview-segmented {
+  border-color: #475569;
+  background: #0f172a;
+}
+
+.dark .preview-segmented__btn--active {
+  background: #334155;
+  color: #f1f5f9;
+}
+
+.dark .preview-segmented__btn--inactive {
+  color: #94a3b8;
+}
+
+.dark .preview-segmented__btn--inactive:hover {
+  color: #cbd5e1;
+}
+
+.dark .preview-zoom-btn {
+  border-color: #475569;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.dark .preview-zoom-btn:hover {
+  background: #334155;
+}
+
+.dark .preview-viewport {
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.dark .preview-pagination-bar {
+  background: rgba(30, 41, 59, 0.98);
+  border-top-color: #334155;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.dark .preview-pagination-bar--flipbook {
+  background: rgba(30, 41, 59, 0.9);
+  border-top-color: rgba(71, 85, 105, 0.5);
+}
+
+.dark .preview-pagination-bar__sep {
+  background: #475569;
+}
+
+.dark .preview-controls-panel {
+  border-color: #334155;
+  background: #0f172a;
+}
+
+.dark .all-pages-grid__edit-btn {
+  border-color: #475569;
+  background: rgba(30, 41, 59, 0.95);
+  color: #f1f5f9;
+}
+
+.dark .all-pages-grid__edit-btn:hover {
+  background: #334155;
+}

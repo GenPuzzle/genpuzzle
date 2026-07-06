@@ -1591,9 +1591,6 @@ function WordSearchSidebar() {
                             '8X10IN': { width: 8, height: 10 },
                             '8_5X11IN': { width: 8.5, height: 11 },
                             '8_27X11_69IN': { width: 8.27, height: 11.69 },
-                            '8_25X6IN': { width: 8.25, height: 6 },
-                            '8_25X8_25IN': { width: 8.25, height: 8.25 },
-                            '8_5X8_5IN': { width: 8.5, height: 8.5 },
                         };
                         var dims = presets[value];
                         if (dims) {
@@ -1616,9 +1613,6 @@ function WordSearchSidebar() {
                     <select_1.SelectItem value="8X10IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '20.32 x 25.4' : '8 x 10'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</select_1.SelectItem>
                     <select_1.SelectItem value="8_5X11IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '21.59 x 27.94' : '8.5 x 11'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</select_1.SelectItem>
                     <select_1.SelectItem value="8_27X11_69IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '21 x 29.7' : '8.27 x 11.69'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</select_1.SelectItem>
-                    <select_1.SelectItem value="8_25X6IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '20.96 x 15.24' : '8.25 x 6'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</select_1.SelectItem>
-                    <select_1.SelectItem value="8_25X8_25IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '20.96 x 20.96' : '8.25 x 8.25'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</select_1.SelectItem>
-                    <select_1.SelectItem value="8_5X8_5IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '21.59 x 21.59' : '8.5 x 8.5'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</select_1.SelectItem>
                   </select_1.SelectContent>
                 </select_1.Select>
               </div>)}

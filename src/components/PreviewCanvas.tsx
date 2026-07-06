@@ -13,6 +13,21 @@ import {
 import { WordSearchPuzzle, WordSearchSettings, TitleWordsSettings } from '@/lib/puzzles/types';
 import { DocumentPage, TextModuleSettings, PuzzleModuleSettings, isTextModuleType, isPuzzleModuleType, isTextModuleSettings, getDefaultTextModuleSettings } from '@/lib/document-model';
 import {
+  resolveTextPageBackground,
+  resolveTextPageFrameSettings,
+  resolveTextPageTextColor,
+  resolveTextPageTitleFontSize,
+} from '@/lib/text-page-settings';
+import {
+  TextPageContextualControls,
+  type TextPageEditTarget,
+} from '@/components/TextPageContextualControls';
+import { TextPageBlockCanvas } from '@/components/TextPageBlockCanvas';
+import {
+  resolveTextPageBlocks,
+  syncLegacyFieldsFromBlocks,
+} from '@/lib/text-page-blocks';
+import {
   compileBook,
   groupPuzzlesByDocument,
   getTitleWordsForDocument,
@@ -22,7 +37,7 @@ import {
 import { BookFlipbookViewer } from '@/components/BookFlipbookViewer';
 import { AllPagesGridPreview } from '@/components/AllPagesGridPreview';
 import { getEffectiveSettingsForPage } from '@/lib/page-settings';
-import { TRIM_SIZE_PRESETS, type TrimSizePresetId } from '@/lib/trim-size-layout';
+import { TRIM_SIZE_PRESETS, computeTrimScaleRatio, resolveTrimDimensions, type TrimSizePresetId } from '@/lib/trim-size-layout';
 import {
   computeWordSearchPageLayout,
   distributeWordsIntoColumns,
@@ -65,22 +80,43 @@ import {
   type CanvasEditTarget,
 } from '@/components/CanvasContextualControls';
 import {
-  buildPageOverrideDelta,
+  anyCanvasEditTabHasUnsavedEdits,
+  buildGlobalBookTextUpdatesForAllCommit,
+  buildGlobalBookTextUpdatesForPageCommit,
+  buildGlobalAnswersPerPageUpdate,
+  buildPageOverrideForOpenTabs,
+  CANVAS_EDIT_TARGETS_BY_PREVIEW_TAB,
+  selectedRangePagesMatchDraftForRangeApply,
   CANVAS_EDIT_TARGET_CATEGORY,
   cloneTitleWords,
   cloneWordSearchSettings,
+  createCanvasEditSession,
+  createSnapshotFromSession,
+  formatCanvasEditTabLabel,
+  tabHasUnsavedEdits,
   getBatchIndexForCompiledPuzzlePage,
   getPuzzleGridScaleForPage,
   hasUnsavedCanvasEdits,
   canApplyCanvasEditsToAllPages,
+  getOtherEditedPageIndices,
+  makeCanvasEditTabId,
+  patchWordSearchSettings,
+  resolveApplyToAllPromotionSource,
   shouldRegeneratePuzzleOnPageCommit,
   shouldRegeneratePuzzlesOnAllCommit,
+  scaleCanvasEditSessionForTrim,
   syncEditSessionBaseline,
   type CanvasEditSession,
+  type CanvasEditTab,
 } from '@/lib/canvas-edit-session';
 import { getWordsForPuzzlePage } from '@/lib/puzzle-word-list';
+import {
+  documentPagesToBatchIndices,
+  parsePageRangeSelection,
+} from '@/lib/page-range-selection';
 import type { DocumentModuleType } from '@/lib/document-model';
 import { CanvasEditUnsavedDialog } from '@/components/CanvasEditUnsavedDialog';
+import { CanvasApplyToAllConfirmDialog } from '@/components/CanvasApplyToAllConfirmDialog';
 import '@/components/canvas-contextual-controls.css';
 import '@/components/preview-canvas-toolbar.css';
 import { cn } from '@/lib/utils';
@@ -342,25 +378,31 @@ function CanvasHitZone({
   label,
   onSelect,
   style,
+  hideGuides = false,
 }: {
   active: boolean;
   label: string;
   onSelect: () => void;
   style: React.CSSProperties;
+  hideGuides?: boolean;
 }) {
   return (
     <button
       type="button"
-      className={cn('canvas-hit-zone', active && 'canvas-hit-zone--active')}
+      className={cn(
+        'canvas-hit-zone',
+        active && !hideGuides && 'canvas-hit-zone--active',
+        hideGuides && 'canvas-hit-zone--hidden-guides'
+      )}
       style={style}
       onClick={(event) => {
         event.stopPropagation();
         onSelect();
       }}
       aria-label={`Edit ${label}`}
-      aria-pressed={active}
+      aria-pressed={active && !hideGuides}
     >
-      {active && <span className="canvas-hit-zone__badge">{label}</span>}
+      {active && !hideGuides && <span className="canvas-hit-zone__badge">{label}</span>}
     </button>
   );
 }
@@ -379,6 +421,8 @@ function PuzzlePageCanvas({
   bookPageIndex = 0,
   canvasEditEnabled = false,
   canvasEditTarget = null,
+  canvasEditHighlightTarget = null,
+  canvasEditHideGuides = false,
   onCanvasEditTargetChange,
 }: {
   puzzle: WordSearchPuzzle;
@@ -394,8 +438,12 @@ function PuzzlePageCanvas({
   bookPageIndex?: number;
   canvasEditEnabled?: boolean;
   canvasEditTarget?: CanvasEditTarget | null;
+  canvasEditHighlightTarget?: CanvasEditTarget | null;
+  canvasEditHideGuides?: boolean;
   onCanvasEditTargetChange?: (target: CanvasEditTarget | null) => void;
 }) {
+  const editHighlight = canvasEditHighlightTarget ?? canvasEditTarget;
+
   const layout = useMemo(() => {
     return computeWordSearchPageLayout(
       puzzle,
@@ -691,10 +739,11 @@ function PuzzlePageCanvas({
           ptToPx={ptToPx}
         />
 
-        {canvasHitZones && !canvasEditTarget && (
+        {canvasHitZones && onCanvasEditTargetChange && (
           <>
             <CanvasHitZone
-              active={canvasEditTarget === 'page-background'}
+              active={editHighlight === 'page-background'}
+              hideGuides={canvasEditHideGuides}
               label="Background"
               onSelect={() => onCanvasEditTargetChange?.('page-background')}
               style={{
@@ -704,7 +753,8 @@ function PuzzlePageCanvas({
               }}
             />
             <CanvasHitZone
-              active={canvasEditTarget === 'title'}
+              active={editHighlight === 'title'}
+              hideGuides={canvasEditHideGuides}
               label="Title"
               onSelect={() => onCanvasEditTargetChange?.('title')}
               style={{
@@ -717,7 +767,8 @@ function PuzzlePageCanvas({
               }}
             />
             <CanvasHitZone
-              active={canvasEditTarget === 'grid'}
+              active={editHighlight === 'grid'}
+              hideGuides={canvasEditHideGuides}
               label="Grid"
               onSelect={() => onCanvasEditTargetChange?.('grid')}
               style={{
@@ -731,7 +782,8 @@ function PuzzlePageCanvas({
             />
             {canvasHitZones.wordList && (
               <CanvasHitZone
-                active={canvasEditTarget === 'word-list'}
+                active={editHighlight === 'word-list'}
+                hideGuides={canvasEditHideGuides}
                 label="Word List"
                 onSelect={() => onCanvasEditTargetChange?.('word-list')}
                 style={{
@@ -746,7 +798,8 @@ function PuzzlePageCanvas({
             )}
             {canvasHitZones.pageNumber && (
               <CanvasHitZone
-                active={canvasEditTarget === 'page-number'}
+                active={editHighlight === 'page-number'}
+                hideGuides={canvasEditHideGuides}
                 label="Page #"
                 onSelect={() => onCanvasEditTargetChange?.('page-number')}
                 style={{
@@ -797,6 +850,11 @@ function TextPageCanvas({
   showSafetyZone,
   safetyMarginPx,
   ptToPx,
+  textEditEnabled = false,
+  textEditTarget = null,
+  textEditHideGuides = false,
+  onTextEditTargetChange,
+  onSettingsChange,
 }: {
   page: DocumentPage;
   settings: TextModuleSettings;
@@ -805,7 +863,15 @@ function TextPageCanvas({
   showSafetyZone: boolean;
   safetyMarginPx: number;
   ptToPx: (pt: number) => number;
+  textEditEnabled?: boolean;
+  textEditTarget?: TextPageEditTarget | null;
+  textEditHideGuides?: boolean;
+  onTextEditTargetChange?: (target: TextPageEditTarget) => void;
+  onSettingsChange?: (updates: Partial<TextModuleSettings>) => void;
 }) {
+  const titleRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+
   const dims = getPageDimensionsInches(wordSearchSettings);
   const pageWidthPt = dims.width * 72;
   const pageHeightPt = dims.height * 72;
@@ -813,16 +879,43 @@ function TextPageCanvas({
   const heightPx = ptToPx(pageHeightPt);
   const marginPx = ptToPx(getPageMarginInches(wordSearchSettings) * 72);
 
-  const content = settings.content?.trim() || page.name;
+  const content = settings.content?.trim() || '';
   const title = settings.title || page.name;
   const alignment = settings.alignment || 'center';
-  const alignItems = alignment === 'left' ? 'flex-start' : alignment === 'right' ? 'flex-end' : 'center';
+  const alignItems =
+    alignment === 'left' ? 'flex-start' : alignment === 'right' ? 'flex-end' : 'center';
   const fontSizePt =
     typeof settings.fontSize === 'number' && Number.isFinite(settings.fontSize) && settings.fontSize > 0
       ? settings.fontSize
       : 18;
   const bodyFontPx = ptToPx(fontSizePt);
-  const titleFontPx = ptToPx(fontSizePt * 1.2);
+  const titleFontPx = ptToPx(resolveTextPageTitleFontSize(settings));
+  const textColor = resolveTextPageTextColor(settings, wordSearchSettings);
+  const pageBackground = resolveTextPageBackground(settings, wordSearchSettings);
+  const pageFrame = resolveTextPageFrameSettings(settings, wordSearchSettings);
+  const isEditing = textEditEnabled && !!onSettingsChange;
+
+  useEffect(() => {
+    if (titleRef.current && document.activeElement !== titleRef.current) {
+      titleRef.current.textContent = title;
+    }
+  }, [title]);
+
+  useEffect(() => {
+    if (contentRef.current && document.activeElement !== contentRef.current) {
+      contentRef.current.textContent = content;
+    }
+  }, [content]);
+
+  const handleTitleInput = () => {
+    if (!titleRef.current || !onSettingsChange) return;
+    onSettingsChange({ title: titleRef.current.textContent ?? '' });
+  };
+
+  const handleContentInput = () => {
+    if (!contentRef.current || !onSettingsChange) return;
+    onSettingsChange({ content: contentRef.current.textContent ?? '' });
+  };
 
   return (
     <div
@@ -831,10 +924,34 @@ function TextPageCanvas({
         width: widthPx,
         height: heightPx,
         boxSizing: 'border-box',
-        backgroundColor: wordSearchSettings.colors.puzzlePage.backgroundColor || '#ffffff',
+        backgroundColor: pageBackground.backgroundColor || '#ffffff',
         overflow: 'hidden',
       }}
+      onClick={() => {
+        if (textEditEnabled) {
+          onTextEditTargetChange?.('page-frame');
+        }
+      }}
     >
+      {pageBackground.backgroundImage && (
+        <div
+          className="absolute inset-0 pointer-events-none z-0"
+          style={{
+            backgroundImage: `url(${pageBackground.backgroundImage})`,
+            backgroundSize: pageBackground.backgroundImageFit || 'cover',
+            backgroundRepeat: 'no-repeat',
+            backgroundPosition: 'center',
+            opacity: (pageBackground.backgroundImageOpacity ?? 100) / 100,
+          }}
+        />
+      )}
+
+      <PageFrameOverlay
+        frame={pageFrame}
+        pageBackgroundColor={pageBackground.backgroundColor || '#ffffff'}
+        hasBackgroundImage={!!pageBackground.backgroundImage}
+      />
+
       {showMargins && (
         <div
           className="absolute border border-dashed border-blue-400 pointer-events-none z-50 opacity-40 hover:opacity-100 transition-opacity duration-200"
@@ -877,22 +994,48 @@ function TextPageCanvas({
           textAlign: alignment,
           padding: ptToPx(12),
           boxSizing: 'border-box',
+          zIndex: 10,
+          pointerEvents: isEditing ? 'auto' : 'none',
+        }}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (textEditEnabled) {
+            onTextEditTargetChange?.('text-content');
+          }
         }}
       >
         <div
           style={{
             width: '100%',
             fontFamily: settings.fontFamily || 'Arial',
-            color: '#111827',
+            color: textColor,
             whiteSpace: 'pre-wrap',
             fontSize: bodyFontPx,
             lineHeight: 1.3,
           }}
         >
-          <div className="font-bold mb-4" style={{ fontSize: titleFontPx }}>
-            {title}
-          </div>
-          <div>{content}</div>
+          <div
+            ref={titleRef}
+            className="font-bold mb-4 outline-none"
+            style={{ fontSize: titleFontPx }}
+            contentEditable={isEditing}
+            suppressContentEditableWarning
+            onInput={handleTitleInput}
+            onClick={(event) => event.stopPropagation()}
+          />
+          <div
+            ref={contentRef}
+            className="outline-none min-h-[1.5em]"
+            contentEditable={isEditing}
+            suppressContentEditableWarning
+            onInput={handleContentInput}
+            onClick={(event) => event.stopPropagation()}
+          />
+          {!content && !title && isEditing && (
+            <span className="pointer-events-none text-slate-400 italic" aria-hidden>
+              Click to add text…
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -980,7 +1123,18 @@ function DocumentPageCanvas({
   compiledSolutionPages,
   canvasEditEnabled = false,
   canvasEditTarget = null,
+  canvasEditHighlightTarget = null,
+  canvasEditHideGuides = false,
   onCanvasEditTargetChange,
+  textEditEnabled = false,
+  textEditTarget = null,
+  textEditHideGuides = false,
+  onTextEditTargetChange,
+  onTextSettingsChange,
+  selectedTextBlockId = null,
+  onSelectTextBlock,
+  onSelectTextPageFrame,
+  canvasScale = 1,
 }: {
   page: DocumentPage;
   activeDocumentPageId: string;
@@ -1006,7 +1160,18 @@ function DocumentPageCanvas({
   compiledSolutionPages?: CompiledSolutionPage[];
   canvasEditEnabled?: boolean;
   canvasEditTarget?: CanvasEditTarget | null;
+  canvasEditHighlightTarget?: CanvasEditTarget | null;
+  canvasEditHideGuides?: boolean;
   onCanvasEditTargetChange?: (target: CanvasEditTarget | null) => void;
+  textEditEnabled?: boolean;
+  textEditTarget?: TextPageEditTarget | null;
+  textEditHideGuides?: boolean;
+  onTextEditTargetChange?: (target: TextPageEditTarget) => void;
+  onTextSettingsChange?: (updates: Partial<TextModuleSettings>) => void;
+  selectedTextBlockId?: string | null;
+  onSelectTextBlock?: (blockId: string) => void;
+  onSelectTextPageFrame?: () => void;
+  canvasScale?: number;
 }) {
   if (page.moduleType === 'word-search') {
     const pageSettings = page.settings as PuzzleModuleSettings;
@@ -1047,6 +1212,8 @@ function DocumentPageCanvas({
             )}
             canvasEditEnabled={canvasEditEnabled}
             canvasEditTarget={canvasEditTarget}
+            canvasEditHighlightTarget={canvasEditHighlightTarget}
+            canvasEditHideGuides={canvasEditHideGuides}
             onCanvasEditTargetChange={onCanvasEditTargetChange}
           />
         ) : (
@@ -1136,6 +1303,8 @@ function DocumentPageCanvas({
         pageMargin={pageMargin}
           canvasEditEnabled={canvasEditEnabled}
           canvasEditTarget={canvasEditTarget}
+          canvasEditHighlightTarget={canvasEditHighlightTarget}
+          canvasEditHideGuides={canvasEditHideGuides}
           onCanvasEditTargetChange={onCanvasEditTargetChange}
         />
       );
@@ -1177,15 +1346,40 @@ function DocumentPageCanvas({
     page.moduleType === 'introduction' ||
     page.moduleType === 'instructions'
   ) {
+    const normalized = normalizeTextModuleSettings(page, page.settings as TextModuleSettings);
+    if (page.moduleType === 'title-page') {
+      return (
+        <TextPageBlockCanvas
+          page={page}
+          settings={normalized}
+          wordSearchSettings={wordSearchSettings}
+          showMargins={showMargins}
+          showSafetyZone={showSafetyZone}
+          safetyMarginPx={safetyMarginPx}
+          ptToPx={ptToPx}
+          canvasScale={canvasScale}
+          textEditEnabled={textEditEnabled && page.id === activeDocumentPageId}
+          selectedBlockId={selectedTextBlockId}
+          onSelectBlock={onSelectTextBlock}
+          onSettingsChange={onTextSettingsChange}
+          onSelectPageFrame={onSelectTextPageFrame}
+        />
+      );
+    }
     return (
       <TextPageCanvas
         page={page}
-        settings={normalizeTextModuleSettings(page, page.settings as TextModuleSettings)}
+        settings={normalized}
         wordSearchSettings={wordSearchSettings}
         showMargins={showMargins}
         showSafetyZone={showSafetyZone}
         safetyMarginPx={safetyMarginPx}
         ptToPx={ptToPx}
+        textEditEnabled={textEditEnabled && page.id === activeDocumentPageId}
+        textEditTarget={textEditTarget}
+        textEditHideGuides={textEditHideGuides}
+        onTextEditTargetChange={onTextEditTargetChange}
+        onSettingsChange={onTextSettingsChange}
       />
     );
   }
@@ -1234,6 +1428,11 @@ function DocumentPageCanvas({
       showSafetyZone={showSafetyZone}
       safetyMarginPx={safetyMarginPx}
       ptToPx={ptToPx}
+      textEditEnabled={textEditEnabled && page.id === activeDocumentPageId}
+      textEditTarget={textEditTarget}
+      textEditHideGuides={textEditHideGuides}
+      onTextEditTargetChange={onTextEditTargetChange}
+      onSettingsChange={onTextSettingsChange}
     />
   );
 }
@@ -1276,6 +1475,20 @@ function CompiledBookPageCanvas({
         moduleType: compiledPage.moduleType,
         settings: compiledPage.settings,
       } as DocumentPage);
+
+    if (docPage.moduleType === 'title-page') {
+      return (
+        <TextPageBlockCanvas
+          page={docPage}
+          settings={compiledPage.settings}
+          wordSearchSettings={wordSearchSettings}
+          showMargins={showMargins}
+          showSafetyZone={showSafetyZone}
+          safetyMarginPx={safetyMarginPx}
+          ptToPx={ptToPx}
+        />
+      );
+    }
 
     return (
       <TextPageCanvas
@@ -1450,6 +1663,8 @@ function SolutionsPageCanvas({
   pageMargin,
   canvasEditEnabled = false,
   canvasEditTarget = null,
+  canvasEditHighlightTarget = null,
+  canvasEditHideGuides = false,
   onCanvasEditTargetChange,
 }: {
   puzzles: WordSearchPuzzle[];
@@ -1466,8 +1681,12 @@ function SolutionsPageCanvas({
   pageMargin: number;
   canvasEditEnabled?: boolean;
   canvasEditTarget?: CanvasEditTarget | null;
+  canvasEditHighlightTarget?: CanvasEditTarget | null;
+  canvasEditHideGuides?: boolean;
   onCanvasEditTargetChange?: (target: CanvasEditTarget | null) => void;
 }) {
+  const editHighlight = canvasEditHighlightTarget ?? canvasEditTarget;
+
   const { colors } = settings;
   const dims = getPageDimensionsInches(settings);
   const pageWidthPt = dims.width * 72;
@@ -1734,10 +1953,7 @@ function SolutionsPageCanvas({
         );
 
         const cellSizePt = block.cellSizePt;
-        const gridFontSizePt = Math.min(
-          getSolutionGridFontSize(settings.typography),
-          cellSizePt * 0.9
-        );
+        const gridFontSizePt = getSolutionGridFontSize(settings.typography);
 
         const outerBounds = computeGridBorderOuterBounds(
           block.gridLeftPt,
@@ -1795,10 +2011,11 @@ function SolutionsPageCanvas({
         ptToPx={ptToPx}
       />
 
-      {canvasHitZones && !canvasEditTarget && (
+      {canvasHitZones && onCanvasEditTargetChange && (
         <>
           <CanvasHitZone
-            active={canvasEditTarget === 'page-background'}
+            active={editHighlight === 'page-background'}
+            hideGuides={canvasEditHideGuides}
             label="Background"
             onSelect={() => onCanvasEditTargetChange?.('page-background')}
             style={{
@@ -1810,7 +2027,8 @@ function SolutionsPageCanvas({
           {canvasHitZones.blocks.map((blockZone, blockIndex) => (
             <React.Fragment key={`solution-hit-${blockIndex}`}>
               <CanvasHitZone
-                active={canvasEditTarget === 'solution-title'}
+                active={editHighlight === 'solution-title'}
+                hideGuides={canvasEditHideGuides}
                 label="Title"
                 onSelect={() => onCanvasEditTargetChange?.('solution-title')}
                 style={{
@@ -1823,7 +2041,8 @@ function SolutionsPageCanvas({
                 }}
               />
               <CanvasHitZone
-                active={canvasEditTarget === 'solution-grid'}
+                active={editHighlight === 'solution-grid'}
+                hideGuides={canvasEditHideGuides}
                 label="Grid"
                 onSelect={() => onCanvasEditTargetChange?.('solution-grid')}
                 style={{
@@ -1839,7 +2058,8 @@ function SolutionsPageCanvas({
           ))}
           {canvasHitZones.pageNumber && (
             <CanvasHitZone
-              active={canvasEditTarget === 'page-number'}
+              active={editHighlight === 'page-number'}
+              hideGuides={canvasEditHideGuides}
               label="Page #"
               onSelect={() => onCanvasEditTargetChange?.('page-number')}
               style={{
@@ -2010,11 +2230,13 @@ export function PreviewCanvas() {
     setPreviewZoom,
     puzzleGridScale,
     pageOverrides,
+    setPageOverrides,
     applyMode,
     triggerStylingUpdate,
     pagePuzzleGridScales,
     setPagePuzzleGridScale,
     clearPagePuzzleGridScale,
+    clearAllPagePuzzleGridScales,
     titleToAnswerGap,
     solutionToSolutionGap,
     pageMargin,
@@ -2035,18 +2257,28 @@ export function PreviewCanvas() {
     setPuzzleGridScale,
     updatePageOverride,
     clearPageOverride,
+    clearAllPageOverrides,
     setApplyMode,
     regeneratePuzzleAtIndex,
     persistPagePuzzleSettings,
+    updateActiveTextModuleSettings,
   } = useApp();
 
   const [showMargins, setShowMargins] = useState(true);
   const [showSafetyZone, setShowSafetyZone] = useState(true);
-  const [canvasEditTarget, setCanvasEditTarget] = useState<CanvasEditTarget | null>(null);
-  const [editSession, setEditSession] = useState<CanvasEditSession | null>(null);
-  const editSessionKeyRef = useRef<string | null>(null);
+  const [canvasEditTabs, setCanvasEditTabs] = useState<CanvasEditTab[]>([]);
+  const [activeCanvasEditTabId, setActiveCanvasEditTabId] = useState<string | null>(null);
+  const [canvasEditSession, setCanvasEditSession] = useState<CanvasEditSession | null>(null);
   const [canvasEditUnsavedDialogOpen, setCanvasEditUnsavedDialogOpen] = useState(false);
+  const [canvasEditRangeError, setCanvasEditRangeError] = useState<string | null>(null);
+  const [applyToAllConfirmOpen, setApplyToAllConfirmOpen] = useState(false);
+  const [preserveEditedPagesOnApply, setPreserveEditedPagesOnApply] = useState(false);
+  const [textPageEditTarget, setTextPageEditTarget] = useState<TextPageEditTarget>('page-elements');
+  const [textPageEditPanelOpen, setTextPageEditPanelOpen] = useState(true);
+  const [selectedTextBlockId, setSelectedTextBlockId] = useState<string | null>(null);
   const pendingCanvasEditLeaveRef = useRef<(() => void) | null>(null);
+  const pendingCanvasEditTabCloseIdRef = useRef<string | null>(null);
+  const applyToAllPendingLeaveRef = useRef(false);
 
   const isFlipbookPreview = previewRangeMode === 'flipbook';
   const isAllPagesPreview = previewRangeMode === 'all';
@@ -2099,6 +2331,7 @@ export function PreviewCanvas() {
   const ptToPx = useMemo(() => (pt: number) => pt * (96 / 72), []);
 
   const documentPagesForBook = useMemo(() => {
+    const activeWordSearchSettings = canvasEditSession?.draft ?? wordSearchSettings;
     return documentPages.map((page) => {
       if (page.id === activeDocumentPageId && page.moduleType === 'word-search') {
         const settings = page.settings as PuzzleModuleSettings;
@@ -2106,14 +2339,21 @@ export function PreviewCanvas() {
           ...page,
           settings: {
             ...settings,
-            titleWords,
-            wordSearchSettings,
+            titleWords: canvasEditSession?.draftTitleWords ?? titleWords,
+            wordSearchSettings: activeWordSearchSettings,
           },
         };
       }
       return page;
     });
-  }, [documentPages, activeDocumentPageId, titleWords, wordSearchSettings]);
+  }, [
+    documentPages,
+    activeDocumentPageId,
+    titleWords,
+    wordSearchSettings,
+    canvasEditSession?.draft,
+    canvasEditSession?.draftTitleWords,
+  ]);
 
   const compiledBook = useMemo(() => {
     if (documentPages.length === 0) return null;
@@ -2164,7 +2404,8 @@ export function PreviewCanvas() {
       }
       return entries.map((page) => page.puzzles);
     }
-    const answersPerPage = wordSearchSettings.bookCanvas.answersPerPage || 1;
+    const answersPerPage =
+      (canvasEditSession?.draft ?? wordSearchSettings).bookCanvas.answersPerPage || 1;
     const pages: WordSearchPuzzle[][] = [];
     for (let i = 0; i < batchPuzzles.length; i += answersPerPage) {
       pages.push(batchPuzzles.slice(i, i + answersPerPage));
@@ -2176,6 +2417,7 @@ export function PreviewCanvas() {
     activeDocumentPageId,
     batchPuzzles,
     wordSearchSettings.bookCanvas.answersPerPage,
+    canvasEditSession?.draft?.bookCanvas.answersPerPage,
   ]);
 
   const bookHeaderTitleFontSizePt = useMemo(
@@ -2327,6 +2569,77 @@ export function PreviewCanvas() {
     (activePreviewTab === 'puzzles' || activePreviewTab === 'solutions') &&
     (activeDocumentPage?.moduleType === 'word-search' || currentPuzzleType === 'word-search');
 
+  const activeTextSettings =
+    activeDocumentPage &&
+    isTextModuleType(activeDocumentPage.moduleType) &&
+    isTextModuleSettings(activeDocumentPage.settings)
+      ? normalizeTextModuleSettings(
+          activeDocumentPage,
+          activeDocumentPage.settings as TextModuleSettings
+        )
+      : null;
+
+  const textPageEditEnabled =
+    previewRangeMode === 'sample' &&
+    !!activeTextSettings &&
+    !!activeDocumentPage &&
+    isTextModuleType(activeDocumentPage.moduleType);
+
+  const handleTextSettingsChange = useCallback(
+    (updates: Partial<TextModuleSettings>) => {
+      updateActiveTextModuleSettings(updates);
+    },
+    [updateActiveTextModuleSettings]
+  );
+
+  const handleTextEditTargetChange = useCallback((target: TextPageEditTarget) => {
+    setTextPageEditTarget(target);
+    setTextPageEditPanelOpen(true);
+  }, []);
+
+  const handleSelectTextBlock = useCallback((blockId: string) => {
+    setSelectedTextBlockId(blockId);
+    setTextPageEditTarget('page-elements');
+    setTextPageEditPanelOpen(true);
+  }, []);
+
+  const handleSelectTextPageFrame = useCallback(() => {
+    setTextPageEditTarget('page-frame');
+    setTextPageEditPanelOpen(true);
+  }, []);
+
+  useEffect(() => {
+    if (!textPageEditEnabled || activeDocumentPage?.moduleType !== 'title-page' || !activeTextSettings) {
+      return;
+    }
+
+    const blocks = resolveTextPageBlocks(
+      activeTextSettings,
+      activeDocumentPage.name,
+      wordSearchSettings
+    );
+
+    if (!activeTextSettings.blocks || activeTextSettings.blocks.length === 0) {
+      updateActiveTextModuleSettings(syncLegacyFieldsFromBlocks(blocks));
+    }
+
+    const titleBlockId =
+      blocks.find((block) => block.kind === 'title')?.id ?? blocks[0]?.id ?? null;
+    setTextPageEditPanelOpen(true);
+    setTextPageEditTarget('page-elements');
+    setSelectedTextBlockId((current) =>
+      current && blocks.some((block) => block.id === current) ? current : titleBlockId
+    );
+  }, [
+    activeDocumentPageId,
+    activeDocumentPage?.moduleType,
+    activeDocumentPage?.name,
+    activeTextSettings?.blocks?.length,
+    textPageEditEnabled,
+    wordSearchSettings,
+    updateActiveTextModuleSettings,
+  ]);
+
   const getSettingsForBatchIndex = useCallback(
     (batchIndex: number) =>
       getEffectiveSettingsForPage(wordSearchSettings, pageOverrides, batchIndex),
@@ -2338,46 +2651,88 @@ export function PreviewCanvas() {
     [getSettingsForBatchIndex, currentBatchIndex]
   );
 
+  const activeCanvasEditTab = useMemo(
+    () => canvasEditTabs.find((tab) => tab.id === activeCanvasEditTabId) ?? null,
+    [canvasEditTabs, activeCanvasEditTabId]
+  );
+  const canvasEditTarget = activeCanvasEditTab?.target ?? null;
+  const editSession = canvasEditSession;
+  const hasCanvasEditPanelOpen = canvasEditTabs.length > 0;
+
+  const updateCanvasEditSession = useCallback(
+    (updater: (session: CanvasEditSession) => CanvasEditSession) => {
+      setCanvasEditSession((prev) => (prev ? updater(prev) : prev));
+    },
+    []
+  );
+
+  const syncSessionAndTabSnapshots = useCallback((synced: CanvasEditSession) => {
+    const snapshot = createSnapshotFromSession(synced);
+    setCanvasEditSession(synced);
+    setCanvasEditTabs((prev) => prev.map((tab) => ({ ...tab, snapshot })));
+  }, []);
+
+  const prevTrimDimsRef = useRef<{ width: number; height: number } | null>(null);
+
   useEffect(() => {
-    if (!canvasEditTarget) {
-      editSessionKeyRef.current = null;
-      setEditSession(null);
-      return;
-    }
+    const dims = resolveTrimDimensions(wordSearchSettings.bookCanvas);
+    const prev = prevTrimDimsRef.current;
+    prevTrimDimsRef.current = dims;
 
-    const sessionKey = `${canvasEditTarget}:${currentBatchIndex}:${activePreviewTab}`;
-    if (editSessionKeyRef.current === sessionKey) return;
-    editSessionKeyRef.current = sessionKey;
+    if (!prev) return;
 
+    const ratio = computeTrimScaleRatio(prev.width, prev.height, dims.width, dims.height);
+    if (Math.abs(ratio - 1) < 0.001) return;
+
+    setCanvasEditSession((session) => {
+      if (!session) return session;
+      const scaled = scaleCanvasEditSessionForTrim(session, ratio, wordSearchSettings.bookCanvas);
+      const tabSnapshot = createSnapshotFromSession(scaled);
+      setCanvasEditTabs((tabs) => tabs.map((tab) => ({ ...tab, snapshot: tabSnapshot })));
+      return scaled;
+    });
+  }, [
+    wordSearchSettings.bookCanvas.customWidth,
+    wordSearchSettings.bookCanvas.customHeight,
+    wordSearchSettings.bookCanvas.trimSizePreset,
+    wordSearchSettings.bookCanvas.useCustomTrim,
+  ]);
+
+  const createSessionForCurrentPage = useCallback(() => {
     const merged = getSettingsForBatchIndex(currentBatchIndex);
     const puzzle = batchPuzzles[currentBatchIndex] ?? null;
     const pageGridScale = getPuzzleGridScaleForPage(
       currentBatchIndex,
-          puzzleGridScale,
+      puzzleGridScale,
       pagePuzzleGridScales
     );
+    return createCanvasEditSession(merged, titleWords, pageGridScale, puzzle);
+  }, [
+    getSettingsForBatchIndex,
+    currentBatchIndex,
+    batchPuzzles,
+    puzzleGridScale,
+    pagePuzzleGridScales,
+    titleWords,
+  ]);
 
-    setEditSession({
-      draft: cloneWordSearchSettings(merged),
-      draftTitleWords: cloneTitleWords(titleWords),
-      draftPuzzleGridScale: pageGridScale,
-      snapshot: {
-        settings: cloneWordSearchSettings(merged),
-        titleWords: cloneTitleWords(titleWords),
-        puzzleGridScale: pageGridScale,
-        batchPuzzle: puzzle ? (JSON.parse(JSON.stringify(puzzle)) as typeof puzzle) : null,
-      },
-    });
-  }, [canvasEditTarget, currentBatchIndex, activePreviewTab]);
+  const canvasEditPanelTabs = useMemo(
+    () =>
+      canvasEditTabs.map((tab) => ({
+        id: tab.id,
+        label: formatCanvasEditTabLabel(tab.target),
+      })),
+    [canvasEditTabs]
+  );
 
   const effectivePuzzleGridScale = useMemo(
     () => getPuzzleGridScaleForPage(currentBatchIndex, puzzleGridScale, pagePuzzleGridScales),
     [currentBatchIndex, puzzleGridScale, pagePuzzleGridScales, triggerStylingUpdate]
   );
 
-  const previewWordSearchSettings = editSession?.draft ?? effectiveWordSearchSettings;
-  const previewTitleWords = editSession?.draftTitleWords ?? titleWords;
-  const previewPuzzleGridScale = editSession?.draftPuzzleGridScale ?? effectivePuzzleGridScale;
+  const previewWordSearchSettings = canvasEditSession?.draft ?? effectiveWordSearchSettings;
+  const previewTitleWords = canvasEditSession?.draftTitleWords ?? titleWords;
+  const previewPuzzleGridScale = canvasEditSession?.draftPuzzleGridScale ?? effectivePuzzleGridScale;
 
   const samplePageHeaderTitleFontSizePt = useMemo(() => {
     const puzzle = batchPuzzles[currentBatchIndex];
@@ -2395,10 +2750,59 @@ export function PreviewCanvas() {
   const headerTitleFontSizeForSample =
     samplePageHeaderTitleFontSizePt ?? bookHeaderTitleFontSizePt;
 
+  const canvasEditPageRef = useRef({
+    batchIndex: currentBatchIndex,
+    previewTab: activePreviewTab,
+  });
+
+  useEffect(() => {
+    if (!hasCanvasEditPanelOpen) {
+      canvasEditPageRef.current = {
+        batchIndex: currentBatchIndex,
+        previewTab: activePreviewTab,
+      };
+      return;
+    }
+
+    const prev = canvasEditPageRef.current;
+    if (prev.batchIndex === currentBatchIndex && prev.previewTab === activePreviewTab) {
+      return;
+    }
+    canvasEditPageRef.current = {
+      batchIndex: currentBatchIndex,
+      previewTab: activePreviewTab,
+    };
+
+    const fresh = createSessionForCurrentPage();
+    const snapshot = createSnapshotFromSession(fresh);
+    setCanvasEditSession(fresh);
+    setCanvasEditTabs((tabs) => tabs.map((tab) => ({ ...tab, snapshot })));
+  }, [
+    currentBatchIndex,
+    activePreviewTab,
+    hasCanvasEditPanelOpen,
+    createSessionForCurrentPage,
+  ]);
+
   const closeCanvasEditPanel = useCallback(() => {
-    editSessionKeyRef.current = null;
-    setEditSession(null);
-    setCanvasEditTarget(null);
+    setCanvasEditTabs([]);
+    setActiveCanvasEditTabId(null);
+    setCanvasEditSession(null);
+    setCanvasEditRangeError(null);
+  }, []);
+
+  const removeCanvasEditTab = useCallback((tabId: string) => {
+    setCanvasEditTabs((prev) => {
+      const nextTabs = prev.filter((tab) => tab.id !== tabId);
+      if (nextTabs.length === 0) {
+        setCanvasEditSession(null);
+      }
+      setActiveCanvasEditTabId((currentActiveId) => {
+        if (currentActiveId !== tabId) return currentActiveId;
+        return nextTabs[nextTabs.length - 1]?.id ?? null;
+      });
+      return nextTabs;
+    });
   }, []);
 
   const runPendingCanvasEditLeave = useCallback(() => {
@@ -2409,14 +2813,36 @@ export function PreviewCanvas() {
 
   const guardCanvasEditLeave = useCallback(
     (action: () => void) => {
-      if (!canvasEditTarget || !editSession || !hasUnsavedCanvasEdits(editSession)) {
+      if (!hasCanvasEditPanelOpen) {
+        action();
+        return;
+      }
+      if (!anyCanvasEditTabHasUnsavedEdits(canvasEditSession, canvasEditTabs)) {
         action();
         return;
       }
       pendingCanvasEditLeaveRef.current = action;
+      pendingCanvasEditTabCloseIdRef.current = null;
       setCanvasEditUnsavedDialogOpen(true);
     },
-    [canvasEditTarget, editSession]
+    [hasCanvasEditPanelOpen, canvasEditSession, canvasEditTabs]
+  );
+
+  const guardCanvasEditTabClose = useCallback(
+    (tabId: string, action: () => void) => {
+      const tab = canvasEditTabs.find((entry) => entry.id === tabId);
+      if (!tab || !canvasEditSession || !tabHasUnsavedEdits(canvasEditSession, tab)) {
+        action();
+        return;
+      }
+      pendingCanvasEditLeaveRef.current = action;
+      pendingCanvasEditTabCloseIdRef.current = tabId;
+      if (tabId !== activeCanvasEditTabId) {
+        setActiveCanvasEditTabId(tabId);
+      }
+      setCanvasEditUnsavedDialogOpen(true);
+    },
+    [canvasEditTabs, activeCanvasEditTabId, canvasEditSession]
   );
 
   const handleCanvasEditCancel = useCallback(() => {
@@ -2426,17 +2852,56 @@ export function PreviewCanvas() {
   }, [guardCanvasEditLeave, closeCanvasEditPanel]);
 
   const handleCanvasEditCommitPage = useCallback(() => {
-    if (!editSession || !hasUnsavedCanvasEdits(editSession)) return;
+    if (
+      !editSession ||
+      canvasEditTabs.length === 0 ||
+      !anyCanvasEditTabHasUnsavedEdits(editSession, canvasEditTabs)
+    ) {
+      return;
+    }
 
-    const delta = buildPageOverrideDelta(wordSearchSettings, editSession.draft);
+    const commitPageIndex = currentBatchIndex;
+    const puzzle = batchPuzzles[commitPageIndex] ?? null;
+    const bookTextUpdates = buildGlobalBookTextUpdatesForPageCommit(
+      wordSearchSettings,
+      editSession.draft,
+      puzzle
+    );
+    const answersPerPageUpdates = buildGlobalAnswersPerPageUpdate(
+      wordSearchSettings,
+      editSession.draft
+    );
+    let mergedGlobalSettings = wordSearchSettings;
+    const globalUpdates = {
+      ...(bookTextUpdates ?? {}),
+      ...(answersPerPageUpdates ?? {}),
+    };
+    if (Object.keys(globalUpdates).length > 0) {
+      mergedGlobalSettings = patchWordSearchSettings(wordSearchSettings, globalUpdates);
+      updateWordSearchSettings(globalUpdates);
+      if (activeDocumentPageId) {
+        persistPagePuzzleSettings(
+          activeDocumentPageId,
+          editSession.draftTitleWords,
+          mergedGlobalSettings
+        );
+      }
+    }
+
+    const delta = buildPageOverrideForOpenTabs(
+      mergedGlobalSettings,
+      editSession.draft,
+      canvasEditTabs,
+      editSession
+    );
     if (Object.keys(delta).length > 0) {
-      updatePageOverride(currentBatchIndex, delta);
+      updatePageOverride(commitPageIndex, delta);
     }
 
     if (editSession.draftPuzzleGridScale !== puzzleGridScale) {
-      setPagePuzzleGridScale(currentBatchIndex, editSession.draftPuzzleGridScale);
+      setPagePuzzleGridScale(commitPageIndex, editSession.draftPuzzleGridScale);
     } else {
-      clearPagePuzzleGridScale(currentBatchIndex);
+      clearPagePuzzleGridScale(commitPageIndex);
     }
 
     if (JSON.stringify(editSession.draftTitleWords) !== JSON.stringify(editSession.snapshot.titleWords)) {
@@ -2445,44 +2910,46 @@ export function PreviewCanvas() {
         persistPagePuzzleSettings(
           activeDocumentPageId,
           editSession.draftTitleWords,
-          wordSearchSettings
+          mergedGlobalSettings
         );
       }
     }
 
     if (shouldRegeneratePuzzleOnPageCommit(editSession)) {
-      const puzzle = batchPuzzles[currentBatchIndex];
+      const commitPuzzle = batchPuzzles[commitPageIndex];
       const wordsPerPuzzle = Math.max(1, editSession.draft.wordList.wordsPerPuzzle);
       const words = getWordsForPuzzlePage(
-        puzzle,
+        commitPuzzle,
         editSession.draftTitleWords,
         wordsPerPuzzle,
         'titleWords'
       );
-      const regenerated = regeneratePuzzleAtIndex(currentBatchIndex, words, {
+      const regenerated = regeneratePuzzleAtIndex(commitPageIndex, words, {
         lettersAcross: editSession.draft.core.lettersAcross,
         lettersDown: editSession.draft.core.lettersDown,
+        settings: editSession.draft,
       });
 
-      setEditSession((prev) => {
-        if (!prev) return prev;
-        const nextPuzzle = regenerated ?? batchPuzzles[currentBatchIndex] ?? null;
-        return syncEditSessionBaseline(prev, nextPuzzle);
-      });
+      syncSessionAndTabSnapshots(
+        syncEditSessionBaseline(
+          editSession,
+          regenerated ?? batchPuzzles[commitPageIndex] ?? null
+        )
+      );
       return;
     }
 
-    setEditSession((prev) => {
-      if (!prev) return prev;
-      const puzzle = batchPuzzles[currentBatchIndex] ?? null;
-      return syncEditSessionBaseline(prev, puzzle);
-    });
+    syncSessionAndTabSnapshots(
+      syncEditSessionBaseline(editSession, batchPuzzles[commitPageIndex] ?? null)
+    );
   }, [
     editSession,
+    canvasEditTabs,
     currentBatchIndex,
     batchPuzzles,
-          wordSearchSettings,
-          puzzleGridScale,
+    wordSearchSettings,
+    puzzleGridScale,
+    updateWordSearchSettings,
     updatePageOverride,
     setPagePuzzleGridScale,
     clearPagePuzzleGridScale,
@@ -2490,94 +2957,461 @@ export function PreviewCanvas() {
     regeneratePuzzleAtIndex,
     activeDocumentPageId,
     persistPagePuzzleSettings,
+    syncSessionAndTabSnapshots,
   ]);
 
-  const handleCanvasEditCommitAll = useCallback(() => {
-    if (!editSession || !canvasEditTarget || !hasUnsavedCanvasEdits(editSession)) return;
+  const handleCanvasEditCommitRange = useCallback(
+    (rangeInput: string) => {
+      if (!editSession || canvasEditTabs.length === 0) {
+        return;
+      }
 
-    updateWordSearchSettings(editSession.draft);
-    setTitleWords(editSession.draftTitleWords);
-    if (activeDocumentPageId) {
-      persistPagePuzzleSettings(
-        activeDocumentPageId,
-        editSession.draftTitleWords,
+      if (activeDocumentPuzzleCount < 1 || activeDocumentPuzzleStartIndex < 0) {
+        setCanvasEditRangeError('No puzzles available in this document.');
+        return;
+      }
+
+      const documentPages = parsePageRangeSelection(rangeInput, activeDocumentPuzzleCount);
+      if (!documentPages) {
+        setCanvasEditRangeError(
+          `Enter a valid range between 1 and ${activeDocumentPuzzleCount} (e.g. 1-4, 7-10, 12).`
+        );
+        return;
+      }
+
+      setCanvasEditRangeError(null);
+      const batchIndices = documentPagesToBatchIndices(
+        documentPages,
+        activeDocumentPuzzleStartIndex
+      );
+
+      let mergedGlobalSettings = wordSearchSettings;
+      const answersPerPageUpdates = buildGlobalAnswersPerPageUpdate(
+        wordSearchSettings,
         editSession.draft
       );
-    }
-    setPuzzleGridScale(editSession.draftPuzzleGridScale);
-    clearPageOverride(currentBatchIndex);
-    clearPagePuzzleGridScale(currentBatchIndex);
-    setApplyMode(CANVAS_EDIT_TARGET_CATEGORY[canvasEditTarget], true);
+      if (answersPerPageUpdates) {
+        mergedGlobalSettings = patchWordSearchSettings(wordSearchSettings, answersPerPageUpdates);
+      }
 
-    if (shouldRegeneratePuzzlesOnAllCommit(editSession)) {
-      let currentPuzzle: WordSearchPuzzle | null = batchPuzzles[currentBatchIndex] ?? null;
-      for (let i = 0; i < batchPuzzles.length; i++) {
-        const regenerated = regeneratePuzzleAtIndex(i);
-        if (i === currentBatchIndex && regenerated) {
-          currentPuzzle = regenerated;
+      for (const batchIndex of batchIndices) {
+        const puzzle = batchPuzzles[batchIndex] ?? null;
+        const bookTextUpdates = buildGlobalBookTextUpdatesForPageCommit(
+          mergedGlobalSettings,
+          editSession.draft,
+          puzzle
+        );
+        if (bookTextUpdates) {
+          mergedGlobalSettings = patchWordSearchSettings(mergedGlobalSettings, bookTextUpdates);
+        }
+
+        const delta = buildPageOverrideForOpenTabs(
+          mergedGlobalSettings,
+          editSession.draft,
+          canvasEditTabs,
+          editSession,
+          { includeAllOpenTabsWhenClean: true }
+        );
+        if (Object.keys(delta).length > 0) {
+          updatePageOverride(batchIndex, delta);
+        }
+
+        if (editSession.draftPuzzleGridScale !== puzzleGridScale) {
+          setPagePuzzleGridScale(batchIndex, editSession.draftPuzzleGridScale);
+        } else {
+          clearPagePuzzleGridScale(batchIndex);
         }
       }
 
-      setEditSession((prev) => {
-        if (!prev) return prev;
-        return syncEditSessionBaseline(prev, currentPuzzle);
-      });
-      return;
-    }
+      const bookTextChanged =
+        JSON.stringify(mergedGlobalSettings.typography) !==
+          JSON.stringify(wordSearchSettings.typography) ||
+        mergedGlobalSettings.wordList.aiTheme !== wordSearchSettings.wordList.aiTheme;
+      const answersPerPageChanged =
+        mergedGlobalSettings.bookCanvas.answersPerPage !==
+        wordSearchSettings.bookCanvas.answersPerPage;
 
-    setEditSession((prev) => {
-      if (!prev) return prev;
-      const puzzle = batchPuzzles[currentBatchIndex] ?? null;
-      return syncEditSessionBaseline(prev, puzzle);
-    });
+      if (bookTextChanged || answersPerPageChanged) {
+        updateWordSearchSettings({
+          ...(bookTextChanged
+            ? {
+                typography: mergedGlobalSettings.typography,
+                wordList: {
+                  ...wordSearchSettings.wordList,
+                  aiTheme: mergedGlobalSettings.wordList.aiTheme,
+                },
+              }
+            : {}),
+          ...(answersPerPageChanged
+            ? { bookCanvas: mergedGlobalSettings.bookCanvas }
+            : {}),
+        });
+        if (activeDocumentPageId) {
+          persistPagePuzzleSettings(
+            activeDocumentPageId,
+            editSession.draftTitleWords,
+            mergedGlobalSettings
+          );
+        }
+      }
+
+      if (
+        JSON.stringify(editSession.draftTitleWords) !== JSON.stringify(editSession.snapshot.titleWords)
+      ) {
+        setTitleWords(editSession.draftTitleWords);
+        if (activeDocumentPageId) {
+          persistPagePuzzleSettings(
+            activeDocumentPageId,
+            editSession.draftTitleWords,
+            mergedGlobalSettings
+          );
+        }
+      }
+
+      if (shouldRegeneratePuzzleOnPageCommit(editSession)) {
+        let currentPuzzle: WordSearchPuzzle | null = batchPuzzles[currentBatchIndex] ?? null;
+        const wordsPerPuzzle = Math.max(1, editSession.draft.wordList.wordsPerPuzzle);
+
+        for (const batchIndex of batchIndices) {
+          const commitPuzzle = batchPuzzles[batchIndex];
+          const words = getWordsForPuzzlePage(
+            commitPuzzle,
+            editSession.draftTitleWords,
+            wordsPerPuzzle,
+            'titleWords'
+          );
+          const regenerated = regeneratePuzzleAtIndex(batchIndex, words, {
+            lettersAcross: editSession.draft.core.lettersAcross,
+            lettersDown: editSession.draft.core.lettersDown,
+            settings: editSession.draft,
+          });
+          if (batchIndex === currentBatchIndex && regenerated) {
+            currentPuzzle = regenerated;
+          }
+        }
+
+        syncSessionAndTabSnapshots(
+          syncEditSessionBaseline(editSession, currentPuzzle)
+        );
+        return;
+      }
+
+      syncSessionAndTabSnapshots(
+        syncEditSessionBaseline(editSession, batchPuzzles[currentBatchIndex] ?? null)
+      );
+    },
+    [
+      editSession,
+      canvasEditTabs,
+      activeDocumentPuzzleCount,
+      activeDocumentPuzzleStartIndex,
+      batchPuzzles,
+      wordSearchSettings,
+      puzzleGridScale,
+      currentBatchIndex,
+      updateWordSearchSettings,
+      updatePageOverride,
+      setPagePuzzleGridScale,
+      clearPagePuzzleGridScale,
+      setTitleWords,
+      regeneratePuzzleAtIndex,
+      activeDocumentPageId,
+      persistPagePuzzleSettings,
+      syncSessionAndTabSnapshots,
+    ]
+  );
+
+  const handleCanvasEditCommitAll = useCallback(
+    (preserveEditedPages = false) => {
+      if (!editSession || !canvasEditTarget) return;
+
+      const commitPageIndex = currentBatchIndex;
+
+      const canApply = canApplyCanvasEditsToAllPages(
+        editSession,
+        wordSearchSettings,
+        puzzleGridScale,
+        pageOverrides,
+        pagePuzzleGridScales
+      );
+      if (!canApply) return;
+
+      const { settings: promotedSettings, gridScale: promotedGridScale } =
+        resolveApplyToAllPromotionSource(editSession);
+
+      const bookTextUpdates = buildGlobalBookTextUpdatesForAllCommit(
+        wordSearchSettings,
+        promotedSettings
+      );
+      const mergedGlobalSettings = bookTextUpdates
+        ? patchWordSearchSettings(promotedSettings, bookTextUpdates)
+        : promotedSettings;
+
+      const promotionSession: CanvasEditSession = {
+        ...editSession,
+        draft: mergedGlobalSettings,
+        draftPuzzleGridScale: promotedGridScale,
+      };
+
+      updateWordSearchSettings(mergedGlobalSettings);
+      setTitleWords(editSession.draftTitleWords);
+      if (activeDocumentPageId) {
+        persistPagePuzzleSettings(
+          activeDocumentPageId,
+          editSession.draftTitleWords,
+          mergedGlobalSettings
+        );
+      }
+      setPuzzleGridScale(promotedGridScale);
+
+      const keepEditedIndices = preserveEditedPages
+        ? getOtherEditedPageIndices(
+            wordSearchSettings,
+            puzzleGridScale,
+            pageOverrides,
+            pagePuzzleGridScales,
+            commitPageIndex
+          )
+        : [];
+      const keepEdited = new Set(keepEditedIndices);
+
+      if (preserveEditedPages) {
+        const nextOverrides = new Map<number, Partial<WordSearchSettings>>();
+        for (const pageIndex of keepEdited) {
+          const override = pageOverrides.get(pageIndex);
+          if (override) nextOverrides.set(pageIndex, override);
+        }
+        setPageOverrides(nextOverrides);
+        for (const pageIndex of pagePuzzleGridScales.keys()) {
+          if (!keepEdited.has(pageIndex)) {
+            clearPagePuzzleGridScale(pageIndex);
+          }
+        }
+        clearPageOverride(commitPageIndex);
+        clearPagePuzzleGridScale(commitPageIndex);
+      } else {
+        clearAllPageOverrides();
+        clearAllPagePuzzleGridScales();
+      }
+
+      setApplyMode(CANVAS_EDIT_TARGET_CATEGORY[canvasEditTarget], true);
+
+      if (shouldRegeneratePuzzlesOnAllCommit(promotionSession)) {
+        let currentPuzzle: WordSearchPuzzle | null = batchPuzzles[currentBatchIndex] ?? null;
+        for (let i = 0; i < batchPuzzles.length; i++) {
+          if (preserveEditedPages && keepEdited.has(i)) {
+            continue;
+          }
+          const regenerated = regeneratePuzzleAtIndex(i, undefined, {
+            lettersAcross: mergedGlobalSettings.core.lettersAcross,
+            lettersDown: mergedGlobalSettings.core.lettersDown,
+            settings: mergedGlobalSettings,
+          });
+          if (i === currentBatchIndex && regenerated) {
+            currentPuzzle = regenerated;
+          }
+        }
+
+        const synced: CanvasEditSession = {
+          ...editSession,
+          draft: cloneWordSearchSettings(mergedGlobalSettings),
+          draftPuzzleGridScale: promotedGridScale,
+          draftTitleWords: editSession.draftTitleWords,
+        };
+        syncSessionAndTabSnapshots(syncEditSessionBaseline(synced, currentPuzzle));
+        return;
+      }
+
+      const synced: CanvasEditSession = {
+        ...editSession,
+        draft: cloneWordSearchSettings(mergedGlobalSettings),
+        draftPuzzleGridScale: promotedGridScale,
+        draftTitleWords: editSession.draftTitleWords,
+      };
+      syncSessionAndTabSnapshots(
+        syncEditSessionBaseline(synced, batchPuzzles[currentBatchIndex] ?? null)
+      );
+    },
+    [
+      editSession,
+      canvasEditTarget,
+      activeCanvasEditTab,
+      currentBatchIndex,
+      batchPuzzles,
+      updateWordSearchSettings,
+      setTitleWords,
+      setPuzzleGridScale,
+      setPageOverrides,
+      clearPageOverride,
+      clearPagePuzzleGridScale,
+      clearAllPageOverrides,
+      clearAllPagePuzzleGridScales,
+      setApplyMode,
+      regeneratePuzzleAtIndex,
+      activeDocumentPageId,
+      persistPagePuzzleSettings,
+      wordSearchSettings,
+      puzzleGridScale,
+      pageOverrides,
+      pagePuzzleGridScales,
+      syncSessionAndTabSnapshots,
+    ]
+  );
+
+  const requestCanvasEditCommitAll = useCallback(
+    (afterLeave = false) => {
+      if (!editSession || !canvasEditTarget) return;
+
+      const otherEditedPages = getOtherEditedPageIndices(
+        wordSearchSettings,
+        puzzleGridScale,
+        pageOverrides,
+        pagePuzzleGridScales,
+        currentBatchIndex
+      );
+
+      if (otherEditedPages.length > 0) {
+        applyToAllPendingLeaveRef.current = afterLeave;
+        setPreserveEditedPagesOnApply(false);
+        setApplyToAllConfirmOpen(true);
+        return;
+      }
+
+      handleCanvasEditCommitAll(false);
+      if (afterLeave) {
+        setCanvasEditUnsavedDialogOpen(false);
+        runPendingCanvasEditLeave();
+      }
+    },
+    [
+      editSession,
+      canvasEditTarget,
+      wordSearchSettings,
+      puzzleGridScale,
+      pageOverrides,
+      pagePuzzleGridScales,
+      currentBatchIndex,
+      handleCanvasEditCommitAll,
+      runPendingCanvasEditLeave,
+    ]
+  );
+
+  const handleApplyToAllConfirm = useCallback(() => {
+    handleCanvasEditCommitAll(preserveEditedPagesOnApply);
+    setApplyToAllConfirmOpen(false);
+    if (applyToAllPendingLeaveRef.current) {
+      applyToAllPendingLeaveRef.current = false;
+      setCanvasEditUnsavedDialogOpen(false);
+      runPendingCanvasEditLeave();
+    }
   }, [
-    editSession,
-    canvasEditTarget,
-    currentBatchIndex,
-    batchPuzzles,
-    updateWordSearchSettings,
-    setTitleWords,
-    setPuzzleGridScale,
-    clearPageOverride,
-    clearPagePuzzleGridScale,
-    setApplyMode,
-    regeneratePuzzleAtIndex,
-    activeDocumentPageId,
-    persistPagePuzzleSettings,
+    handleCanvasEditCommitAll,
+    preserveEditedPagesOnApply,
+    runPendingCanvasEditLeave,
   ]);
 
   const handleCanvasEditUnsavedCommitPage = useCallback(() => {
     handleCanvasEditCommitPage();
     setCanvasEditUnsavedDialogOpen(false);
+    const tabCloseId = pendingCanvasEditTabCloseIdRef.current;
+    pendingCanvasEditTabCloseIdRef.current = null;
+    if (tabCloseId) {
+      removeCanvasEditTab(tabCloseId);
+      pendingCanvasEditLeaveRef.current = null;
+      return;
+    }
     runPendingCanvasEditLeave();
-  }, [handleCanvasEditCommitPage, runPendingCanvasEditLeave]);
+  }, [handleCanvasEditCommitPage, removeCanvasEditTab, runPendingCanvasEditLeave]);
 
   const handleCanvasEditUnsavedCommitAll = useCallback(() => {
-    handleCanvasEditCommitAll();
-    setCanvasEditUnsavedDialogOpen(false);
-    runPendingCanvasEditLeave();
-  }, [handleCanvasEditCommitAll, runPendingCanvasEditLeave]);
+    requestCanvasEditCommitAll(true);
+  }, [requestCanvasEditCommitAll]);
 
   const handleCanvasEditUnsavedDiscard = useCallback(() => {
     setCanvasEditUnsavedDialogOpen(false);
-    closeCanvasEditPanel();
+    pendingCanvasEditTabCloseIdRef.current = null;
     runPendingCanvasEditLeave();
-  }, [closeCanvasEditPanel, runPendingCanvasEditLeave]);
+  }, [runPendingCanvasEditLeave]);
+
+  const openAllCanvasEditTabs = useCallback(
+    (previewTab: 'puzzles' | 'solutions', activeTarget?: CanvasEditTarget) => {
+      const targets = CANVAS_EDIT_TARGETS_BY_PREVIEW_TAB[previewTab];
+      const desiredActiveTarget = activeTarget ?? targets[0];
+      const desiredActiveTabId = makeCanvasEditTabId(desiredActiveTarget, previewTab);
+
+      const allTabsPresent =
+        targets.length === canvasEditTabs.length &&
+        canvasEditTabs.every((tab) => tab.previewTab === previewTab) &&
+        targets.every((target) =>
+          canvasEditTabs.some((tab) => tab.id === makeCanvasEditTabId(target, previewTab))
+        );
+
+      if (allTabsPresent) {
+        if (activeCanvasEditTabId !== desiredActiveTabId) {
+          setActiveCanvasEditTabId(desiredActiveTabId);
+        }
+        return;
+      }
+
+      const session = canvasEditSession ?? createSessionForCurrentPage();
+      if (!canvasEditSession) {
+        setCanvasEditSession(session);
+      }
+      const snapshot = createSnapshotFromSession(session);
+
+      setCanvasEditTabs(
+        targets.map((target) => ({
+          id: makeCanvasEditTabId(target, previewTab),
+          target,
+          previewTab,
+          snapshot,
+        }))
+      );
+      setActiveCanvasEditTabId(desiredActiveTabId);
+    },
+    [
+      activeCanvasEditTabId,
+      canvasEditTabs,
+      canvasEditSession,
+      createSessionForCurrentPage,
+    ]
+  );
+
+  const handleCanvasEditTabSelect = useCallback((tabId: string) => {
+    setActiveCanvasEditTabId(tabId);
+  }, []);
+
+  const handleCanvasEditTabClose = useCallback(
+    (tabId: string) => {
+      guardCanvasEditTabClose(tabId, () => removeCanvasEditTab(tabId));
+    },
+    [guardCanvasEditTabClose, removeCanvasEditTab]
+  );
 
   const handleCanvasEditTargetChange = useCallback(
     (target: CanvasEditTarget | null) => {
-      if (target === canvasEditTarget) return;
-      if (target === null) {
-        handleCanvasEditCancel();
-        return;
-      }
-      guardCanvasEditLeave(() => {
-        editSessionKeyRef.current = null;
-        setCanvasEditTarget(target);
-      });
+      if (target === null) return;
+      openAllCanvasEditTabs(activePreviewTab, target);
     },
-    [canvasEditTarget, handleCanvasEditCancel, guardCanvasEditLeave]
+    [activePreviewTab, openAllCanvasEditTabs]
   );
+
+  const skippedInitialCanvasEditAutoOpenRef = useRef(false);
+  const prevAutoOpenPreviewTabRef = useRef(activePreviewTab);
+  const openAllCanvasEditTabsRef = useRef(openAllCanvasEditTabs);
+  openAllCanvasEditTabsRef.current = openAllCanvasEditTabs;
+
+  useEffect(() => {
+    if (!canvasEditEnabled) return;
+    if (!skippedInitialCanvasEditAutoOpenRef.current) {
+      skippedInitialCanvasEditAutoOpenRef.current = true;
+      prevAutoOpenPreviewTabRef.current = activePreviewTab;
+      return;
+    }
+    if (prevAutoOpenPreviewTabRef.current === activePreviewTab) return;
+    prevAutoOpenPreviewTabRef.current = activePreviewTab;
+    openAllCanvasEditTabsRef.current(activePreviewTab);
+  }, [canvasEditEnabled, activePreviewTab]);
 
   const handlePreviewRangeModeChange = useCallback(
     (mode: 'sample' | 'all' | 'flipbook') => {
@@ -2587,19 +3421,20 @@ export function PreviewCanvas() {
           closeCanvasEditPanel();
         }
       };
-      if (canvasEditTarget && mode !== 'sample') {
+      if (hasCanvasEditPanelOpen && mode !== 'sample') {
         guardCanvasEditLeave(apply);
       } else {
         apply();
       }
     },
-    [canvasEditTarget, guardCanvasEditLeave, closeCanvasEditPanel, setPreviewRangeMode]
+    [hasCanvasEditPanelOpen, guardCanvasEditLeave, closeCanvasEditPanel, setPreviewRangeMode]
   );
 
   const handleCanvasEditUnsavedDialogOpenChange = useCallback((open: boolean) => {
     setCanvasEditUnsavedDialogOpen(open);
     if (!open) {
       pendingCanvasEditLeaveRef.current = null;
+      pendingCanvasEditTabCloseIdRef.current = null;
     }
   }, []);
 
@@ -2608,12 +3443,10 @@ export function PreviewCanvas() {
       if (tab === activePreviewTab) return;
       guardCanvasEditLeave(() => {
         setActivePreviewTab(tab);
-        if (tab === 'solutions') {
-          closeCanvasEditPanel();
-        }
+        openAllCanvasEditTabs(tab);
       });
     },
-    [activePreviewTab, guardCanvasEditLeave, setActivePreviewTab, closeCanvasEditPanel]
+    [activePreviewTab, guardCanvasEditLeave, setActivePreviewTab, openAllCanvasEditTabs]
   );
 
   const guardedSetActiveDocumentPageId = useCallback(
@@ -2667,21 +3500,91 @@ export function PreviewCanvas() {
 
   const handleCanvasEditDraftSettingsChange = useCallback(
     (updater: (prev: WordSearchSettings) => WordSearchSettings) => {
-      setEditSession((prev) => (prev ? { ...prev, draft: updater(prev.draft) } : prev));
+      updateCanvasEditSession((session) => ({
+        ...session,
+        draft: updater(session.draft),
+      }));
     },
-    []
+    [updateCanvasEditSession]
   );
 
-  const handleCanvasEditDraftTitleWordsChange = useCallback((nextTitleWords: TitleWordsSettings) => {
-    setEditSession((prev) => (prev ? { ...prev, draftTitleWords: nextTitleWords } : prev));
-  }, []);
+  const handleCanvasEditDraftTitleWordsChange = useCallback(
+    (nextTitleWords: TitleWordsSettings) => {
+      updateCanvasEditSession((session) => ({
+        ...session,
+        draftTitleWords: nextTitleWords,
+      }));
+    },
+    [updateCanvasEditSession]
+  );
 
-  const handleCanvasEditDraftGridScaleChange = useCallback((scale: number) => {
-    setEditSession((prev) => (prev ? { ...prev, draftPuzzleGridScale: scale } : prev));
-  }, []);
+  const handleCanvasEditDraftGridScaleChange = useCallback(
+    (scale: number) => {
+      updateCanvasEditSession((session) => ({
+        ...session,
+        draftPuzzleGridScale: scale,
+      }));
+    },
+    [updateCanvasEditSession]
+  );
 
-  const canvasEditHasUnsavedChanges = editSession ? hasUnsavedCanvasEdits(editSession) : false;
-  const canvasEditCanApplyToAllPages = editSession ? canApplyCanvasEditsToAllPages(editSession) : false;
+  const canvasEditHasUnsavedChanges =
+    canvasEditSession && canvasEditTabs.length > 0
+      ? anyCanvasEditTabHasUnsavedEdits(canvasEditSession, canvasEditTabs)
+      : false;
+  const canvasEditCanApplyToAllPages = editSession
+    ? canApplyCanvasEditsToAllPages(
+        editSession,
+        wordSearchSettings,
+        puzzleGridScale,
+        pageOverrides,
+        pagePuzzleGridScales
+      )
+    : false;
+
+  const canApplyToSelectedPages = useCallback(
+    (rangeInput: string) => {
+      if (!rangeInput.trim() || !editSession || canvasEditTabs.length === 0) {
+        return false;
+      }
+      if (anyCanvasEditTabHasUnsavedEdits(editSession, canvasEditTabs)) {
+        return true;
+      }
+      if (activeDocumentPuzzleCount < 1 || activeDocumentPuzzleStartIndex < 0) {
+        return false;
+      }
+
+      const documentPages = parsePageRangeSelection(rangeInput, activeDocumentPuzzleCount);
+      if (!documentPages) {
+        return true;
+      }
+
+      const batchIndices = documentPagesToBatchIndices(
+        documentPages,
+        activeDocumentPuzzleStartIndex
+      );
+
+      return !selectedRangePagesMatchDraftForRangeApply(
+        batchIndices,
+        wordSearchSettings,
+        pageOverrides,
+        pagePuzzleGridScales,
+        puzzleGridScale,
+        editSession,
+        canvasEditTabs
+      );
+    },
+    [
+      editSession,
+      canvasEditTabs,
+      activeDocumentPuzzleCount,
+      activeDocumentPuzzleStartIndex,
+      wordSearchSettings,
+      pageOverrides,
+      pagePuzzleGridScales,
+      puzzleGridScale,
+    ]
+  );
 
   const guardedInsertDocumentPage = useCallback(
     (type: DocumentModuleType, position: 'before' | 'after', referenceId: string) => {
@@ -2690,7 +3593,10 @@ export function PreviewCanvas() {
     [guardCanvasEditLeave, insertDocumentPage]
   );
 
-  const suppressCanvasGuides = canvasEditEnabled && !!canvasEditTarget;
+  const suppressCanvasGuides = canvasEditEnabled && hasCanvasEditPanelOpen;
+  const canvasEditHighlightTarget = hasCanvasEditPanelOpen ? null : canvasEditTarget;
+  const canvasEditHideGuides = hasCanvasEditPanelOpen;
+  const textEditHideGuides = textPageEditEnabled && textPageEditPanelOpen;
   const displayShowMargins = showMargins && !suppressCanvasGuides;
   const displayShowSafetyZone = showSafetyZone && !suppressCanvasGuides;
 
@@ -2757,7 +3663,6 @@ export function PreviewCanvas() {
     (page: CompiledPage) => {
       const navigate = () => {
         setPreviewRangeMode('sample');
-        closeCanvasEditPanel();
         setActiveDocumentPageId(page.sourceDocumentId);
 
         if (page.kind === 'solution') {
@@ -2815,7 +3720,6 @@ export function PreviewCanvas() {
       batchPuzzles,
       compiledBook,
       guardCanvasEditLeave,
-      closeCanvasEditPanel,
       setActiveDocumentPageId,
       setActivePreviewTab,
       setPreviewRangeMode,
@@ -3070,18 +3974,37 @@ export function PreviewCanvas() {
               isAllPagesPreview && 'preview-viewport--all-pages'
             )}
           >
-            {canvasEditEnabled && !canvasEditTarget && (
+            {canvasEditEnabled && !hasCanvasEditPanelOpen && (
               <span className="canvas-edit-hint">
                 {activePreviewTab === 'solutions'
-                  ? 'Click title, grid, page number, or background to edit'
-                  : 'Click title, grid, word list, page number, or background to edit'}
+                  ? 'Click an area to edit · drag panel header to move · minimize to preview'
+                  : 'Click an area to edit · drag panel header to move · minimize to preview'}
               </span>
             )}
-            {canvasEditEnabled && canvasEditTarget && editSession && (
+            {textPageEditEnabled && textPageEditPanelOpen && activeTextSettings && activeDocumentPage && (
+              <TextPageContextualControls
+                pageName={activeDocumentPage.name}
+                settings={activeTextSettings}
+                globalSettings={wordSearchSettings}
+                activeTarget={textPageEditTarget}
+                selectedBlockId={selectedTextBlockId}
+                onTargetChange={handleTextEditTargetChange}
+                onSelectBlock={handleSelectTextBlock}
+                onSettingsChange={handleTextSettingsChange}
+                onClose={() => setTextPageEditPanelOpen(false)}
+              />
+            )}
+            {textPageEditEnabled && !textPageEditPanelOpen && (
+              <span className="canvas-edit-hint">
+                Drag elements to move · click text to edit · use panel to add more
+              </span>
+            )}
+            {canvasEditEnabled && hasCanvasEditPanelOpen && editSession && canvasEditTarget && (
               <CanvasContextualControls
                 target={canvasEditTarget}
                 pageKind={activePreviewTab === 'solutions' ? 'solution' : 'puzzle'}
                 pageIndex={currentBatchIndex}
+                currentPuzzle={batchPuzzles[currentBatchIndex] ?? null}
                 draftSettings={editSession.draft}
                 onDraftSettingsChange={handleCanvasEditDraftSettingsChange}
                 draftPuzzleGridScale={editSession.draftPuzzleGridScale}
@@ -3089,10 +4012,18 @@ export function PreviewCanvas() {
                 draftTitleWords={editSession.draftTitleWords}
                 onDraftTitleWordsChange={handleCanvasEditDraftTitleWordsChange}
                 onCommitPage={handleCanvasEditCommitPage}
-                onCommitAll={handleCanvasEditCommitAll}
+                onCommitAll={() => requestCanvasEditCommitAll(false)}
+                onCommitRange={handleCanvasEditCommitRange}
                 onCancel={handleCanvasEditCancel}
                 hasUnsavedChanges={canvasEditHasUnsavedChanges}
                 canApplyToAllPages={canvasEditCanApplyToAllPages}
+                documentPuzzleCount={activeDocumentPuzzleCount}
+                rangeError={canvasEditRangeError}
+                canApplyToSelectedPages={canApplyToSelectedPages}
+                editTabs={canvasEditPanelTabs}
+                activeEditTabId={activeCanvasEditTabId}
+                onEditTabSelect={handleCanvasEditTabSelect}
+                onEditTabClose={handleCanvasEditTabClose}
               />
             )}
             {hasPuzzles || hasPreviewPages ? (
@@ -3144,7 +4075,18 @@ export function PreviewCanvas() {
                       compiledSolutionPages={compiledSolutionPagesForActiveDoc}
                       canvasEditEnabled={canvasEditEnabled}
                       canvasEditTarget={canvasEditTarget}
+                      canvasEditHighlightTarget={canvasEditHighlightTarget}
+                      canvasEditHideGuides={canvasEditHideGuides}
                       onCanvasEditTargetChange={handleCanvasEditTargetChange}
+                      textEditEnabled={textPageEditEnabled}
+                      textEditTarget={textPageEditTarget}
+                      textEditHideGuides={textEditHideGuides}
+                      onTextEditTargetChange={handleTextEditTargetChange}
+                      onTextSettingsChange={handleTextSettingsChange}
+                      selectedTextBlockId={selectedTextBlockId}
+                      onSelectTextBlock={handleSelectTextBlock}
+                      onSelectTextPageFrame={handleSelectTextPageFrame}
+                      canvasScale={previewZoom / 100}
                       />
                     </div>
                 </div>
@@ -3186,7 +4128,6 @@ export function PreviewCanvas() {
                                   : () => {
                                       guardCanvasEditLeave(() => {
                                         setPreviewRangeMode('sample');
-                                        closeCanvasEditPanel();
                                         setActiveDocumentPageId(entry.sourceDocumentId);
                                         setActivePreviewTab('solutions');
                                         const docSolutionIndex =
@@ -3260,6 +4201,8 @@ export function PreviewCanvas() {
                                 compiledSolutionPages={compiledSolutionPagesForActiveDoc}
                                 canvasEditEnabled={canvasEditEnabled}
                                 canvasEditTarget={canvasEditTarget}
+                                canvasEditHighlightTarget={canvasEditHighlightTarget}
+                                canvasEditHideGuides={canvasEditHideGuides}
                                 onCanvasEditTargetChange={handleCanvasEditTargetChange}
                               />
                             </AllPagesGridPreview.Item>
@@ -3309,7 +4252,6 @@ export function PreviewCanvas() {
                                 onEdit={() => {
                                   guardCanvasEditLeave(() => {
                                     setPreviewRangeMode('sample');
-                                    closeCanvasEditPanel();
                                     setActivePreviewTab('solutions');
                                     setCurrentSolutionPageIndex(pageIdx);
                                   });
@@ -3373,7 +4315,18 @@ export function PreviewCanvas() {
                         compiledSolutionPages={compiledSolutionPagesForActiveDoc}
                         canvasEditEnabled={canvasEditEnabled}
                         canvasEditTarget={canvasEditTarget}
+                        canvasEditHighlightTarget={canvasEditHighlightTarget}
+                        canvasEditHideGuides={canvasEditHideGuides}
                         onCanvasEditTargetChange={handleCanvasEditTargetChange}
+                        textEditEnabled={textPageEditEnabled}
+                        textEditTarget={textPageEditTarget}
+                        textEditHideGuides={textEditHideGuides}
+                        onTextEditTargetChange={handleTextEditTargetChange}
+                        onTextSettingsChange={handleTextSettingsChange}
+                        selectedTextBlockId={selectedTextBlockId}
+                        onSelectTextBlock={handleSelectTextBlock}
+                        onSelectTextPageFrame={handleSelectTextPageFrame}
+                        canvasScale={previewZoom / 100}
                           />
                         </div>
                   ))
@@ -3396,6 +4349,8 @@ export function PreviewCanvas() {
                       )}
                       canvasEditEnabled={canvasEditEnabled}
                       canvasEditTarget={canvasEditTarget}
+                      canvasEditHighlightTarget={canvasEditHighlightTarget}
+                      canvasEditHideGuides={canvasEditHideGuides}
                       onCanvasEditTargetChange={handleCanvasEditTargetChange}
                     />
                   ) : null
@@ -3419,6 +4374,8 @@ export function PreviewCanvas() {
                     pageMargin={pageMargin}
                     canvasEditEnabled={canvasEditEnabled}
                     canvasEditTarget={canvasEditTarget}
+                    canvasEditHighlightTarget={canvasEditHighlightTarget}
+                    canvasEditHideGuides={canvasEditHideGuides}
                     onCanvasEditTargetChange={handleCanvasEditTargetChange}
                   />
                 ) : null}
@@ -3720,6 +4677,24 @@ export function PreviewCanvas() {
         onDiscard={handleCanvasEditUnsavedDiscard}
         hasUnsavedChanges={canvasEditHasUnsavedChanges}
         canApplyToAllPages={canvasEditCanApplyToAllPages}
+      />
+
+      <CanvasApplyToAllConfirmDialog
+        open={applyToAllConfirmOpen}
+        onOpenChange={(open) => {
+          setApplyToAllConfirmOpen(open);
+          if (!open) applyToAllPendingLeaveRef.current = false;
+        }}
+        editedPageIndices={getOtherEditedPageIndices(
+          wordSearchSettings,
+          puzzleGridScale,
+          pageOverrides,
+          pagePuzzleGridScales,
+          currentBatchIndex
+        )}
+        preserveEditedPages={preserveEditedPagesOnApply}
+        onPreserveEditedPagesChange={setPreserveEditedPagesOnApply}
+        onConfirm={handleApplyToAllConfirm}
       />
     </div>
   );

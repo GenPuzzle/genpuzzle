@@ -25,7 +25,7 @@ export function normalizePageNumberSettings(
     startAtPage: Math.max(1, Math.round(Number(base.startAtPage) || 1)),
     position: POSITIONS.includes(base.position as PageNumberPosition)
       ? (base.position as PageNumberPosition)
-      : 'bottom-center',
+      : DEFAULT_PAGE_NUMBER_SETTINGS.position,
     shape: {
       shapeId: normalizeNumberShapeId(shape.shapeId),
       fillColor: shape.fillColor || DEFAULT_PAGE_NUMBER_SETTINGS.shape.fillColor,
@@ -36,8 +36,16 @@ export function normalizePageNumberSettings(
     textColor: base.textColor || DEFAULT_PAGE_NUMBER_SETTINGS.textColor,
     fontFamily: base.fontFamily || DEFAULT_PAGE_NUMBER_SETTINGS.fontFamily,
     fontSize: clamp(Number(base.fontSize) || 14, 8, 48),
-    bottomOffsetPx: clamp(Number(base.bottomOffsetPx) || 0, 0, 120),
-    sideOffsetPx: clamp(Number(base.sideOffsetPx) || 0, 0, 120),
+    bottomOffsetPx: clamp(
+      Number(base.bottomOffsetPx ?? DEFAULT_PAGE_NUMBER_SETTINGS.bottomOffsetPx),
+      0,
+      120
+    ),
+    sideOffsetPx: clamp(
+      Number(base.sideOffsetPx ?? DEFAULT_PAGE_NUMBER_SETTINGS.sideOffsetPx),
+      0,
+      120
+    ),
   };
 }
 

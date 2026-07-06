@@ -2,6 +2,7 @@
 
 import { AppDownloadMenu } from '@/components/AppDownloadMenu';
 import { HeaderExpandButton, HeaderExpandLink } from '@/components/HeaderExpandButton';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { useAuth } from '@/lib/auth-context';
 import { useLeavePagePrompt } from '@/lib/leave-page-prompt-context';
 import { BookOpen, Info, LogOut, Mail, Share2 } from 'lucide-react';
@@ -24,7 +25,8 @@ export function AppHeaderRightNav({ onShare, shareEnabled = false }: AppHeaderRi
   };
 
   return (
-    <nav className="flex items-center gap-1.5 sm:gap-2" aria-label="Help and account">
+    <nav className="flex items-center gap-1 sm:gap-1.5 md:gap-2" aria-label="Help and account">
+      <ThemeToggle variant="header" />
       <AppDownloadMenu />
       <HeaderExpandButton
         expandSize="xl"

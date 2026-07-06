@@ -9,7 +9,7 @@ import {
   migrateLegacyHeaderLayout,
 } from './header-assembly/types';
 
-function mergePuzzlePageColors(
+export function mergePuzzlePageColors(
   globalPage: WordSearchSettings['colors']['puzzlePage'],
   overridePage?: Partial<WordSearchSettings['colors']['puzzlePage']>
 ): WordSearchSettings['colors']['puzzlePage'] {

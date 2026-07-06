@@ -5,13 +5,14 @@
  * Uses soft scaling from 8.5×11 reference. Example: word list 18 → 16 at 6×9.
  */
 
-import type { WordSearchSettings } from './puzzles/types';
+import type { WordSearchSettings, TitleWordsSettings } from './puzzles/types';
+import { DEFAULT_TITLE_START_AT, DEFAULT_PAGE_NUMBER_SETTINGS, getDefaultWordSearchSettings } from './puzzles/types';
 import type { HeaderAssemblySettings } from './header-assembly/types';
 import { normalizeHeaderAssemblySettings } from './header-assembly/types';
 import { normalizePageNumberSettings } from './page-number/settings';
 import { resolvePageFrameSettings } from './page-frame-settings';
+import { getEffectiveSettingsForPage } from './page-settings';
 import { isTextModuleSettings, type DocumentPage } from './document-model';
-import type { TitleWordsSettings } from './puzzles/types';
 
 export type TrimSizePresetId =
   | '5X8IN'
@@ -26,10 +27,7 @@ export type TrimSizePresetId =
   | '7_5X9_25IN'
   | '8X10IN'
   | '8_5X11IN'
-  | '8_27X11_69IN'
-  | '8_25X6IN'
-  | '8_25X8_25IN'
-  | '8_5X8_5IN';
+  | '8_27X11_69IN';
 
 export const TRIM_SIZE_PRESETS: Record<TrimSizePresetId, { width: number; height: number }> = {
   '5X8IN': { width: 5, height: 8 },
@@ -45,9 +43,6 @@ export const TRIM_SIZE_PRESETS: Record<TrimSizePresetId, { width: number; height
   '8X10IN': { width: 8, height: 10 },
   '8_5X11IN': { width: 8.5, height: 11 },
   '8_27X11_69IN': { width: 8.27, height: 11.69 },
-  '8_25X6IN': { width: 8.25, height: 6 },
-  '8_25X8_25IN': { width: 8.25, height: 8.25 },
-  '8_5X8_5IN': { width: 8.5, height: 8.5 },
 };
 
 export const REFERENCE_TRIM_WIDTH_IN = 8.5;
@@ -157,7 +152,7 @@ export function applyTrimLayoutToSettings(
         1
       ),
       solutionGridBorderPadding: s(current.core.solutionGridBorderPadding, 2),
-      gridLinesStrokeThickness: s(current.core.gridLinesStrokeThickness, 1),
+      gridLinesStrokeThickness: s(current.core.gridLinesStrokeThickness, 0),
     },
     typography: {
       ...current.typography,
@@ -166,7 +161,7 @@ export function applyTrimLayoutToSettings(
       subtitleFontSize: s(current.typography.subtitleFontSize, 8),
       puzzleGridFontSize: s(current.typography.puzzleGridFontSize, 8),
       answerGridFontSize: s(current.typography.answerGridFontSize, 8),
-      titleStartAt: s(current.typography.titleStartAt, 8),
+      titleStartAt: s(current.typography.titleStartAt, DEFAULT_TITLE_START_AT),
       spaceBetweenTitleAndPuzzle: s(current.typography.spaceBetweenTitleAndPuzzle, 4),
       spaceBetweenTitleAndAnswer: s(current.typography.spaceBetweenTitleAndAnswer, 4),
       spaceBetweenPuzzleAndWordList: s(current.typography.spaceBetweenPuzzleAndWordList, 4),
@@ -177,8 +172,8 @@ export function applyTrimLayoutToSettings(
       pageNumber: {
         ...pageNumber,
         fontSize: s(pageNumber.fontSize, 8),
-        bottomOffsetPx: s(pageNumber.bottomOffsetPx, 4),
-        sideOffsetPx: s(pageNumber.sideOffsetPx, 4),
+        bottomOffsetPx: s(pageNumber.bottomOffsetPx, DEFAULT_PAGE_NUMBER_SETTINGS.bottomOffsetPx),
+        sideOffsetPx: s(pageNumber.sideOffsetPx, DEFAULT_PAGE_NUMBER_SETTINGS.sideOffsetPx),
         shape: {
           ...pageNumber.shape,
           borderThicknessPx: s(pageNumber.shape.borderThicknessPx, 1),
@@ -213,10 +208,113 @@ export function applyTrimLayoutToSettings(
   };
 }
 
+/** Apply a trim layout patch onto full settings (shared by global, overrides, and documents). */
+export function mergeTrimLayoutPatch(
+  current: WordSearchSettings,
+  patch: Partial<WordSearchSettings>,
+  nextBookCanvas: WordSearchSettings['bookCanvas']
+): WordSearchSettings {
+  return {
+    ...current,
+    bookCanvas: { ...current.bookCanvas, ...nextBookCanvas },
+    core: { ...current.core, ...patch.core },
+    typography: { ...current.typography, ...patch.typography },
+    wordList: { ...current.wordList, ...patch.wordList },
+    colors: {
+      puzzlePage: {
+        ...current.colors.puzzlePage,
+        ...patch.colors?.puzzlePage,
+      },
+      answerPage: {
+        ...current.colors.answerPage,
+        ...patch.colors?.answerPage,
+      },
+    },
+    pageFrameSettings: patch.pageFrameSettings
+      ? { ...current.pageFrameSettings, ...patch.pageFrameSettings }
+      : current.pageFrameSettings,
+  };
+}
+
+export function scaleWordSearchSettingsForTrim(
+  current: WordSearchSettings,
+  ratio: number,
+  nextBookCanvas: WordSearchSettings['bookCanvas']
+): WordSearchSettings {
+  if (Math.abs(ratio - 1) < 0.001) {
+    return { ...current, bookCanvas: { ...current.bookCanvas, ...nextBookCanvas } };
+  }
+  const patch = applyTrimLayoutToSettings(current, ratio);
+  return mergeTrimLayoutPatch(current, patch, nextBookCanvas);
+}
+
+/** Scale a per-page override using the page's effective settings before trim. */
+export function applyTrimLayoutToPageOverride(
+  global: WordSearchSettings,
+  override: Partial<WordSearchSettings>,
+  ratio: number,
+  nextBookCanvas: WordSearchSettings['bookCanvas']
+): Partial<WordSearchSettings> {
+  if (Math.abs(ratio - 1) < 0.001) {
+    return override;
+  }
+
+  const effective = getEffectiveSettingsForPage(
+    global,
+    new Map<number, Partial<WordSearchSettings>>([[0, override]]),
+    0
+  );
+  const scaled = scaleWordSearchSettingsForTrim(effective, ratio, nextBookCanvas);
+
+  const result: Partial<WordSearchSettings> = {};
+  if (override.bookCanvas !== undefined) result.bookCanvas = scaled.bookCanvas;
+  if (override.core !== undefined) result.core = scaled.core;
+  if (override.typography !== undefined) result.typography = scaled.typography;
+  if (override.wordList !== undefined) result.wordList = scaled.wordList;
+  if (override.colors !== undefined) result.colors = scaled.colors;
+  if (override.pageFrameSettings !== undefined) result.pageFrameSettings = scaled.pageFrameSettings;
+  return result;
+}
+
+export function scalePageOverridesForTrim(
+  overrides: Map<number, Partial<WordSearchSettings>>,
+  prevGlobal: WordSearchSettings,
+  ratio: number,
+  nextBookCanvas: WordSearchSettings['bookCanvas']
+): Map<number, Partial<WordSearchSettings>> {
+  if (Math.abs(ratio - 1) < 0.001 || overrides.size === 0) {
+    return overrides;
+  }
+
+  const next = new Map<number, Partial<WordSearchSettings>>();
+  for (const [pageIndex, override] of overrides) {
+    next.set(
+      pageIndex,
+      applyTrimLayoutToPageOverride(prevGlobal, override, ratio, nextBookCanvas)
+    );
+  }
+  return next;
+}
+
+export function scalePagePuzzleGridScalesForTrim(
+  scales: Map<number, number>,
+  ratio: number
+): Map<number, number> {
+  if (Math.abs(ratio - 1) < 0.001 || scales.size === 0) {
+    return scales;
+  }
+
+  const next = new Map<number, number>();
+  for (const [pageIndex, scale] of scales) {
+    next.set(pageIndex, scaleGridScalePercent(scale, ratio));
+  }
+  return next;
+}
+
 export function scaleDocumentPagesForTrim(
   pages: DocumentPage[],
-  scaledSettings: WordSearchSettings,
-  ratio: number
+  ratio: number,
+  nextBookCanvas: WordSearchSettings['bookCanvas']
 ): DocumentPage[] {
   if (Math.abs(ratio - 1) < 0.001) {
     return pages;
@@ -224,23 +322,33 @@ export function scaleDocumentPagesForTrim(
 
   return pages.map((page) => {
     if (isTextModuleSettings(page.settings)) {
+      const scaledBlocks = page.settings.blocks?.map((block) => ({
+        ...block,
+        fontSize: scaleInt(block.fontSize, ratio, 8),
+      }));
       return {
         ...page,
         settings: {
           ...page.settings,
           fontSize: scaleInt(page.settings.fontSize, ratio, 10),
+          titleFontSize: page.settings.titleFontSize
+            ? scaleInt(page.settings.titleFontSize, ratio, 10)
+            : page.settings.titleFontSize,
+          blocks: scaledBlocks ?? page.settings.blocks,
         },
       };
     }
     if (page.moduleType === 'word-search') {
       const ps = page.settings as import('./document-model').PuzzleModuleSettings;
+      const ws = ps.wordSearchSettings ?? getDefaultWordSearchSettings();
+      const scaledWs = scaleWordSearchSettingsForTrim(ws, ratio, nextBookCanvas);
       return {
         ...page,
         settings: {
           ...ps,
-          wordSearchSettings: scaledSettings,
+          wordSearchSettings: scaledWs,
           titleWords: ps.titleWords
-            ? { ...ps.titleWords, fontSize: scaleInt(ps.titleWords.fontSize, ratio, 12) }
+            ? applyTrimLayoutToTitleWords(ps.titleWords, ratio)
             : ps.titleWords,
         },
       };

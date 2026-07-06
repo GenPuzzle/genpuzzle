@@ -2,13 +2,83 @@
 
 import React, { useState } from 'react';
 import Image from 'next/image';
-import { Loader2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  BookOpen,
+  Eye,
+  EyeOff,
+  FileDown,
+  LayoutGrid,
+  Loader2,
+  Lock,
+  Mail,
+  User,
+} from 'lucide-react';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { useAuth } from '@/lib/auth-context';
 import { DEFAULT_ADMIN_USERNAME } from '@/lib/auth-storage';
+import { cn } from '@/lib/utils';
+import './login-page.css';
+
+function AuthField({
+  id,
+  label,
+  type = 'text',
+  value,
+  onChange,
+  placeholder,
+  autoComplete,
+  icon: Icon,
+  required,
+}: {
+  id: string;
+  label: string;
+  type?: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  autoComplete?: string;
+  icon: React.ComponentType<{ className?: string }>;
+  required?: boolean;
+}) {
+  const [showPassword, setShowPassword] = useState(false);
+  const isPassword = type === 'password';
+  const inputType = isPassword && showPassword ? 'text' : type;
+
+  return (
+    <div className="auth-page__field">
+      <label htmlFor={id}>{label}</label>
+      <div className="auth-page__input-wrap">
+        <Icon className="auth-page__input-icon" aria-hidden />
+        <input
+          id={id}
+          type={inputType}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          autoComplete={autoComplete}
+          required={required}
+        />
+        {isPassword && (
+          <button
+            type="button"
+            className="auth-page__toggle-pw gp-theme-toggle"
+            onClick={() => setShowPassword((prev) => !prev)}
+            aria-label={showPassword ? 'Hide password' : 'Show password'}
+            tabIndex={-1}
+          >
+            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const FEATURES = [
+  { icon: LayoutGrid, text: 'Design puzzle books with live page preview' },
+  { icon: BookOpen, text: 'Organize multi-page books with drag-and-drop tabs' },
+  { icon: FileDown, text: 'Export print-ready PDF and PowerPoint for KDP' },
+] as const;
 
 export function LoginPage() {
   const { login, register } = useAuth();
@@ -60,146 +130,184 @@ export function LoginPage() {
     }
   };
 
+  const switchTab = (next: 'login' | 'register') => {
+    setTab(next);
+    setError(null);
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#f0f5f6] via-white to-[#e8f1f8] p-4">
-      <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
-        <div
-          className="px-6 py-8 text-center text-white"
-          style={{ background: 'linear-gradient(to right, #1a5a8c 0%, #2276b4 100%)' }}
-        >
-          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15">
-            <Image
-              src="/genpuzzle-icon-white.svg"
-              alt="GenPuzzle"
-              width={36}
-              height={36}
-              className="h-9 w-9"
-              unoptimized
-            />
+    <div className="auth-page">
+      <div className="auth-page__blob auth-page__blob--a" aria-hidden />
+      <div className="auth-page__blob auth-page__blob--b" aria-hidden />
+
+      <div className="auth-page__shell">
+        <aside className="auth-page__brand">
+          <div className="auth-page__brand-top">
+            <div className="auth-page__logo-wrap">
+              <Image
+                src="/genpuzzle-icon-white.svg"
+                alt="GenPuzzle"
+                width={36}
+                height={36}
+                className="h-9 w-9"
+                unoptimized
+                priority
+              />
+            </div>
+            <div>
+              <h1>GenPuzzle</h1>
+              <p className="auth-page__brand-tagline">
+                Create professional puzzle books — layout pages, preview your design, and export for
+                Amazon KDP.
+              </p>
+            </div>
           </div>
-          <h1 className="text-2xl font-bold tracking-tight">GenPuzzle</h1>
-          <p className="mt-1 text-sm text-blue-100">Sign in to create puzzle books</p>
-        </div>
 
-        <div className="p-6">
-          <Tabs
-            value={tab}
-            onValueChange={(value) => {
-              setTab(value as 'login' | 'register');
-              setError(null);
-            }}
-          >
-            <TabsList className="mb-6 grid h-10 w-full grid-cols-2">
-              <TabsTrigger value="login" className="w-full">
-                Sign in
-              </TabsTrigger>
-              <TabsTrigger value="register" className="w-full">
-                Register
-              </TabsTrigger>
-            </TabsList>
+          <ul className="auth-page__features">
+            {FEATURES.map(({ icon: Icon, text }) => (
+              <li key={text} className="auth-page__feature">
+                <span className="auth-page__feature-icon">
+                  <Icon className="h-3.5 w-3.5" strokeWidth={2.25} />
+                </span>
+                <span>{text}</span>
+              </li>
+            ))}
+          </ul>
+        </aside>
 
-            {error && (
-              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                {error}
-              </div>
-            )}
+        <main className="auth-page__panel">
+          <div className="auth-page__panel-header">
+            <div>
+              <h2 className="auth-page__panel-title">
+                {tab === 'login' ? 'Welcome back' : 'Create your account'}
+              </h2>
+              <p className="auth-page__panel-subtitle">
+                {tab === 'login'
+                  ? 'Sign in to continue to your projects'
+                  : 'Register to start building puzzle books'}
+              </p>
+            </div>
+            <ThemeToggle variant="marketing" />
+          </div>
 
-            <TabsContent value="login">
-              <form onSubmit={handleLogin} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="login-username">Username</Label>
-                  <Input
-                    id="login-username"
-                    value={loginUsername}
-                    onChange={(e) => setLoginUsername(e.target.value)}
-                    placeholder={DEFAULT_ADMIN_USERNAME}
-                    autoComplete="username"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="login-password">Password</Label>
-                  <Input
-                    id="login-password"
-                    type="password"
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    autoComplete="current-password"
-                    required
-                  />
-                </div>
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Signing in…
-                    </>
-                  ) : (
-                    'Sign in'
-                  )}
-                </Button>
-              </form>
-            </TabsContent>
+          <div className="auth-page__tabs" role="tablist" aria-label="Authentication">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'login'}
+              className={cn('auth-page__tab', tab === 'login' && 'auth-page__tab--active')}
+              onClick={() => switchTab('login')}
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'register'}
+              className={cn('auth-page__tab', tab === 'register' && 'auth-page__tab--active')}
+              onClick={() => switchTab('register')}
+            >
+              Register
+            </button>
+          </div>
 
-            <TabsContent value="register">
-              <form onSubmit={handleRegister} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="register-username">Username</Label>
-                  <Input
-                    id="register-username"
-                    value={registerUsername}
-                    onChange={(e) => setRegisterUsername(e.target.value)}
-                    autoComplete="username"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="register-email">Email</Label>
-                  <Input
-                    id="register-email"
-                    type="email"
-                    value={registerEmail}
-                    onChange={(e) => setRegisterEmail(e.target.value)}
-                    autoComplete="email"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="register-password">Password</Label>
-                  <Input
-                    id="register-password"
-                    type="password"
-                    value={registerPassword}
-                    onChange={(e) => setRegisterPassword(e.target.value)}
-                    autoComplete="new-password"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="register-confirm">Confirm password</Label>
-                  <Input
-                    id="register-confirm"
-                    type="password"
-                    value={registerConfirm}
-                    onChange={(e) => setRegisterConfirm(e.target.value)}
-                    autoComplete="new-password"
-                    required
-                  />
-                </div>
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Creating account…
-                    </>
-                  ) : (
-                    'Create account'
-                  )}
-                </Button>
-              </form>
-            </TabsContent>
-          </Tabs>
-        </div>
+          {error && (
+            <div className="auth-page__error" role="alert">
+              {error}
+            </div>
+          )}
+
+          {tab === 'login' ? (
+            <form onSubmit={handleLogin} className="auth-page__form">
+              <AuthField
+                id="login-username"
+                label="Username"
+                value={loginUsername}
+                onChange={setLoginUsername}
+                placeholder={DEFAULT_ADMIN_USERNAME}
+                autoComplete="username"
+                icon={User}
+                required
+              />
+              <AuthField
+                id="login-password"
+                label="Password"
+                type="password"
+                value={loginPassword}
+                onChange={setLoginPassword}
+                autoComplete="current-password"
+                icon={Lock}
+                required
+              />
+              <button type="submit" className="auth-page__submit" disabled={loading}>
+                {loading ? (
+                  <span className="inline-flex items-center justify-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Signing in…
+                  </span>
+                ) : (
+                  'Sign in'
+                )}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleRegister} className="auth-page__form">
+              <AuthField
+                id="register-username"
+                label="Username"
+                value={registerUsername}
+                onChange={setRegisterUsername}
+                autoComplete="username"
+                icon={User}
+                required
+              />
+              <AuthField
+                id="register-email"
+                label="Email"
+                type="email"
+                value={registerEmail}
+                onChange={setRegisterEmail}
+                autoComplete="email"
+                icon={Mail}
+                required
+              />
+              <AuthField
+                id="register-password"
+                label="Password"
+                type="password"
+                value={registerPassword}
+                onChange={setRegisterPassword}
+                autoComplete="new-password"
+                icon={Lock}
+                required
+              />
+              <AuthField
+                id="register-confirm"
+                label="Confirm password"
+                type="password"
+                value={registerConfirm}
+                onChange={setRegisterConfirm}
+                autoComplete="new-password"
+                icon={Lock}
+                required
+              />
+              <button type="submit" className="auth-page__submit" disabled={loading}>
+                {loading ? (
+                  <span className="inline-flex items-center justify-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Creating account…
+                  </span>
+                ) : (
+                  'Create account'
+                )}
+              </button>
+            </form>
+          )}
+
+          <p className="auth-page__footer">
+            © {new Date().getFullYear()} GenPuzzle. All rights reserved.
+          </p>
+        </main>
       </div>
     </div>
   );

@@ -55,7 +55,10 @@ import {
   scaleDocumentPagesForTrim,
   scaleGridScalePercent,
   scaleInt,
+  scalePageOverridesForTrim,
+  scalePagePuzzleGridScalesForTrim,
 } from './trim-size-layout';
+import { mergePuzzlePageColors } from '@/lib/page-settings';
 import { normalizeBatchPuzzleDocumentIndices } from './puzzle-line-index';
 
 interface ValidationError {
@@ -63,7 +66,14 @@ interface ValidationError {
   message: string;
 }
 
-export interface AppContextType {
+export interface GeneratePuzzleOptions {
+  /** Skip regenerating these batch puzzle indices and keep their existing grids. */
+  preserveEditedPageIndices?: number[];
+  /** Remove all per-page styling overrides before generating. */
+  clearPageCustomizations?: boolean;
+}
+
+interface AppContextType {
   // Current puzzle type
   currentPuzzleType: PuzzleType;
   setCurrentPuzzleType: (type: PuzzleType) => void;
@@ -99,16 +109,20 @@ export interface AppContextType {
 
   // Validation
   validationError: ValidationError | null;
-  validateAndGenerate: () => boolean;
+  validateAndGenerate: (options?: GeneratePuzzleOptions) => boolean;
 
   // Generate puzzle (triggers validation)
-  generatePuzzle: () => void;
+  generatePuzzle: (options?: GeneratePuzzleOptions) => void;
 
   /** Regenerate a single word-search puzzle at the given batch index. */
   regeneratePuzzleAtIndex: (
     batchIndex: number,
     wordsOverride?: string[],
-    coreOverride?: { lettersAcross: number; lettersDown: number }
+    options?: {
+      lettersAcross?: number;
+      lettersDown?: number;
+      settings?: WordSearchSettings;
+    }
   ) => WordSearchPuzzle | null;
   restoreBatchPuzzleAtIndex: (batchIndex: number, puzzle: WordSearchPuzzle) => void;
 
@@ -165,9 +179,11 @@ export interface AppContextType {
   setPageOverrides: (overrides: Map<number, Partial<WordSearchSettings>>) => void;
   updatePageOverride: (pageIndex: number, updates: Partial<WordSearchSettings>) => void;
   clearPageOverride: (pageIndex: number) => void;
+  clearAllPageOverrides: () => void;
   pagePuzzleGridScales: Map<number, number>;
   setPagePuzzleGridScale: (pageIndex: number, scale: number) => void;
   clearPagePuzzleGridScale: (pageIndex: number) => void;
+  clearAllPagePuzzleGridScales: () => void;
 
   documentPages: DocumentPage[];
   activeDocumentPageId: string;
@@ -827,10 +843,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               ...updates.colors,
               ...(updates.colors.puzzlePage
                 ? {
-                    puzzlePage: {
-                      ...(current.colors?.puzzlePage ?? {}),
-                      ...updates.colors.puzzlePage,
-                    },
+                    puzzlePage: mergePuzzlePageColors(
+                      current.colors?.puzzlePage ?? updates.colors.puzzlePage,
+                      updates.colors.puzzlePage
+                    ),
                   }
                 : {}),
               ...(updates.colors.answerPage
@@ -861,6 +877,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setStylingTrigger(t => t + 1);
   }, []);
 
+  const clearAllPageOverrides = useCallback(() => {
+    setPageOverrides(new Map());
+    setStylingTrigger(t => t + 1);
+  }, []);
+
   const setPagePuzzleGridScale = useCallback((pageIndex: number, scale: number) => {
     setPagePuzzleGridScales((prev) => {
       const next = new Map(prev);
@@ -877,6 +898,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       next.delete(pageIndex);
       return next;
     });
+    setStylingTrigger((t) => t + 1);
+  }, []);
+
+  const clearAllPagePuzzleGridScales = useCallback(() => {
+    setPagePuzzleGridScales(new Map());
     setStylingTrigger((t) => t + 1);
   }, []);
 
@@ -917,10 +943,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     ) => {
       const trimChangeRef: {
         ratio: number;
+        prevSettings: WordSearchSettings | null;
         nextSettings: WordSearchSettings | null;
-      } = { ratio: 1, nextSettings: null };
+      } = { ratio: 1, prevSettings: null, nextSettings: null };
 
       setWordSearchSettings((prev) => {
+        trimChangeRef.prevSettings = prev;
         const prevDims = resolveTrimDimensions(prev.bookCanvas);
         const nextBookCanvas = { ...prev.bookCanvas, ...bookCanvasUpdates };
         const nextDims = dimensions ?? resolveTrimDimensions(nextBookCanvas);
@@ -945,8 +973,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return trimChangeRef.nextSettings;
       });
 
-      const { ratio, nextSettings } = trimChangeRef;
-      if (Math.abs(ratio - 1) < 0.001 || !nextSettings) {
+      const { ratio, prevSettings, nextSettings } = trimChangeRef;
+      if (Math.abs(ratio - 1) < 0.001 || !nextSettings || !prevSettings) {
         return;
       }
 
@@ -955,7 +983,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setTitleToAnswerGap((gap) => scaleInt(gap, ratio, 4));
       setSolutionToSolutionGap((gap) => scaleInt(gap, ratio, 4));
       setTitleWords((tw) => applyTrimLayoutToTitleWords(tw, ratio));
-      setDocumentPages((pages) => scaleDocumentPagesForTrim(pages, nextSettings, ratio));
+      setPageOverrides((overrides) =>
+        scalePageOverridesForTrim(overrides, prevSettings, ratio, nextSettings.bookCanvas)
+      );
+      setPagePuzzleGridScales((scales) => scalePagePuzzleGridScalesForTrim(scales, ratio));
+      setDocumentPages((pages) =>
+        scaleDocumentPagesForTrim(pages, ratio, nextSettings.bookCanvas)
+      );
       setStylingTrigger((t) => t + 1);
     },
     []
@@ -997,7 +1031,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Validate and generate batch puzzles for the active word-search document only
-  const validateAndGenerate = useCallback((): boolean => {
+  const validateAndGenerate = useCallback((options?: GeneratePuzzleOptions): boolean => {
     const activePage = documentPages.find(
       (page) => page.id === activeDocumentPageId && page.moduleType === 'word-search'
     );
@@ -1008,6 +1042,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         message: 'Select a word search document tab to generate puzzles.',
       });
       return false;
+    }
+
+    if (options?.clearPageCustomizations) {
+      clearAllPageOverrides();
+      clearAllPagePuzzleGridScales();
     }
 
     persistPagePuzzleSettings(activeDocumentPageId, titleWords, wordSearchSettings);
@@ -1025,9 +1064,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const directions = getDirections(wordSearchSettings);
+    const preserveSet = new Set(options?.preserveEditedPageIndices ?? []);
+    const existingByDocIndex = new Map<number, WordSearchPuzzle>();
+    const existingBatchIndexByDocIndex = new Map<number, number>();
+    for (let batchIndex = 0; batchIndex < batchPuzzles.length; batchIndex++) {
+      const puzzle = batchPuzzles[batchIndex];
+      if (puzzle?.pageId !== activePage.id) continue;
+      const docIdx = puzzle.puzzleIndexInDocument ?? 0;
+      existingByDocIndex.set(docIdx, puzzle);
+      existingBatchIndexByDocIndex.set(docIdx, batchIndex);
+    }
+
     const newPuzzles: WordSearchPuzzle[] = [];
 
     for (let i = 0; i < ws.core.numberOfPuzzles; i++) {
+      const batchIndex = existingBatchIndexByDocIndex.get(i);
+      if (batchIndex !== undefined && preserveSet.has(batchIndex)) {
+        const existing = existingByDocIndex.get(i);
+        if (existing) {
+          newPuzzles.push(existing);
+          continue;
+        }
+      }
+
       const startIdx = i * ws.wordList.wordsPerPuzzle;
       const endIdx = startIdx + ws.wordList.wordsPerPuzzle;
       const puzzleWords = pageWords.slice(startIdx, endIdx);
@@ -1092,13 +1151,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     batchPuzzles,
     getDirections,
     persistPagePuzzleSettings,
+    clearAllPageOverrides,
+    clearAllPagePuzzleGridScales,
   ]);
 
   const regeneratePuzzleAtIndex = useCallback(
     (
       batchIndex: number,
       wordsOverride?: string[],
-      coreOverride?: { lettersAcross: number; lettersDown: number }
+      options?: {
+        lettersAcross?: number;
+        lettersDown?: number;
+        settings?: WordSearchSettings;
+      }
     ): WordSearchPuzzle | null => {
       const puzzle = batchPuzzles[batchIndex];
       if (!puzzle?.pageId) {
@@ -1109,7 +1174,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return null;
       }
 
-      const ws = wordSearchSettings;
+      const ws = options?.settings ?? wordSearchSettings;
       const idx = Math.max(0, puzzle.puzzleIndexInDocument ?? 0);
       const wpp = Math.max(1, ws.wordList.wordsPerPuzzle);
       const start = idx * wpp;
@@ -1126,8 +1191,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return null;
       }
 
-      const lettersAcross = coreOverride?.lettersAcross ?? ws.core.lettersAcross;
-      const lettersDown = coreOverride?.lettersDown ?? ws.core.lettersDown;
+      const lettersAcross = options?.lettersAcross ?? ws.core.lettersAcross;
+      const lettersDown = options?.lettersDown ?? ws.core.lettersDown;
       const directions = getDirections(ws);
       const regenerated = generateWordSearch(
         puzzleWords,
@@ -1166,11 +1231,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Generate puzzle (triggers validation for word search)
-  const generatePuzzle = useCallback(() => {
+  const generatePuzzle = useCallback((options?: GeneratePuzzleOptions) => {
     setValidationError(null);
 
     if (currentPuzzleType === 'word-search') {
-      validateAndGenerate();
+      validateAndGenerate(options);
       return;
     }
 
@@ -1331,9 +1396,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setPageOverrides,
         updatePageOverride,
         clearPageOverride,
+        clearAllPageOverrides,
         pagePuzzleGridScales,
         setPagePuzzleGridScale,
         clearPagePuzzleGridScale,
+        clearAllPagePuzzleGridScales,
         applyMode,
         setApplyMode,
         previewRangeMode,

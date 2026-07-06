@@ -3,9 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "node scripts/dev.mjs",
+    "dev:turbo": "node scripts/dev.mjs --turbo",
+    "dev:clean": "node scripts/dev.mjs",
     "dev:debug": "NODE_OPTIONS='--inspect' next dev",
-    "build": "next build",
+    "build": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\" && next build",
     "start": "next start --port ${port}",
     "lint": "next lint"
   },

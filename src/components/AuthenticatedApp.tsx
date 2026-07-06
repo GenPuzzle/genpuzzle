@@ -5,6 +5,8 @@ import { Loader2 } from 'lucide-react';
 import Header from '@/components/Header';
 import { LoginPage } from '@/components/auth/LoginPage';
 import { ProjectHomePage } from '@/components/auth/ProjectHomePage';
+import { TemplateLaunchHandler } from '@/components/app/TemplateLaunchHandler';
+import { TemplateUrlCapture } from '@/components/app/TemplateUrlCapture';
 import { LeavePagePromptProvider } from '@/lib/leave-page-prompt-context';
 import { useAuth } from '@/lib/auth-context';
 
@@ -13,20 +15,32 @@ export function AuthenticatedApp({ children }: { children: React.ReactNode }) {
 
   if (!isReady) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <Loader2 className="h-8 w-8 animate-spin text-[var(--gp-blue)]" />
-      </div>
+      <>
+        <TemplateUrlCapture />
+        <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#f0f5f6] via-white to-[#e8f1f8] dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
+          <Loader2 className="h-8 w-8 animate-spin text-[var(--gp-blue)]" />
+        </div>
+      </>
     );
   }
 
   if (!session) {
-    return <LoginPage />;
+    return (
+      <>
+        <TemplateUrlCapture />
+        <LoginPage />
+      </>
+    );
   }
 
   return (
     <LeavePagePromptProvider>
+      <TemplateUrlCapture />
       {!inEditor ? (
-        <ProjectHomePage onEnterEditor={enterEditor} />
+        <>
+          <TemplateLaunchHandler onEnterEditor={enterEditor} />
+          <ProjectHomePage onEnterEditor={enterEditor} />
+        </>
       ) : (
         <>
           <Header />

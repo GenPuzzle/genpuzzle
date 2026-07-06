@@ -28,6 +28,26 @@ export function isMarketingHost(hostname: string): boolean {
 export const APP_ORIGIN = 'https://app.genpuzzle.com';
 export const MARKETING_ORIGIN = 'https://genpuzzle.com';
 
+export function isLocalDevHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1';
+}
+
+/** Public URL for links to the puzzle app (same host in local dev). */
+export function resolveAppPublicHref(hostname: string): string {
+  if (isLocalDevHost(hostname)) {
+    return '/app';
+  }
+  return APP_ORIGIN;
+}
+
+/** Public URL for links to the marketing site (same host in local dev). */
+export function resolveMarketingPublicHref(hostname: string): string {
+  if (isLocalDevHost(hostname)) {
+    return '/';
+  }
+  return MARKETING_ORIGIN;
+}
+
 /** Build internal path for app routes from a public pathname. */
 export function toAppInternalPath(pathname: string): string {
   if (pathname.startsWith('/app')) return pathname;

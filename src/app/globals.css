@@ -751,7 +751,7 @@ input[type="range"]::-moz-range-thumb:active {
 }
 
 /* Modern buttons — global default */
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.custom-checkbox-input) {
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.custom-checkbox-input):not(.direction-toggle):not(.gp-icon-toggle) {
   appearance: none;
   background-color: var(--gp-white);
   color: var(--gp-black);
@@ -766,13 +766,13 @@ button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
 }
 
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):focus,
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):focus-visible {
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):focus,
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):focus-visible {
   outline: none !important;
   box-shadow: 0 0 0 2px rgba(26, 90, 140, 0.25);
 }
 
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):hover {
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):hover {
   background-color: var(--gp-grey-50);
   color: var(--gp-blue);
   border-color: var(--gp-blue);
@@ -780,7 +780,7 @@ button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not
   transform: translateY(-1px);
 }
 
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):active {
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):active {
   transform: translateY(0);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
@@ -818,12 +818,40 @@ iframe[title="PDF Preview"] {
     min-height: 0;
   }
 
-  /* Fix button sizes for touch */
-  button:not(.gp-alert-close):not(.canvas-context-panel__close):not(.canvas-hit-zone):not(.direction-toggle):not(.gp-icon-toggle) {
+  /* Fix button sizes for touch — exclude compact chrome controls */
+  button:not(.gp-alert-close):not(.canvas-context-panel__close):not(.canvas-context-panel__icon-btn):not(.canvas-hit-zone):not(.direction-toggle):not(.gp-icon-toggle):not(.header-expand-btn):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.doc-tab__select):not(.gp-theme-toggle):not(.mobile-sidebar-toggle):not(.preview-segmented__btn):not(.preview-zoom-btn):not(.modern-tabs-trigger):not(.auth-page__tab):not(.auth-page__submit):not(.auth-page__toggle-pw):not(.marketing-nav__menu-btn) {
     min-height: 44px;
     min-width: 44px;
     padding: 10px 12px !important;
     font-size: 14px !important;
+  }
+
+  .header-expand-btn,
+  .gp-theme-toggle,
+  .mobile-sidebar-toggle,
+  .preview-segmented__btn,
+  .preview-zoom-btn,
+  .doc-tab__remove,
+  .canvas-edit-tab__remove,
+  .doc-tabs-add,
+  .canvas-context-panel__close,
+  .canvas-context-panel__icon-btn,
+  .gp-icon-toggle,
+  .direction-toggle,
+  .auth-page__tab,
+  .auth-page__submit,
+  .auth-page__toggle-pw,
+  .marketing-nav__menu-btn {
+    min-height: unset;
+    min-width: unset;
+    padding: unset !important;
+    font-size: unset !important;
+  }
+
+  /* Mobile sidebar drawer width */
+  .gp-app-shell > .fixed.inset-y-0 {
+    width: min(100vw, 20rem) !important;
+    max-width: min(100vw, 20rem);
   }
 
   /* Improve spacing on mobile controls */
@@ -839,10 +867,10 @@ iframe[title="PDF Preview"] {
     gap: 1.25rem;
   }
 
-  /* Ensure proper sidebar overlay */
-  .fixed.inset-y-0 {
-    width: 100% !important;
-    max-width: 16rem;
+  /* Safe area for fixed floating widgets */
+  .floating-help-root {
+    bottom: calc(5rem + env(safe-area-inset-bottom, 0px)) !important;
+    right: calc(0.75rem + env(safe-area-inset-right, 0px)) !important;
   }
 
   /* Fix PDF preview container on mobile */
@@ -1258,10 +1286,32 @@ iframe[title="PDF Preview"] {
 .gp-icon-toggle--active svg {
   color: #ffffff;
   stroke: #ffffff;
+  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.35));
 }
 
 .gp-icon-toggle:not(.gp-icon-toggle--active) svg {
   color: #334155;
   stroke: #334155;
+}
+
+.gp-icon-toggle--labeled {
+  gap: 0.375rem;
+  padding: 0 0.5rem;
+}
+
+.gp-icon-toggle__label {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.gp-icon-toggle--active .gp-icon-toggle__label {
+  color: #ffffff;
+}
+
+.gp-icon-toggle:not(.gp-icon-toggle--active) .gp-icon-toggle__label {
+  color: #334155;
 }
 

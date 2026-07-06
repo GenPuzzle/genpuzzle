@@ -35,6 +35,25 @@ export function getPuzzleContentLine(
   return lines[index] ?? '';
 }
 
+function splitMultilineContent(text: string): string[] {
+  if (!text) return [];
+  return text.split(/\r?\n/);
+}
+
+/** Read one line from multiline book text without trimming or dropping blank lines. */
+export function getRawContentLineAt(text: string, index: number): string {
+  const lines = splitMultilineContent(text);
+  return lines[index] ?? '';
+}
+
+/** Replace one line in multiline book text, padding with empty lines as needed. */
+export function setRawContentLineAt(text: string, index: number, value: string): string {
+  const lines = splitMultilineContent(text);
+  while (lines.length <= index) lines.push('');
+  lines[index] = value;
+  return lines.join('\n');
+}
+
 /** Assign per-document 0-based indices (fun facts / custom titles) after batch generation. */
 export function normalizeBatchPuzzleDocumentIndices(
   puzzles: WordSearchPuzzle[]

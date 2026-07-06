@@ -51,7 +51,6 @@ import {
   computeGridBorderOuterBounds,
   getGridBorderThicknessPt,
 } from "./grid-border-geometry";
-import { fitGridLetterSizePpt } from "./grid-letter-centering";
 import { computeSolutionPageLayout } from "./solution-page-layout";
 import { computeBookHeaderTitleFontSizePt } from "./header-assembly/book-title-size";
 import { layoutSolutionBlockTitlePt } from "./header-assembly/fit-title";
@@ -745,7 +744,7 @@ function _buildTableGrid(
     const rowCells: any[] = [];
     for (let col = 0; col < g.cols; col++) {
       const letter = (puzzle.grid[row]?.[col] ?? "").trim();
-      const gridFontSz = fitGridLetterSizePpt(letter, g.fontSizePt, g.cellSizePt);
+      const gridFontSz = Math.max(4, Math.round(g.fontSizePt));
       rowCells.push({
         text: letter,
         options: {
@@ -909,10 +908,7 @@ async function buildSolutionSlide(
     const borderThicknessPt = settings.core.noBoxAroundPuzzle
       ? 0
       : Math.max(0.5, solutionGridBorder.strokeThicknessPx);
-    const gridFontSizePt = Math.min(
-      getSolutionGridFontSize(settings.typography),
-      cellSizePt * 0.9
-    );
+    const gridFontSizePt = getSolutionGridFontSize(settings.typography);
     const answersPerPage = settings.bookCanvas.answersPerPage || 1;
     const gridFontSize = Math.max(4, Math.round(gridFontSizePt));
     const gridFontFamily = settings.typography.setFontForAnswerPages
@@ -1006,8 +1002,9 @@ async function buildSolutionSlide(
         boxColor: boxColor,
         borderThicknessPt: borderThicknessPt,
         noBox: settings.core.noBoxAroundPuzzle ?? false,
-        innerGridOpacity: 0,
-        gridLinesThicknessPt: 0,
+        innerGridOpacity: settings.core.innerGridOpacity ?? 0,
+        gridLinesThicknessPt: settings.core.gridLinesStrokeThickness ?? 0,
+        gridLinesColor: settings.colors.puzzlePage.gridLinesColor || settings.colors.puzzlePage.boxColor || '#d1d5db',
         framePaddingPt: paddingPt,
       };
       _addGridFrameShape(

@@ -1,0 +1,215 @@
+.canvas-edit-tabs-shell {
+  --canvas-edit-tab-bar-bg: var(--gp-blue, #1a5a8c);
+  --canvas-edit-tab-bar-bg-deep: var(--gp-blue-dark, #144a75);
+  --canvas-edit-tab-active-bg: #ffffff;
+  --canvas-edit-tab-inactive-text: #ffffff;
+  --canvas-edit-tab-active-text: var(--gp-black, #0f172a);
+
+  flex-shrink: 0;
+  width: 100%;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.canvas-edit-tabs-header {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  gap: 0.35rem;
+  padding: 0 0.35rem 0 0.5rem;
+  background: linear-gradient(
+    180deg,
+    var(--canvas-edit-tab-bar-bg) 0%,
+    var(--canvas-edit-tab-bar-bg-deep) 100%
+  );
+  min-height: 2rem;
+}
+
+.canvas-edit-tabs-title {
+  flex-shrink: 0;
+  padding-bottom: 0.35rem;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
+  white-space: nowrap;
+}
+
+.canvas-edit-tabs-bar {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-top: 0.3rem;
+  gap: 0.125rem;
+  scrollbar-width: thin;
+}
+
+.canvas-edit-tabs-bar::-webkit-scrollbar {
+  height: 3px;
+}
+
+.canvas-edit-tabs-bar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.35);
+  border-radius: 4px;
+}
+
+.canvas-edit-tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  max-width: 168px;
+}
+
+@media (min-width: 768px) {
+  .canvas-edit-tab {
+    max-width: 200px;
+  }
+}
+
+.canvas-edit-tab__name {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 100%;
+  border: none;
+  border-top-left-radius: 0.4rem;
+  border-top-right-radius: 0.4rem;
+  color: var(--canvas-edit-tab-inactive-text);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  max-width: 100%;
+  transition:
+    color 0.18s ease,
+    background-color 0.18s ease;
+}
+
+.canvas-edit-tab:not(.canvas-edit-tab--active):hover .canvas-edit-tab__name {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+.canvas-edit-tab__pre-name,
+.canvas-edit-tab__pos-name {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background-color: var(--canvas-edit-tab-bar-bg-deep);
+  bottom: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.canvas-edit-tab__pre-name {
+  right: -8px;
+  border-bottom-left-radius: 300px;
+  box-shadow: -3px 3px 0 3px var(--canvas-edit-tab-active-bg);
+}
+
+.canvas-edit-tab__pos-name {
+  left: -8px;
+  border-bottom-right-radius: 300px;
+  box-shadow: 3px 3px 0 3px var(--canvas-edit-tab-active-bg);
+}
+
+.canvas-edit-tab--active .canvas-edit-tab__name {
+  background-color: var(--canvas-edit-tab-active-bg);
+  font-weight: 600;
+  color: var(--canvas-edit-tab-active-text);
+  box-shadow:
+    0 -1px 0 rgba(15, 23, 42, 0.04),
+    0 2px 6px rgba(15, 23, 42, 0.08);
+}
+
+.canvas-edit-tab--active .canvas-edit-tab__pre-name,
+.canvas-edit-tab--active .canvas-edit-tab__pos-name {
+  opacity: 1;
+  z-index: 0;
+}
+
+.canvas-edit-tab__label {
+  z-index: 1;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.35rem 0.45rem 0.35rem 0.55rem;
+  border-top-left-radius: 0.4rem;
+  border-top-right-radius: 0.4rem;
+  white-space: nowrap;
+  line-height: 1.2;
+  max-width: 100%;
+  flex: 1;
+  min-width: 0;
+  overflow: visible;
+}
+
+.canvas-edit-tab__select {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  pointer-events: none;
+}
+
+.canvas-edit-tab__remove {
+  display: inline-flex !important;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 16px !important;
+  height: 16px !important;
+  min-width: 16px !important;
+  min-height: 16px !important;
+  border: none !important;
+  border-radius: 9999px !important;
+  background: transparent !important;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  padding: 0 !important;
+  margin: 0;
+  box-shadow: none !important;
+  transform: none !important;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  pointer-events: auto;
+  opacity: 1;
+  visibility: visible;
+  position: relative;
+  z-index: 2;
+}
+
+.canvas-edit-tab__remove svg {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  stroke: currentColor;
+}
+
+.canvas-edit-tab__remove:hover {
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.canvas-edit-tab:not(.canvas-edit-tab--active) .canvas-edit-tab__remove:hover {
+  background-color: rgba(255, 255, 255, 0.18) !important;
+  color: #ffffff;
+}
+
+.canvas-edit-tab--active .canvas-edit-tab__remove {
+  color: var(--gp-grey-600, #64748b) !important;
+}
+
+.canvas-edit-tab--active .canvas-edit-tab__remove:hover {
+  background-color: var(--gp-grey-100, #e8ecf0) !important;
+  color: var(--gp-black, #0f172a) !important;
+}

@@ -102,6 +102,7 @@
   justify-content: center;
   border: none;
   position: relative;
+  width: 100%;
   border-top-left-radius: 0.5rem;
   border-top-right-radius: 0.5rem;
   color: var(--doc-tab-inactive-text);
@@ -133,18 +134,22 @@
 }
 
 .doc-tab__select {
+  flex: 1;
+  min-width: 0;
+  display: block;
   border: none;
   background: transparent;
   padding: 0;
   margin: 0;
   font: inherit;
   color: inherit;
-  cursor: pointer;
+  cursor: inherit;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 190px;
+  max-width: 100%;
   text-align: left;
+  pointer-events: none;
 }
 
 .doc-tab__pre-name,
@@ -199,6 +204,8 @@
   white-space: nowrap;
   line-height: 1.2;
   max-width: 100%;
+  flex: 1;
+  min-width: 0;
 }
 
 .doc-tab--active .doc-tab__label {
@@ -219,6 +226,7 @@
   cursor: pointer;
   padding: 0;
   transition: background-color 0.15s ease, color 0.15s ease;
+  pointer-events: auto;
 }
 
 .doc-tab:not(.doc-tab--active) .doc-tab__remove:hover {

@@ -19,7 +19,7 @@ function PuzzleGeneratorApp() {
   const isWordSearch = currentPuzzleType === 'word-search';
 
   return (
-    <div className="flex h-full flex-col lg:flex-row min-h-0" style={{ background: 'linear-gradient(to bottom right, #F0F5F6, #ffffff)' }}>
+    <div className="gp-app-shell flex h-full flex-col lg:flex-row min-h-0 bg-gradient-to-br from-[#F0F5F6] to-white dark:from-slate-950 dark:to-slate-900">
       <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
         <div className="absolute top-0 left-1/4 w-96 h-96 bg-blue-300 rounded-full mix-blend-multiply filter blur-3xl opacity-20 dark:opacity-10 animate-blob"></div>
         <div className="absolute top-1/3 right-1/4 w-96 h-96 rounded-full mix-blend-multiply filter blur-3xl opacity-20 dark:opacity-10 animate-blob animation-delay-2s" style={{ background: 'rgba(34, 118, 180, 0.3)' }}></div>
@@ -27,9 +27,12 @@ function PuzzleGeneratorApp() {
       </div>
 
       <button
+        type="button"
         onClick={() => setSidebarOpen(!sidebarOpen)}
-        className="lg:hidden fixed top-[14px] right-6 z-50 p-2 bg-white/90 backdrop-blur-sm dark:bg-slate-800/90 rounded-lg shadow-md hover:shadow-lg transition-all duration-200 transform hover:scale-110 active:scale-95 border border-slate-200 dark:border-slate-700"
-        aria-label="Toggle sidebar"
+        className="mobile-sidebar-toggle lg:hidden fixed left-3 z-50 flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white/95 shadow-md backdrop-blur-sm transition-all duration-200 active:scale-95 dark:border-slate-700 dark:bg-slate-800/95"
+        style={{ top: 'calc(3.25rem + env(safe-area-inset-top, 0px))' }}
+        aria-label={sidebarOpen ? 'Close settings panel' : 'Open settings panel'}
+        aria-expanded={sidebarOpen}
       >
         {sidebarOpen ? (
           <X className="w-5 h-5 text-slate-700 dark:text-white" />
@@ -40,15 +43,18 @@ function PuzzleGeneratorApp() {
 
       {sidebarOpen && (
         <button
+          type="button"
           onClick={() => setSidebarOpen(false)}
-          className="lg:hidden fixed inset-0 z-30 bg-black/30"
-          aria-label="Close sidebar"
+          className="lg:hidden fixed inset-0 z-30 bg-black/40 backdrop-blur-[1px]"
+          aria-label="Close settings panel"
         />
       )}
 
       <div
-        className={`${sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-          } lg:translate-x-0 fixed lg:static inset-y-0 left-0 z-40 h-full transition-all duration-300 ease-out transform w-64 lg:w-auto relative`}
+        className={cn(
+          'fixed lg:static inset-y-0 left-0 z-40 h-full w-[min(100vw,20rem)] lg:w-auto transition-transform duration-300 ease-out lg:translate-x-0',
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        )}
       >
         {settingsLocked && (
           <div
@@ -70,10 +76,10 @@ function PuzzleGeneratorApp() {
             aria-label={previewRangeMode === 'flipbook' ? 'Close 3D book preview' : undefined}
           >
             <div
-              className="mx-4 max-w-[15rem] rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-center shadow-lg pointer-events-none"
+              className="mx-4 max-w-[15rem] rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-center shadow-lg pointer-events-none dark:border-slate-600 dark:bg-slate-800/95"
             >
-              <p className="text-xs font-bold text-slate-800">Settings locked</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+              <p className="text-xs font-bold text-slate-800 dark:text-slate-100">Settings locked</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
                 {previewRangeMode === 'flipbook'
                   ? '3D book preview is active. Click outside or use Close to exit.'
                   : 'All pages preview is active. Use Edit on a page or switch back to Sample to change settings.'}

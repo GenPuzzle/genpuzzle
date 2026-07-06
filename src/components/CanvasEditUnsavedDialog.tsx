@@ -88,7 +88,7 @@ export function CanvasEditUnsavedDialog({
             <button
               type="button"
               onClick={onCommitAll}
-              disabled={!hasUnsavedChanges || !canApplyToAllPages}
+              disabled={!canApplyToAllPages}
               className="inline-flex w-full justify-center rounded-md bg-[#0f766e] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#0d655e] disabled:cursor-not-allowed disabled:opacity-50"
             >
               Apply to all pages

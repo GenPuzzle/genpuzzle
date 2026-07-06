@@ -206,7 +206,6 @@ export function WordSearchPagePreview({
             puzzleGridFontFamily={grid.fontFamily}
             answerGridFontSize={showSolution ? layoutPtToCss(grid.fontSizePt) : undefined}
             answerGridFontFamily={showSolution ? grid.fontFamily : undefined}
-            wordList={[]}
           />
         </div>
 

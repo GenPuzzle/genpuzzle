@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import { WordSearchPuzzle } from '@/lib/puzzles/types';
-import { getGridCellWrapperStyle, getGridLetterGlyphStyle, fitGridLetterSizeCss } from '@/lib/grid-letter-centering';
+import { getGridCellWrapperStyle, getGridLetterGlyphStyle } from '@/lib/grid-letter-centering';
 import { drawSolutionGridInterior } from '@/lib/solution-grid-interior-draw';
 
 interface WordSearchGridProps {
@@ -152,13 +152,7 @@ export function WordSearchGrid({
             {puzzle.grid.map((row, rowIndex) =>
               row.map((letter, colIndex) => {
                 const cellBorderRadius = Math.max(cellSize * 0.15, 3);
-                const fittedFontSize = fitGridLetterSizeCss(
-                  letter,
-                  letterFontSize,
-                  cellSize,
-                  letterFontFamily,
-                  400
-                );
+                const fittedFontSize = letterFontSize;
 
                 return (
                   <div

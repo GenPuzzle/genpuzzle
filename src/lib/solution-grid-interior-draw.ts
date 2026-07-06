@@ -3,7 +3,6 @@
  * Used by the UI solution preview canvas and by solution-canvas-snapshot (PPT).
  */
 import type { WordSearchPuzzle } from './puzzles/types';
-import { fitGridLetterSizeCss } from './grid-letter-centering';
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const clean = (hex || '#000000').replace(/^#/, '');
@@ -153,8 +152,7 @@ export function drawSolutionGridInterior(
       if (!letter) continue;
       const cx = col * cellPx + cellPx / 2;
       const cy = row * cellPx + cellPx / 2;
-      const fittedPx = fitGridLetterSizeCss(letter, fontPx, cellPx, fontFamily, 400);
-      ctx.font = `${fittedPx}px ${fontFamilyCss}`;
+      ctx.font = `${Math.max(1, fontPx)}px ${fontFamilyCss}`;
       ctx.fillText(letter, cx, cy);
     }
   }

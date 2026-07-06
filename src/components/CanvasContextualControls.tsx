@@ -1,23 +1,37 @@
 'use client';
 
-import React, { useCallback } from 'react';
-import { Trash2, Upload, X } from 'lucide-react';
+import React, { useCallback, useState } from 'react';
+import { Trash2, Upload, X, ArrowRight, ArrowLeft, ArrowDown, ArrowUp, ArrowDownRight, ArrowUpRight, ArrowUpLeft, ArrowDownLeft } from 'lucide-react';
 import { PUBLISHING_FONTS } from '@/lib/publishing-fonts';
 import { SliderField } from '@/components/ui/slider-field';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { HeaderAssemblyEditor } from '@/components/header/HeaderAssemblyEditor';
-import { normalizeHeaderAssemblySettings } from '@/lib/header-assembly/types';
+import { normalizeHeaderAssemblySettings, type HeaderAssemblySettings } from '@/lib/header-assembly/types';
 import { PageNumberShapeEditor } from '@/components/page-number/PageNumberShapeEditor';
 import { normalizePageNumberSettings } from '@/lib/page-number/settings';
 import { applyPageFrameSettingsPatch, resolvePageFrameSettings } from '@/lib/page-frame-settings';
-import type { PageNumberSettings, TitleWordsSettings, WordSearchSettings } from '@/lib/puzzles/types';
+import type {
+  PageNumberSettings,
+  TitleWordsSettings,
+  WordSearchPuzzle,
+  WordSearchSettings,
+} from '@/lib/puzzles/types';
+import {
+  getPuzzleContentLineIndex,
+  getRawContentLineAt,
+  setRawContentLineAt,
+} from '@/lib/puzzle-line-index';
 import { CanvasPageWordListEditor } from '@/components/CanvasPageWordListEditor';
+import { FloatingPanelShell } from '@/components/FloatingPanelShell';
+import type { CanvasEditPanelTab } from '@/components/CanvasEditTabsBar';
 import { patchWordSearchSettings } from '@/lib/canvas-edit-session';
 import type { CanvasEditTarget } from '@/lib/canvas-edit-session';
+import { cn } from '@/lib/utils';
 import './canvas-contextual-controls.css';
 
 export type { CanvasEditTarget } from '@/lib/canvas-edit-session';
@@ -32,28 +46,51 @@ interface CanvasContextualControlsProps {
   onDraftPuzzleGridScaleChange: (scale: number) => void;
   draftTitleWords: TitleWordsSettings;
   onDraftTitleWordsChange: (titleWords: TitleWordsSettings) => void;
+  currentPuzzle?: WordSearchPuzzle | null;
   onCommitPage: () => void;
   onCommitAll: () => void;
+  onCommitRange?: (range: string) => void;
   onCancel: () => void;
   hasUnsavedChanges: boolean;
   canApplyToAllPages: boolean;
+  documentPuzzleCount?: number;
+  rangeError?: string | null;
+  canApplyToSelectedPages?: (range: string) => boolean;
+  editTabs?: CanvasEditPanelTab[];
+  activeEditTabId?: string | null;
+  onEditTabSelect?: (id: string) => void;
+  onEditTabClose?: (id: string) => void;
 }
 
 function CanvasEditActions({
   onCommitPage,
   onCommitAll,
+  onCommitRange,
   onCancel,
   showPageOnly,
   hasUnsavedChanges,
   canApplyToAllPages,
+  documentPuzzleCount = 0,
+  rangeError = null,
+  canApplyToSelectedPages,
 }: {
   onCommitPage: () => void;
   onCommitAll: () => void;
+  onCommitRange?: (range: string) => void;
   onCancel: () => void;
   showPageOnly: boolean;
   hasUnsavedChanges: boolean;
   canApplyToAllPages: boolean;
+  documentPuzzleCount?: number;
+  rangeError?: string | null;
+  canApplyToSelectedPages?: (range: string) => boolean;
 }) {
+  const [rangeInput, setRangeInput] = useState('');
+  const showRangeSelect = showPageOnly && documentPuzzleCount > 1 && onCommitRange;
+  const rangeApplyEnabled =
+    rangeInput.trim().length > 0 &&
+    (canApplyToSelectedPages ? canApplyToSelectedPages(rangeInput) : true);
+
   return (
     <div className="canvas-context-panel__footer">
       <Button
@@ -76,12 +113,42 @@ function CanvasEditActions({
           Update this page only
         </Button>
       )}
+      {showRangeSelect && (
+        <div className="canvas-context-panel__footer-range">
+          <Label htmlFor="canvas-edit-range" className="canvas-context-panel__footer-range-label">
+            Range select
+          </Label>
+          <Input
+            id="canvas-edit-range"
+            value={rangeInput}
+            onChange={(event) => setRangeInput(event.target.value)}
+            placeholder="e.g. 1-4, 7-10, 12"
+            className="canvas-context-panel__footer-range-input"
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && rangeApplyEnabled) {
+                event.preventDefault();
+                onCommitRange(rangeInput);
+              }
+            }}
+          />
+          {rangeError && <p className="canvas-context-panel__footer-range-error">{rangeError}</p>}
+          <Button
+            type="button"
+            size="sm"
+            className="canvas-context-panel__footer-btn canvas-context-panel__footer-btn--range"
+            onClick={() => onCommitRange(rangeInput)}
+            disabled={!rangeApplyEnabled}
+          >
+            Apply to selected pages
+          </Button>
+        </div>
+      )}
       <Button
         type="button"
         size="sm"
         className="canvas-context-panel__footer-btn canvas-context-panel__footer-btn--all"
         onClick={onCommitAll}
-        disabled={!hasUnsavedChanges || !canApplyToAllPages}
+        disabled={!canApplyToAllPages}
       >
         Apply to all pages
       </Button>
@@ -211,11 +278,20 @@ export function CanvasContextualControls({
   onDraftPuzzleGridScaleChange: setPuzzleGridScale,
   draftTitleWords,
   onDraftTitleWordsChange,
+  currentPuzzle,
   onCommitPage,
   onCommitAll,
+  onCommitRange,
   onCancel,
   hasUnsavedChanges,
   canApplyToAllPages,
+  documentPuzzleCount,
+  rangeError,
+  canApplyToSelectedPages,
+  editTabs,
+  activeEditTabId,
+  onEditTabSelect,
+  onEditTabClose,
 }: CanvasContextualControlsProps) {
   const applySettingsUpdate = useCallback(
     (updates: Partial<WordSearchSettings>) => {
@@ -224,60 +300,130 @@ export function CanvasContextualControls({
     [onDraftSettingsChange]
   );
 
-  const { bookCanvas: _bc, core, typography, wordList, colors } = wordSearchSettings;
+  const updateCore = useCallback(
+    (updates: Partial<WordSearchSettings['core']>) => {
+      onDraftSettingsChange((prev) =>
+        patchWordSearchSettings(prev, {
+          core: { ...prev.core, ...updates },
+        })
+      );
+    },
+    [onDraftSettingsChange]
+  );
 
-  const updateCore = (updates: Partial<typeof core>) => {
-    applySettingsUpdate({ core: { ...core, ...updates } });
-  };
+  const updateTypography = useCallback(
+    (updates: Partial<WordSearchSettings['typography']>) => {
+      onDraftSettingsChange((prev) =>
+        patchWordSearchSettings(prev, {
+          typography: { ...prev.typography, ...updates },
+        })
+      );
+    },
+    [onDraftSettingsChange]
+  );
 
-  const updateTypography = (updates: Partial<typeof typography>) => {
-    applySettingsUpdate({ typography: { ...typography, ...updates } });
-  };
+  const updateWordListSettings = useCallback(
+    (updates: Partial<WordSearchSettings['wordList']>) => {
+      onDraftSettingsChange((prev) =>
+        patchWordSearchSettings(prev, {
+          wordList: { ...prev.wordList, ...updates },
+        })
+      );
+    },
+    [onDraftSettingsChange]
+  );
 
-  const updateWordListSettings = (updates: Partial<typeof wordList>) => {
-    applySettingsUpdate({ wordList: { ...wordList, ...updates } });
-  };
+  const updateBookCanvas = useCallback(
+    (updates: Partial<WordSearchSettings['bookCanvas']>) => {
+      onDraftSettingsChange((prev) =>
+        patchWordSearchSettings(prev, {
+          bookCanvas: { ...prev.bookCanvas, ...updates },
+        })
+      );
+    },
+    [onDraftSettingsChange]
+  );
 
-  const updatePuzzlePageColors = (updates: Partial<typeof colors.puzzlePage>) => {
-    applySettingsUpdate({
-      colors: {
-        ...colors,
-        puzzlePage: { ...colors.puzzlePage, ...updates },
-      },
-    });
-  };
+  const updatePuzzlePageColors = useCallback(
+    (updates: Partial<WordSearchSettings['colors']['puzzlePage']>) => {
+      onDraftSettingsChange((prev) =>
+        patchWordSearchSettings(prev, {
+          colors: {
+            puzzlePage: {
+              ...prev.colors.puzzlePage,
+              ...updates,
+            },
+          },
+        } as Partial<WordSearchSettings>)
+      );
+    },
+    [onDraftSettingsChange]
+  );
 
-  const updateAnswerPageColors = (updates: Partial<typeof colors.answerPage>) => {
-    applySettingsUpdate({
-      colors: {
-        ...colors,
-        answerPage: { ...colors.answerPage, ...updates },
-      },
-    });
-  };
+  const updateAnswerPageColors = useCallback(
+    (updates: Partial<WordSearchSettings['colors']['answerPage']>) => {
+      onDraftSettingsChange((prev) =>
+        patchWordSearchSettings(prev, {
+          colors: {
+            answerPage: {
+              ...prev.colors.answerPage,
+              ...updates,
+            },
+          },
+        } as Partial<WordSearchSettings>)
+      );
+    },
+    [onDraftSettingsChange]
+  );
+
+  const updatePageNumber = useCallback(
+    (updates: Partial<PageNumberSettings>) => {
+      onDraftSettingsChange((prev) => {
+        const pageNumber = normalizePageNumberSettings(prev.typography.pageNumber);
+        return patchWordSearchSettings(prev, {
+          typography: {
+            pageNumber: normalizePageNumberSettings({ ...pageNumber, ...updates }),
+          },
+        } as Partial<WordSearchSettings>);
+      });
+    },
+    [onDraftSettingsChange]
+  );
+
+  const updatePageFrameSettings = useCallback(
+    (updates: Parameters<typeof applyPageFrameSettingsPatch>[1]) => {
+      onDraftSettingsChange((prev) => {
+        const patched = applyPageFrameSettingsPatch(prev, updates);
+        return patchWordSearchSettings(prev, { pageFrameSettings: patched.pageFrameSettings });
+      });
+    },
+    [onDraftSettingsChange]
+  );
+
+  const updateHeaderAssembly = useCallback(
+    (updates: Partial<HeaderAssemblySettings>) => {
+      onDraftSettingsChange((prev) => {
+        const current = normalizeHeaderAssemblySettings(prev.colors.puzzlePage.headerAssembly);
+        return patchWordSearchSettings(prev, {
+          colors: {
+            puzzlePage: {
+              headerAssembly: normalizeHeaderAssemblySettings({ ...current, ...updates }),
+            },
+          },
+        } as Partial<WordSearchSettings>);
+      });
+    },
+    [onDraftSettingsChange]
+  );
+
+  const { bookCanvas, core, typography, wordList, colors } = wordSearchSettings;
 
   const pageNumber = normalizePageNumberSettings(typography.pageNumber);
-  const updatePageNumber = (updates: Partial<PageNumberSettings>) => {
-    updateTypography({
-      pageNumber: normalizePageNumberSettings({ ...pageNumber, ...updates }),
-    });
-  };
-
   const pageFrame = resolvePageFrameSettings(wordSearchSettings);
-  const updatePageFrameSettings = (updates: Parameters<typeof applyPageFrameSettingsPatch>[1]) => {
-    const patched = applyPageFrameSettingsPatch(wordSearchSettings, updates);
-    applySettingsUpdate({ pageFrameSettings: patched.pageFrameSettings });
-  };
-
   const headerAssembly = normalizeHeaderAssemblySettings(colors.puzzlePage.headerAssembly);
 
-  const updateHeaderAssembly = (updates: Partial<typeof headerAssembly>) => {
-    updatePuzzlePageColors({
-      headerAssembly: normalizeHeaderAssemblySettings({ ...headerAssembly, ...updates }),
-    });
-  };
-
-  const showPuzzleWordList = pageKind === 'puzzle' && (target === 'grid' || target === 'word-list');
+  const puzzleContentLineIndex =
+    currentPuzzle != null ? getPuzzleContentLineIndex(currentPuzzle, wordSearchSettings) : 0;
 
   const titles: Record<CanvasEditTarget, string> = {
     title: 'Title & Header',
@@ -290,17 +436,109 @@ export function CanvasContextualControls({
   };
 
   return (
-    <div className="canvas-context-panel" role="dialog" aria-label={titles[target]}>
-      <div className="canvas-context-panel__header">
-        <span className="canvas-context-panel__title">{titles[target]}</span>
-        <button type="button" className="canvas-context-panel__close" onClick={onCancel} aria-label="Cancel">
-          <X className="w-3.5 h-3.5" />
-        </button>
-      </div>
-
-      <div className="canvas-context-panel__body">
+    <FloatingPanelShell
+      title={editTabs && editTabs.length > 0 ? 'Edit controls' : titles[target]}
+      onClose={onCancel}
+      tabs={editTabs}
+      activeTabId={activeEditTabId}
+      onTabSelect={onEditTabSelect}
+      onTabClose={onEditTabClose}
+      footer={
+        <CanvasEditActions
+          onCancel={onCancel}
+          onCommitPage={onCommitPage}
+          onCommitAll={onCommitAll}
+          onCommitRange={onCommitRange}
+          showPageOnly
+          hasUnsavedChanges={hasUnsavedChanges}
+          canApplyToAllPages={canApplyToAllPages}
+          documentPuzzleCount={documentPuzzleCount}
+          rangeError={rangeError}
+          canApplyToSelectedPages={canApplyToSelectedPages}
+        />
+      }
+    >
+        {editTabs && editTabs.length > 0 && (
+          <p className="canvas-context-panel__active-target">{titles[target]}</p>
+        )}
         {target === 'title' && (
           <div className="canvas-context-panel__section">
+            <Label className="canvas-context-panel__section-label">Title Text</Label>
+            {typography.selectTitleOption === 'none' ? (
+              <p className="text-xs text-slate-500 mb-2">
+                Titles are turned off. Enable a title mode in the sidebar to edit title text.
+              </p>
+            ) : typography.selectTitleOption === 'custom' ? (
+              <Input
+                className="h-8 text-xs mb-1"
+                value={getRawContentLineAt(typography.titleText, puzzleContentLineIndex)}
+                onChange={(e) =>
+                  updateTypography({
+                    titleText: setRawContentLineAt(
+                      typography.titleText,
+                      puzzleContentLineIndex,
+                      e.target.value
+                    ),
+                  })
+                }
+                placeholder="Title for this page..."
+              />
+            ) : (
+              <Input
+                className="h-8 text-xs mb-1"
+                value={typography.titleText}
+                onChange={(e) => updateTypography({ titleText: e.target.value })}
+                placeholder="Title for all puzzles..."
+              />
+            )}
+            {typography.selectTitleOption === 'custom' && (
+              <p className="text-xs text-slate-500 mb-3">
+                Custom title for puzzle {currentPuzzle?.puzzleNumber ?? pageIndex + 1} only.
+              </p>
+            )}
+            {typography.selectTitleOption !== 'none' &&
+              typography.selectTitleOption !== 'custom' && (
+                <p className="text-xs text-slate-500 mb-3">Same title on every puzzle page.</p>
+              )}
+
+            <Label className="canvas-context-panel__section-label">Subtitle Text</Label>
+            <div className="flex items-center gap-2 mb-2">
+              <Checkbox
+                id="canvas-include-fun-facts"
+                checked={typography.includeFunFacts}
+                onCheckedChange={(checked) =>
+                  updateTypography({ includeFunFacts: checked === true })
+                }
+              />
+              <Label
+                htmlFor="canvas-include-fun-facts"
+                className="text-xs font-normal cursor-pointer"
+              >
+                Show subtitle / fun fact
+              </Label>
+            </div>
+            {typography.includeFunFacts && (
+              <>
+                <Textarea
+                  className="min-h-[4.5rem] text-xs mb-1"
+                  value={getRawContentLineAt(typography.funFactsText, puzzleContentLineIndex)}
+                  onChange={(e) =>
+                    updateTypography({
+                      funFactsText: setRawContentLineAt(
+                        typography.funFactsText,
+                        puzzleContentLineIndex,
+                        e.target.value
+                      ),
+                    })
+                  }
+                  placeholder="Subtitle or fun fact for this page..."
+                />
+                <p className="text-xs text-slate-500 mb-3">
+                  Subtitle for puzzle {currentPuzzle?.puzzleNumber ?? pageIndex + 1} only.
+                </p>
+              </>
+            )}
+
             <Label className="canvas-context-panel__section-label">Title Font</Label>
             <Select
               value={typography.puzzleTitleFontFamily}
@@ -436,7 +674,7 @@ export function CanvasContextualControls({
                 format="px"
               />
               <SliderField
-                label="Title to Subtitle"
+                label="Title to Puzzle"
                 value={typography.subtitleToTitleGap}
                 onValueChange={(v) => updateTypography({ subtitleToTitleGap: v })}
                 min={0}
@@ -521,6 +759,18 @@ export function CanvasContextualControls({
               />
             </div>
 
+            <Label className="canvas-context-panel__section-label">Word Directions</Label>
+            <div className="canvas-context-panel__direction-grid">
+              <DirectionToggle label="Right" icon={ArrowRight} checked={core.allowRight} onCheckedChange={(v) => updateCore({ allowRight: v })} />
+              <DirectionToggle label="Left" icon={ArrowLeft} checked={core.allowLeft} onCheckedChange={(v) => updateCore({ allowLeft: v })} />
+              <DirectionToggle label="Down" icon={ArrowDown} checked={core.allowDown} onCheckedChange={(v) => updateCore({ allowDown: v })} />
+              <DirectionToggle label="Up" icon={ArrowUp} checked={core.allowUp} onCheckedChange={(v) => updateCore({ allowUp: v })} />
+              <DirectionToggle label="Diagonal down" icon={ArrowDownRight} checked={core.allowDiagonalDown} onCheckedChange={(v) => updateCore({ allowDiagonalDown: v })} />
+              <DirectionToggle label="Diagonal up" icon={ArrowUpRight} checked={core.allowDiagonalUp} onCheckedChange={(v) => updateCore({ allowDiagonalUp: v })} />
+              <DirectionToggle label="Diagonal down reverse" icon={ArrowUpLeft} checked={core.allowDiagonalDownReverse} onCheckedChange={(v) => updateCore({ allowDiagonalDownReverse: v })} />
+              <DirectionToggle label="Diagonal up reverse" icon={ArrowDownLeft} checked={core.allowDiagonalUpReverse} onCheckedChange={(v) => updateCore({ allowDiagonalUpReverse: v })} />
+            </div>
+
             <Label className="canvas-context-panel__section-label">Grid Letters</Label>
             <Select
               value={typography.puzzleGridFontFamily}
@@ -545,7 +795,7 @@ export function CanvasContextualControls({
                 min={8}
                 max={50}
                 step={1}
-                format="px"
+                format="pt"
               />
               <div>
                 <Label className="text-xs text-gray-500 mb-1 block">Letter Case</Label>
@@ -593,39 +843,7 @@ export function CanvasContextualControls({
                 step={1}
                 format="px"
               />
-              <SliderField
-                label="Grid Lines"
-                value={core.gridLinesStrokeThickness}
-                onValueChange={(v) => updateCore({ gridLinesStrokeThickness: v })}
-                min={0}
-                max={4}
-                step={1}
-                format="px"
-              />
             </div>
-
-            <Label className="canvas-context-panel__section-label">Spacing</Label>
-            <SliderField
-              label="Puzzle to Word List"
-              value={typography.spaceBetweenPuzzleAndWordList}
-              onValueChange={(v) => updateTypography({ spaceBetweenPuzzleAndWordList: v })}
-              min={0}
-              max={100}
-              step={1}
-              format="px"
-            />
-
-            {showPuzzleWordList && (
-              <CanvasPageWordListEditor
-                pageIndex={pageIndex}
-                draftTitleWords={draftTitleWords}
-                onDraftTitleWordsChange={onDraftTitleWordsChange}
-                draftWordListSettings={wordList}
-                onDraftWordListSettingsChange={(nextWordList) =>
-                  applySettingsUpdate({ wordList: nextWordList })
-                }
-              />
-            )}
           </div>
         )}
 
@@ -677,25 +895,19 @@ export function CanvasContextualControls({
               </div>
             </div>
 
+            <Label className="canvas-context-panel__section-label">Spacing</Label>
+            <SliderField
+              label="Puzzle to Word List"
+              value={typography.spaceBetweenPuzzleAndWordList}
+              onValueChange={(v) => updateTypography({ spaceBetweenPuzzleAndWordList: v })}
+              min={0}
+              max={100}
+              step={1}
+              format="px"
+            />
+
             <Label className="canvas-context-panel__section-label">Layout</Label>
             <div className="canvas-context-panel__grid-2">
-              <div>
-                <Label className="text-xs text-gray-500 mb-1 block">Direction</Label>
-                <Select
-                  value={wordList.wordListDirection}
-                  onValueChange={(value) =>
-                    updateWordListSettings({ wordListDirection: value as 'vertical' | 'horizontal' })
-                  }
-                >
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="vertical">Vertical</SelectItem>
-                    <SelectItem value="horizontal">Horizontal</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
               <div>
                 <Label className="text-xs text-gray-500 mb-1 block">Columns</Label>
                 <Select
@@ -758,7 +970,7 @@ export function CanvasContextualControls({
               </div>
             </div>
 
-            {showPuzzleWordList && (
+            {pageKind === 'puzzle' && (
               <CanvasPageWordListEditor
                 pageIndex={pageIndex}
                 draftTitleWords={draftTitleWords}
@@ -1075,6 +1287,37 @@ export function CanvasContextualControls({
 
         {target === 'solution-grid' && (
           <div className="canvas-context-panel__section">
+            <Label className="canvas-context-panel__section-label">Layout</Label>
+            <div>
+              <Label className="text-xs text-gray-500 mb-1 block">Answers Per Page</Label>
+              <Select
+                value={bookCanvas.answersPerPage.toString()}
+                onValueChange={(value) => updateBookCanvas({ answersPerPage: parseInt(value, 10) })}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[1, 2, 4].map((n) => (
+                    <SelectItem key={n} value={n.toString()}>
+                      {n} Solution{n > 1 ? 's' : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <SliderField
+              label="Solution font size"
+              value={typography.answerGridFontSize}
+              onValueChange={(v) =>
+                updateTypography({ answerGridFontSize: v, setFontSizeForAnswerPages: true })
+              }
+              min={8}
+              max={50}
+              step={1}
+              format="pt"
+            />
+
             <Label className="canvas-context-panel__section-label">Solution Marking</Label>
             <MiniColorInput
               label="Highlight color"
@@ -1136,30 +1379,34 @@ export function CanvasContextualControls({
                 step={1}
                 format="px"
               />
-              <SliderField
-                label="Solution font size"
-                value={typography.answerGridFontSize}
-                onValueChange={(v) =>
-                  updateTypography({ answerGridFontSize: v, setFontSizeForAnswerPages: true })
-                }
-                min={8}
-                max={50}
-                step={1}
-                format="px"
-              />
             </div>
           </div>
         )}
-      </div>
+    </FloatingPanelShell>
+  );
+}
 
-      <CanvasEditActions
-        onCancel={onCancel}
-        onCommitPage={onCommitPage}
-        onCommitAll={onCommitAll}
-        showPageOnly
-        hasUnsavedChanges={hasUnsavedChanges}
-        canApplyToAllPages={canApplyToAllPages}
-      />
-    </div>
+function DirectionToggle({
+  label,
+  icon: Icon,
+  checked,
+  onCheckedChange,
+}: {
+  label: string;
+  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={checked}
+      title={checked ? `${label} (enabled)` : `${label} (disabled)`}
+      onClick={() => onCheckedChange(!checked)}
+      className={cn('direction-toggle', checked && 'direction-toggle--active')}
+    >
+      <Icon strokeWidth={2.25} />
+    </button>
   );
 }

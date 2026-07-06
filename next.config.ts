@@ -1,6 +1,11 @@
 import type { NextConfig } from "next";
+import path from "path";
+
+/** Keep Turbopack/build rooted in genpuzzle/ (parent folder also has a package-lock.json). */
+const projectRoot = path.resolve(__dirname);
 
 const nextConfig: NextConfig = {
+  outputFileTracingRoot: projectRoot,
   eslint: {
     ignoreDuringBuilds: true,
   },
@@ -8,6 +13,7 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   turbopack: {
+    root: projectRoot,
     resolveAlias: {
       fs: { browser: "./src/lib/empty.ts" },
       path: { browser: "./src/lib/empty.ts" },

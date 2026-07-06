@@ -7,6 +7,7 @@ import {
   TitleWordsSettings,
   ColorSettings,
   WordSearchSettings,
+  PageFrameSettings,
   getDefaultWordSearchSettings,
 } from './puzzles/types';
 
@@ -37,11 +38,72 @@ export interface BaseModuleSettings {
   description?: string;
 }
 
+export type TextPageBlockKind =
+  | 'title'
+  | 'subtitle'
+  | 'text'
+  | 'ownership'
+  | 'copyright'
+  | 'image'
+  | 'body';
+
+export type TextPageBlockFrameShape = 'rectangle' | 'rounded' | 'circle' | 'pill';
+
+export interface TextPageBlock {
+  id: string;
+  kind: TextPageBlockKind;
+  text: string;
+  /** Top-left X as % of content area (0–100) */
+  xPercent: number;
+  /** Top-left Y as % of content area (0–100) */
+  yPercent: number;
+  /** Width as % of content area */
+  widthPercent: number;
+  /** Height as % of content area (image blocks) */
+  heightPercent?: number;
+  fontFamily: string;
+  fontSize: number;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  lineHeight?: number;
+  textColor?: string;
+  alignment: 'left' | 'center' | 'right';
+  frameEnabled?: boolean;
+  frameShape?: TextPageBlockFrameShape;
+  frameFillColor?: string;
+  frameBorderColor?: string;
+  frameBorderThicknessPx?: number;
+  frameCornerRadiusPx?: number;
+  framePaddingPx?: number;
+  /** Ownership block: blank name line under label */
+  showNameLine?: boolean;
+  /** Image block */
+  imageSrc?: string;
+  imageFit?: 'cover' | 'contain' | 'stretch';
+  imageOpacity?: number;
+}
+
 export interface TextModuleSettings extends BaseModuleSettings {
   content: string;
   fontFamily: string;
   fontSize: number;
   alignment: 'left' | 'center' | 'right';
+  /** Text color; falls back to global puzzle page title color when unset */
+  textColor?: string;
+  /** Title size in pt; falls back to fontSize * 1.2 when unset */
+  titleFontSize?: number;
+  /** Use per-page frame instead of global book frame settings */
+  useCustomFrame?: boolean;
+  pageFrameSettings?: Partial<PageFrameSettings>;
+  /** Use per-page background instead of global puzzle page colors */
+  useCustomBackground?: boolean;
+  backgroundColor?: string;
+  backgroundImage?: string;
+  backgroundImageFit?: 'cover' | 'contain' | 'stretch';
+  backgroundImageOpacity?: number;
+  /** Title-page layout blocks (draggable elements) */
+  blocks?: TextPageBlock[];
   /** TOC-only: auto-build from compiled book map */
   tocMode?: 'auto' | 'manual';
 }
@@ -114,6 +176,8 @@ export function getDefaultTextModuleSettings(type: DocumentModuleType): TextModu
     fontFamily: 'Arial',
     fontSize: 18,
     alignment: 'center',
+    useCustomFrame: false,
+    useCustomBackground: false,
     tocMode: type === 'table-of-contents' ? 'auto' : undefined,
   };
 }

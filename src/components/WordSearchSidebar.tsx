@@ -29,6 +29,9 @@ import { useDebouncedCallback } from '@/hooks/useDebouncedCallback';
 import { usePersistedState } from '@/hooks/usePersistedState';
 import { SETTINGS_TAB_STORAGE_KEY } from '@/lib/settings-persistence';
 import { computeWordSearchGenerationFingerprint } from '@/lib/generation-fingerprint';
+import { getEditedBatchIndicesForDocument } from '@/lib/canvas-edit-session';
+import { CanvasApplyToAllConfirmDialog } from '@/components/CanvasApplyToAllConfirmDialog';
+import type { GeneratePuzzleOptions } from '@/lib/app-context';
 
 const LANGUAGES = ['English', 'Spanish', 'French', 'German', 'Italian', 'Portuguese', 'Arabic'];
 const AGE_LEVELS = ['Children (6-8)', 'Children (9-12)', 'Teen', 'Adult', 'Senior'];
@@ -500,6 +503,8 @@ export function WordSearchSidebar() {
     activeDocumentPageId,
     puzzleGenerationVersion,
     puzzleGridScale,
+    pageOverrides,
+    pagePuzzleGridScales,
     setPuzzleGridScale,
     titleToAnswerGap,
     setTitleToAnswerGap,
@@ -522,6 +527,8 @@ export function WordSearchSidebar() {
   // Local state for AI word generation loading
   const [isGeneratingWordsFromExtension, setIsGeneratingWordsFromExtension] = React.useState(false);
   const [isGeneratingPuzzles, setIsGeneratingPuzzles] = React.useState(false);
+  const [generateConfirmOpen, setGenerateConfirmOpen] = React.useState(false);
+  const [preserveEditedPagesOnGenerate, setPreserveEditedPagesOnGenerate] = React.useState(true);
 
   // Collapsed/expanded sidebar state
   const [collapsed, setCollapsed] = React.useState(false);
@@ -1242,18 +1249,55 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
     ? `Update the ${activeDocumentPuzzleCount} ${activeDocumentPuzzleCount === 1 ? 'puzzle' : 'puzzles'}`
     : `Generate the ${activeDocumentPuzzleCount} ${activeDocumentPuzzleCount === 1 ? 'puzzle' : 'puzzles'}`;
 
-  const handleGeneratePuzzles = async () => {
+  const editedPageIndicesInDocument = useMemo(
+    () =>
+      getEditedBatchIndicesForDocument(
+        wordSearchSettings,
+        puzzleGridScale,
+        pageOverrides,
+        pagePuzzleGridScales,
+        batchPuzzles,
+        activeDocumentPageId
+      ),
+    [
+      wordSearchSettings,
+      puzzleGridScale,
+      pageOverrides,
+      pagePuzzleGridScales,
+      batchPuzzles,
+      activeDocumentPageId,
+    ]
+  );
+
+  const runGeneratePuzzles = async (options?: GeneratePuzzleOptions) => {
     setIsGeneratingPuzzles(true);
     await new Promise((resolve) => setTimeout(resolve, 400));
     try {
-      generatePuzzle();
+      generatePuzzle(options);
     } finally {
       setIsGeneratingPuzzles(false);
     }
   };
 
+  const handleGeneratePuzzles = async () => {
+    if (activeDocumentHasPuzzles && editedPageIndicesInDocument.length > 0) {
+      setPreserveEditedPagesOnGenerate(true);
+      setGenerateConfirmOpen(true);
+      return;
+    }
+    await runGeneratePuzzles();
+  };
+
+  const handleGenerateConfirm = async () => {
+    setGenerateConfirmOpen(false);
+    const options: GeneratePuzzleOptions = preserveEditedPagesOnGenerate
+      ? { preserveEditedPageIndices: editedPageIndicesInDocument }
+      : { clearPageCustomizations: true };
+    await runGeneratePuzzles(options);
+  };
+
   return (
-    <div className={`word-search-sidebar relative transition-all duration-300 h-full bg-gradient-to-b from-slate-50 to-white dark:from-slate-950 dark:to-slate-900 border-r border-gray-200 dark:border-slate-800 flex flex-col shadow-lg overflow-visible ${
+    <div className={`word-search-sidebar relative transition-all duration-300 h-full bg-gradient-to-b from-slate-50 to-white dark:from-slate-950 dark:to-slate-900 border-r border-gray-200 dark:border-slate-800 flex flex-col shadow-lg overflow-visible max-lg:w-full ${
       collapsed ? 'w-28' : 'w-96'
     }`}>
       {/* Edge-centre minimal collapse arrow — explicit inline SVG to avoid style overrides */}
@@ -1729,7 +1773,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   min={8}
                   max={50}
                   step={1}
-                  format="px"
+                  format="pt"
                 />
               </div>
             </div>
@@ -2764,9 +2808,6 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                     <SelectItem value="8X10IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '20.32 x 25.4' : '8 x 10'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
                     <SelectItem value="8_5X11IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '21.59 x 27.94' : '8.5 x 11'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
                     <SelectItem value="8_27X11_69IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '21 x 29.7' : '8.27 x 11.69'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="8_25X6IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '20.96 x 15.24' : '8.25 x 6'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="8_25X8_25IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '20.96 x 20.96' : '8.25 x 8.25'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="8_5X8_5IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '21.59 x 21.59' : '8.5 x 8.5'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -2838,6 +2879,19 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                 step={1}
               />
               <div className="space-y-2">
+                <Label>Text Color</Label>
+                <input
+                  type="color"
+                  value={
+                    activeTextSettings.textColor ??
+                    wordSearchSettings.colors.puzzlePage.titleColor ??
+                    '#1f2937'
+                  }
+                  onChange={(e) => updateActiveTextModuleSettings({ textColor: e.target.value })}
+                  className="h-8 w-full cursor-pointer rounded border border-gray-200"
+                />
+              </div>
+              <div className="space-y-2">
                 <Label>Alignment</Label>
                 <Select
                   value={activeTextSettings.alignment}
@@ -2866,6 +2920,15 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
           )}
         </div>
       )}
+      <CanvasApplyToAllConfirmDialog
+        open={generateConfirmOpen}
+        onOpenChange={setGenerateConfirmOpen}
+        editedPageIndices={editedPageIndicesInDocument}
+        preserveEditedPages={preserveEditedPagesOnGenerate}
+        onPreserveEditedPagesChange={setPreserveEditedPagesOnGenerate}
+        onConfirm={handleGenerateConfirm}
+        confirmLabel={generatePuzzlesLabel}
+      />
     </div>
   );
 }

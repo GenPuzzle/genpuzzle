@@ -4,6 +4,7 @@ import {
   WordSearchPuzzle,
   WordSearchSettings,
   TitleWordsSettings,
+  DEFAULT_TITLE_START_AT,
 } from './puzzles/types';
 import { calculateLayout, cssPxToPoints, formatWords, getSolutionGridFontSize } from './puzzle-layout';
 import { getPuzzleContentLine } from './puzzle-line-index';
@@ -19,7 +20,7 @@ import {
 import { computeBookHeaderTitleFontSizePt } from './header-assembly/book-title-size';
 import {
   getGridCellRectPdf,
-  getPdfLetterDrawCoords,
+  getPdfLetterDrawCoordsAtRequestedSize,
 } from './grid-letter-centering';
 import { getPDFSolutionPaths } from './solution-renderer';
 import { getMergedSettingsForPage } from './page-settings';
@@ -1062,7 +1063,7 @@ async function drawWordSearchPuzzle(
         cellWidth,
         cellHeight
       );
-      const draw = getPdfLetterDrawCoords(gridFont, letter, fontSize, cell);
+      const draw = getPdfLetterDrawCoordsAtRequestedSize(gridFont, letter, fontSize, cell);
 
       if (!noText) {
         page.drawText(letter, {
@@ -1363,10 +1364,7 @@ async function drawWordSearchSolutionPage(
       );
     }
 
-    // Get the appropriate font size for solution grid, ensuring it fits within cell
-    let answerGridFontSize = getSolutionGridFontSize(settings.typography);
-    // Cap font size to fit reasonably within the cell (use 90% of cell size as max)
-    answerGridFontSize = Math.min(answerGridFontSize, cellSize * 0.9);
+    const answerGridFontSize = getSolutionGridFontSize(settings.typography);
 
     // Solution Grid Cell Dimensions (EXACT BASELINE MATH)
     const solutionCellWidth = cellSize; // Each cell is cellSize wide
@@ -1386,7 +1384,7 @@ async function drawWordSearchSolutionPage(
           solutionCellWidth,
           solutionCellHeight
         );
-        const draw = getPdfLetterDrawCoords(
+        const draw = getPdfLetterDrawCoordsAtRequestedSize(
           gridFont,
           letter,
           answerGridFontSize,
@@ -1560,7 +1558,7 @@ function buildBaseSettingsFromWordSearch(
         wordSearchSettings?.core?.solutionGridBorderPadding ??
         wordSearchSettings?.core?.gridBorderPadding ??
         0,
-      gridLinesStrokeThickness: wordSearchSettings?.core?.gridLinesStrokeThickness ?? 1,
+      gridLinesStrokeThickness: wordSearchSettings?.core?.gridLinesStrokeThickness ?? 0,
       innerGridOpacity: wordSearchSettings?.core?.innerGridOpacity ?? 0,
     },
     typography: {
@@ -1578,7 +1576,7 @@ function buildBaseSettingsFromWordSearch(
       puzzleGridFontFamily: wordSearchSettings?.typography?.puzzleGridFontFamily || 'Arial',
       puzzleGridCase: wordSearchSettings?.typography?.puzzleGridCase || 'upper',
       spaceBetweenTitleAndPuzzle: wordSearchSettings?.typography?.spaceBetweenTitleAndPuzzle ?? 20,
-      titleStartAt: wordSearchSettings?.typography?.titleStartAt ?? 20,
+      titleStartAt: wordSearchSettings?.typography?.titleStartAt ?? DEFAULT_TITLE_START_AT,
       answerTitleFontSize: wordSearchSettings?.typography?.answerTitleFontSize || 20,
       setFontForAnswerPages: wordSearchSettings?.typography?.setFontForAnswerPages || false,
       answerGridFontFamily: wordSearchSettings?.typography?.answerGridFontFamily || 'Arial',
@@ -1743,7 +1741,8 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
           drawPageBackground,
           drawPageContainerFrame,
           backgroundCache,
-          options.noText
+          options.noText,
+          compiledPage.sourceDocumentName
         );
         continue;
       }

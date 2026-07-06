@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { WordSearchPuzzle } from '@/lib/puzzles/types';
+import { WordSearchPuzzle, DEFAULT_TITLE_START_AT } from '@/lib/puzzles/types';
 import { calculateLayout, calculateHighlights } from '@/lib/puzzle-layout';
 
 interface WordSearchSolutionPageProps {
@@ -81,7 +81,7 @@ export function WordSearchSolutionPage({
       puzzleTitleFontFamily: 'Arial',
       puzzleTitleFontSize: titleSize,
       answerTitleFontSize: titleSize,
-      titleStartAt: 20,
+      titleStartAt: DEFAULT_TITLE_START_AT,
       spaceBetweenTitleAndPuzzle: 20,
       spaceBetweenTitleAndAnswer: 10,
       puzzleGridCase: 'upper' as const,

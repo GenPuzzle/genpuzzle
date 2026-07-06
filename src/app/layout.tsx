@@ -1,6 +1,7 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { ThemeColorMeta } from "@/components/ThemeColorMeta";
 import { Toaster } from "@/components/ui/sonner";
 
 import "./globals.css";
@@ -15,6 +16,12 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
 });
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+};
 
 export const metadata: Metadata = {
   title: "GenPuzzle — Puzzle book maker",
@@ -53,6 +60,7 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
+          <ThemeColorMeta />
           {content}
         </ThemeProvider>
       </body>

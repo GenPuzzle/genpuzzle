@@ -128,6 +128,7 @@ export function CanvasDocumentTabsBar({
                   key={page.id}
                   role="tab"
                   aria-selected={isActive}
+                  tabIndex={isActive ? 0 : -1}
                   className={cn(
                     'doc-tab',
                     isActive && 'doc-tab--active',
@@ -136,23 +137,25 @@ export function CanvasDocumentTabsBar({
                   )}
                   onDragOver={(event) => handleDragOver(page.id, event)}
                   onDrop={(event) => handleDrop(page.id, event)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      handleSelect(page.id);
+                    }
+                  }}
                 >
                   <div
                     className="doc-tab__name"
                     draggable
                     onDragStart={(event) => handleDragStart(page.id, event)}
                     onDragEnd={handleDragEnd}
+                    onClick={() => handleSelect(page.id)}
                   >
                     <span className="doc-tab__pre-name" aria-hidden />
                     <span className="doc-tab__label">
-                      <button
-                        type="button"
-                        title={page.name}
-                        onClick={() => handleSelect(page.id)}
-                        className="doc-tab__select"
-                      >
+                      <span className="doc-tab__select" title={page.name}>
                         {idx + 1}. {displayName}
-                      </button>
+                      </span>
                       {documentPages.length > 1 && (
                         <button
                           type="button"

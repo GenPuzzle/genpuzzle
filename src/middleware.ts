@@ -4,6 +4,7 @@ import {
   APP_ORIGIN,
   MARKETING_ORIGIN,
   isAppSubdomainHost,
+  isLocalDevHost,
   isMarketingHost,
   normalizeHostname,
   toAppInternalPath,
@@ -24,8 +25,11 @@ export function middleware(request: NextRequest) {
   // Already on an internal route — guard cross-site access.
   if (pathname.startsWith('/app') || pathname.startsWith('/marketing')) {
     if (isMarketingHost(hostname) && pathname.startsWith('/app')) {
-      const publicPath = pathname.replace(/^\/app/, '') || '/';
-      return NextResponse.redirect(new URL(publicPath, APP_ORIGIN));
+      if (!isLocalDevHost(hostname)) {
+        const publicPath = pathname.replace(/^\/app/, '') || '/';
+        return NextResponse.redirect(new URL(publicPath, APP_ORIGIN));
+      }
+      return withIframeHeaders(NextResponse.next());
     }
     if (isAppSubdomainHost(hostname) && pathname.startsWith('/marketing')) {
       const publicPath = pathname.replace(/^\/marketing/, '') || '/';

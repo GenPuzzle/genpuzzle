@@ -57,10 +57,7 @@ export type TrimSizePresetId =
   | '7_5X9_25IN'
   | '8X10IN'
   | '8_5X11IN'
-  | '8_27X11_69IN'
-  | '8_25X6IN'
-  | '8_25X8_25IN'
-  | '8_5X8_5IN';
+  | '8_27X11_69IN';
 
 export interface BookCanvasSettings {
   // Bleed and trim
@@ -199,17 +196,23 @@ export interface PageNumberSettings {
   sideOffsetPx: number;
 }
 
+/** Default top offset for the puzzle title (typography.titleStartAt). */
+export const DEFAULT_TITLE_START_AT = 0;
+
 export const DEFAULT_PAGE_NUMBER_SETTINGS: PageNumberSettings = {
-  enabled: false,
+  enabled: true,
   startNumberingFrom: 1,
   startAtPage: 1,
-  position: 'bottom-center',
-  shape: { ...DEFAULT_HEADER_ASSEMBLY.number },
+  position: 'alternating',
+  shape: {
+    ...DEFAULT_HEADER_ASSEMBLY.number,
+    shapeId: 'circle',
+  },
   textColor: '#ffffff',
   fontFamily: 'Arial',
   fontSize: 14,
-  bottomOffsetPx: 12,
-  sideOffsetPx: 12,
+  bottomOffsetPx: 5,
+  sideOffsetPx: 5,
 };
 
 // Word List Settings
@@ -255,6 +258,8 @@ export interface PuzzlePageColors {
   titleColor: string;
   subtitleColor: string;
   boxColor: string;
+  /** Color of inner cell grid lines (puzzle pages). */
+  gridLinesColor?: string;
   puzzleColor: string;
   wordListTitleColor: string;
   wordListColor: string;
@@ -503,14 +508,14 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
       allowDiagonalUpReverse: false,
       allowDiagonalDownReverse: false,
       noBoxAroundPuzzle: false,
-      addGridLines: true,
+      addGridLines: false,
       borderStrokeThickness: 2,
       borderCornerRadius: 4,
       gridBorderPadding: 8,
       solutionBorderStrokeThickness: 2,
       solutionBorderCornerRadius: 4,
       solutionGridBorderPadding: 8,
-      gridLinesStrokeThickness: 1,
+      gridLinesStrokeThickness: 0,
       innerGridOpacity: 0,
         // customLetters removed
     },
@@ -534,7 +539,7 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
       puzzleTitleFontFamily: 'Arial',
       puzzleTitleFontSize: 24,
       answerTitleFontSize: 18,
-      titleStartAt: 20,
+      titleStartAt: DEFAULT_TITLE_START_AT,
       spaceBetweenTitleAndPuzzle: 20,
       spaceBetweenTitleAndAnswer: 20,
       puzzleGridCase: 'upper',
@@ -577,6 +582,7 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
         titleColor: '#1f2937',
         subtitleColor: '#6b7280',
         boxColor: '#1f2937',
+        gridLinesColor: '#d1d5db',
         puzzleColor: '#1f2937',
         wordListTitleColor: '#374151',
         wordListColor: '#4b5563',
