@@ -243,14 +243,16 @@ function CanvasBackgroundImageControl({
         </>
       ) : (
         <div className="grid grid-cols-2 gap-2">
-          <Select value={fit || 'cover'} onValueChange={(val) => onFitChange(val as 'cover' | 'contain' | 'stretch')}>
+          <Select
+            value={fit === 'stretch' || !fit ? 'cover' : fit}
+            onValueChange={(val) => onFitChange(val as 'cover' | 'contain')}
+          >
             <SelectTrigger className="h-8 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="cover">Cover</SelectItem>
               <SelectItem value="contain">Contain</SelectItem>
-              <SelectItem value="stretch">Stretch</SelectItem>
             </SelectContent>
           </Select>
           <SliderField

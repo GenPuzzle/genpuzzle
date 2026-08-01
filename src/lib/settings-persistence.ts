@@ -12,6 +12,8 @@ import type { DocumentPage } from './document-model';
 
 export const SETTINGS_STORAGE_KEY = 'puzzle-book-maker-settings-v1';
 export const SETTINGS_TAB_STORAGE_KEY = 'puzzle-book-maker-active-settings-tab';
+/** Top-level settings panel: book-wide layout vs current document */
+export const SETTINGS_PANEL_STORAGE_KEY = 'puzzle-book-maker-active-settings-panel';
 
 export interface PersistedAppSettings {
   version: 1;

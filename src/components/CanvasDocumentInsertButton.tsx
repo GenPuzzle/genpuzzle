@@ -11,9 +11,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
-  ALL_DOCUMENT_MODULES,
-  DocumentModuleType,
-  FRONT_MATTER_MODULES,
+  INSERTABLE_DOCUMENT_MODULES,
+  INSERTABLE_FRONT_MATTER_MODULES,
+  InsertableDocumentKind,
   PUZZLE_MODULES,
 } from '@/lib/document-model';
 import { cn } from '@/lib/utils';
@@ -21,9 +21,15 @@ import { cn } from '@/lib/utils';
 interface CanvasDocumentInsertButtonProps {
   side: 'before' | 'after';
   referenceId: string;
-  onInsert: (type: DocumentModuleType, position: 'before' | 'after', referenceId: string) => void;
+  onInsert: (
+    type: InsertableDocumentKind,
+    position: 'before' | 'after',
+    referenceId: string
+  ) => void;
   className?: string;
   variant?: 'canvas' | 'tab';
+  /** Override the default aria/title label */
+  title?: string;
 }
 
 export function CanvasDocumentInsertButton({
@@ -32,8 +38,9 @@ export function CanvasDocumentInsertButton({
   onInsert,
   className,
   variant = 'canvas',
+  title,
 }: CanvasDocumentInsertButtonProps) {
-  const label = side === 'before' ? 'Add page before' : 'Add page after';
+  const label = title ?? (side === 'before' ? 'Add page before' : 'Add page after');
 
   return (
     <DropdownMenu>
@@ -63,7 +70,7 @@ export function CanvasDocumentInsertButton({
         className="w-52"
       >
         <DropdownMenuLabel className="text-xs text-muted-foreground">Front Matter</DropdownMenuLabel>
-        {FRONT_MATTER_MODULES.map((module) => (
+        {INSERTABLE_FRONT_MATTER_MODULES.map((module) => (
           <DropdownMenuItem
             key={module.type}
             onClick={() => onInsert(module.type, side, referenceId)}
@@ -87,4 +94,4 @@ export function CanvasDocumentInsertButton({
 }
 
 /** Flat list variant for mobile compact menu */
-export const DOCUMENT_MODULE_OPTIONS = ALL_DOCUMENT_MODULES;
+export const DOCUMENT_MODULE_OPTIONS = INSERTABLE_DOCUMENT_MODULES;

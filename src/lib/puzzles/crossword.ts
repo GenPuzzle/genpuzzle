@@ -185,13 +185,31 @@ function numberGrid(grid: CrosswordCell[][]): Map<string, number> {
   return numbers;
 }
 
+export interface GenerateCrosswordOptions {
+  lettersAcross?: number;
+  lettersDown?: number;
+  allowNumbers?: boolean;
+  maxAnswerLength?: number;
+}
+
 export function generateCrossword(
   wordClues: { word: string; clue: string }[],
-  gridSize: number = 15
+  gridSizeOrOptions: number | GenerateCrosswordOptions = 15
 ): CrosswordPuzzle {
+  const options: GenerateCrosswordOptions =
+    typeof gridSizeOrOptions === 'number'
+      ? { lettersAcross: gridSizeOrOptions, lettersDown: gridSizeOrOptions }
+      : gridSizeOrOptions;
+
+  const cols = Math.max(3, options.lettersAcross ?? 15);
+  const rows = Math.max(3, options.lettersDown ?? cols);
+  const allowNumbers = options.allowNumbers ?? false;
+  const maxAnswerLength = options.maxAnswerLength ?? 30;
+  const letterPattern = allowNumbers ? /[^A-Za-z0-9]/g : /[^A-Za-z]/g;
+
   const words: CrosswordWord[] = wordClues
     .map((wc) => ({
-      word: wc.word.toUpperCase().replace(/[^A-Z]/g, ''),
+      word: wc.word.toUpperCase().replace(letterPattern, '').slice(0, maxAnswerLength),
       clue: wc.clue || wc.word,
       placed: false,
     }))
@@ -201,24 +219,24 @@ export function generateCrossword(
   if (words.length === 0) {
     return {
       type: 'crossword',
-      grid: createEmptyGrid(5, 5),
+      grid: createEmptyGrid(Math.min(5, rows), Math.min(5, cols)),
       acrossClues: [],
       downClues: [],
     };
   }
 
-  let grid = createEmptyGrid(gridSize, gridSize);
+  let grid = createEmptyGrid(rows, cols);
 
   // Place first word horizontally in the middle
   words[0].placed = true;
-  words[0].row = Math.floor(gridSize / 2);
-  words[0].col = Math.floor((gridSize - words[0].word.length) / 2);
+  words[0].row = Math.floor(rows / 2);
+  words[0].col = Math.max(0, Math.floor((cols - words[0].word.length) / 2));
   words[0].direction = 'across';
   placeWord(grid, words[0].word, words[0].row!, words[0].col!, 'across');
 
   // Find intersections and place more words
   findIntersections(words);
-  placeRemainingWords(grid, words,);
+  placeRemainingWords(grid, words);
 
   // Add some black squares for aesthetics
   addBlackSquares(grid);

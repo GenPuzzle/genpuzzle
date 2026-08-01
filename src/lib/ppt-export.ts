@@ -24,7 +24,6 @@ import {
   WordSearchPuzzle,
   WordSearchSettings,
 } from "./puzzles/types";
-import type { TextModuleSettings } from "./document-model";
 import {
   computeWordSearchPageLayout,
   distributeWordsIntoColumns,
@@ -61,11 +60,14 @@ import {
   compileBook,
   getTitleWordsForDocument,
   groupPuzzlesByDocument,
+  shouldDrawBookPageNumber,
 } from "./book-compiler";
 import {
   resolveLayoutSettingsForExport,
   resolvePageNumberSettingsForBook,
 } from "./text-page-pdf-draw";
+import { addTextModuleSlide } from "./text-page-ppt-draw";
+import { resolvePuzzleDisplayNumber, getPuzzleContentLine } from "./puzzle-line-index";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -136,24 +138,31 @@ function _addGridFrameShape(
 /** PPT background config — inner frame fill is a single vector shape, not baked into raster. */
 const PPT_BG_OPTIONS = { bakeInnerFrameFill: false } as const;
 
-/** Shared page-container frame geometry (inches). */
+/**
+ * Shared page-container frame geometry (inches).
+ * Insets by half the stroke so the outer edge matches CSS `border-box` (canvas
+ * PageFrameOverlay) — PowerPoint strokes are centered on the path.
+ */
 function getPageContainerFrameGeom(
   pageWIn: number,
   pageHIn: number,
   frame: PageFrameSettings
 ) {
   const m = frame.marginSizeIn;
-  const x = m;
-  const y = m;
-  const w = Math.max(0.01, pageWIn - m * 2);
-  const h = Math.max(0.01, pageHIn - m * 2);
+  const strokePt = Math.max(0.5, cssPxToPoints(frame.strokeThicknessPx));
+  const strokeIn = strokePt / 72;
+  const halfIn = strokeIn / 2;
+  const x = m + halfIn;
+  const y = m + halfIn;
+  const w = Math.max(0.01, pageWIn - m * 2 - strokeIn);
+  const h = Math.max(0.01, pageHIn - m * 2 - strokeIn);
   const rectRadiusIn = Math.max(
     0,
     Math.min(frame.cornerRadiusPx / 96, Math.min(w, h) / 2)
   );
   const shapeType = rectRadiusIn > 0 ? "roundRect" : "rect";
   const roundProps = rectRadiusIn > 0 ? { rectRadius: rectRadiusIn } : {};
-  return { x, y, w, h, shapeType, roundProps };
+  return { x, y, w, h, shapeType, roundProps, strokePt };
 }
 
 /**
@@ -170,13 +179,12 @@ function _addPageContainerFrame(
 ): void {
   if (!frame.enabled) return;
 
-  const { x, y, w, h, shapeType, roundProps } = getPageContainerFrameGeom(
+  const { x, y, w, h, shapeType, roundProps, strokePt } = getPageContainerFrameGeom(
     pageWIn,
     pageHIn,
     frame
   );
 
-  const strokeWidth = Math.max(0.5, cssPxToPoints(frame.strokeThicknessPx));
   const strokeColor = hex6(frame.borderColor);
 
   if (hasBackgroundImage && pageBackgroundColor) {
@@ -186,7 +194,7 @@ function _addPageContainerFrame(
       w,
       h,
       fill: { color: hex6(pageBackgroundColor, "FFFFFF") },
-      line: { color: strokeColor, width: strokeWidth },
+      line: { color: strokeColor, width: strokePt },
       ...roundProps,
     });
     return;
@@ -198,7 +206,7 @@ function _addPageContainerFrame(
     y,
     w,
     h,
-    line: { color: strokeColor, width: strokeWidth },
+    line: { color: strokeColor, width: strokePt },
     ...roundProps,
   });
 }
@@ -207,7 +215,8 @@ async function addBlankSeparatorSlide(
   prs: any,
   settings: WordSearchSettings,
   bookPageIndex: number,
-  backgroundCache: FlattenedBackgroundPptCache
+  backgroundCache: FlattenedBackgroundPptCache,
+  suppressPageNumber = false
 ): Promise<void> {
   const slide = prs.addSlide();
   const pageWidthPt = (settings.bookCanvas.customWidth || 8.5) * 72;
@@ -231,7 +240,9 @@ async function addBlankSeparatorSlide(
     settings.colors.puzzlePage.backgroundColor,
     !!settings.colors.puzzlePage.backgroundImage
   );
-  addPageNumberToSlide(slide, pageWidthPt, pageHeightPt, settings, bookPageIndex);
+  if (!suppressPageNumber) {
+    addPageNumberToSlide(slide, pageWidthPt, pageHeightPt, settings, bookPageIndex);
+  }
 }
 
 function buildSettingsForCompiledPage(
@@ -258,100 +269,6 @@ function buildSettingsForCompiledPage(
       pageNumber: normalizePageNumberSettings(wordSearchSettings.typography?.pageNumber),
     },
   };
-}
-
-async function addTextModuleSlide(
-  prs: any,
-  settings: TextModuleSettings,
-  layoutSettings: WordSearchSettings,
-  bookPageIndex: number,
-  backgroundCache: FlattenedBackgroundPptCache
-): Promise<void> {
-  const slide = prs.addSlide();
-  const pageWidthPt = (layoutSettings.bookCanvas.customWidth || 8.5) * 72;
-  const pageHeightPt = (layoutSettings.bookCanvas.customHeight || 11) * 72;
-  const pageW = pt2in(pageWidthPt);
-  const pageH = pt2in(pageHeightPt);
-  const pageFrame = resolvePageFrameSettings(layoutSettings);
-  const bgConfig = puzzlePageBackgroundConfig(
-    pageWidthPt,
-    pageHeightPt,
-    layoutSettings.colors.puzzlePage,
-    pageFrame.cornerRadiusPx,
-    PPT_BG_OPTIONS
-  );
-  await applyFlattenedBackgroundToSlide(slide, bgConfig, backgroundCache, hex6);
-  _addPageContainerFrame(
-    slide,
-    pageW,
-    pageH,
-    pageFrame,
-    layoutSettings.colors.puzzlePage.backgroundColor,
-    !!layoutSettings.colors.puzzlePage.backgroundImage
-  );
-
-  const marginPt = getPageMarginInches(layoutSettings) * 72;
-  const marginIn = pt2in(marginPt);
-  const contentWIn = pt2in(pageWidthPt - marginPt * 2);
-  const titleSize = settings.fontSize;
-  const bodySize = settings.fontSize;
-  const titleLine = (settings.title || "").trim();
-  const bodyText = (settings.content || "").trim();
-  const alignment = settings.alignment || "center";
-  const textColor = hex6(layoutSettings.colors.puzzlePage.titleColor, "1F2937");
-  const fontFace = settings.fontFamily || "Arial";
-  const pptAlign = alignment === "left" ? "left" : alignment === "right" ? "right" : "center";
-
-  const titleLines = titleLine ? [titleLine] : [];
-  const bodyLines = bodyText ? bodyText.split("\n") : [];
-  const lineHeightIn = pt2in(bodySize * 1.35);
-  const titleLineHeightIn = pt2in(titleSize * 1.2);
-  const gapAfterTitleIn =
-    titleLines.length > 0 && bodyLines.length > 0 ? lineHeightIn * 0.5 : 0;
-  const totalHeightIn =
-    titleLines.length * titleLineHeightIn +
-    gapAfterTitleIn +
-    bodyLines.length * lineHeightIn;
-  let cursorYIn = Math.max(marginIn, (pageH - totalHeightIn) / 2);
-
-  for (const line of titleLines) {
-    slide.addText(line, {
-      x: marginIn,
-      y: cursorYIn,
-      w: contentWIn,
-      h: titleLineHeightIn,
-      fontSize: Math.round(titleSize),
-      fontFace,
-      color: textColor,
-      bold: true,
-      align: pptAlign,
-      valign: "top",
-      margin: 0,
-      isTextBox: true,
-    });
-    cursorYIn += titleLineHeightIn;
-  }
-  if (gapAfterTitleIn > 0) {
-    cursorYIn += gapAfterTitleIn;
-  }
-  for (const line of bodyLines) {
-    slide.addText(line, {
-      x: marginIn,
-      y: cursorYIn,
-      w: contentWIn,
-      h: lineHeightIn,
-      fontSize: Math.round(bodySize),
-      fontFace,
-      color: textColor,
-      align: pptAlign,
-      valign: "top",
-      margin: 0,
-      isTextBox: true,
-    });
-    cursorYIn += lineHeightIn;
-  }
-
-  addPageNumberToSlide(slide, pageWidthPt, pageHeightPt, layoutSettings, bookPageIndex);
 }
 
 /**
@@ -482,27 +399,36 @@ async function buildSlide(
   showSolution: boolean,
   settings?: WordSearchSettings,
   backgroundCache?: FlattenedBackgroundPptCache,
-  bookPageIndex = 0
+  bookPageIndex = 0,
+  suppressPageNumber = false
 ): Promise<void> {
   const slide = prs.addSlide();
 
-  const pageW = pt2in(layout.page.widthPt);
-  const pageH = pt2in(layout.page.heightPt);
+  // Prefer book canvas size (same source as defineLayout) so the frame is
+  // centered on the slide even if layout.page rounding differs.
+  const pageW = settings?.bookCanvas.customWidth
+    ? settings.bookCanvas.customWidth
+    : pt2in(layout.page.widthPt);
+  const pageH = settings?.bookCanvas.customHeight
+    ? settings.bookCanvas.customHeight
+    : pt2in(layout.page.heightPt);
+  const pageWidthPt = pageW * 72;
+  const pageHeightPt = pageH * 72;
 
   // ── Flattened background (uneditable slide.background layer) ─────────────
   const bgCache = backgroundCache ?? new FlattenedBackgroundPptCache();
   const pageFrame = settings ? resolvePageFrameSettings(settings) : DEFAULT_PAGE_FRAME_SETTINGS;
   const bgConfig = showSolution
     ? answerPageBackgroundConfig(
-        layout.page.widthPt,
-        layout.page.heightPt,
+        pageWidthPt,
+        pageHeightPt,
         settings?.colors?.answerPage ?? {},
         pageFrame.cornerRadiusPx,
         PPT_BG_OPTIONS
       )
     : puzzlePageBackgroundConfig(
-        layout.page.widthPt,
-        layout.page.heightPt,
+        pageWidthPt,
+        pageHeightPt,
         settings?.colors?.puzzlePage ?? { backgroundColor: layout.page.backgroundColor },
         pageFrame.cornerRadiusPx,
         PPT_BG_OPTIONS
@@ -700,11 +626,11 @@ async function buildSlide(
     }
   }
 
-  if (settings) {
+  if (settings && !suppressPageNumber) {
     addPageNumberToSlide(
       slide,
-      layout.page.widthPt,
-      layout.page.heightPt,
+      pageWidthPt,
+      pageHeightPt,
       settings,
       bookPageIndex
     );
@@ -795,7 +721,8 @@ async function buildSolutionSlide(
   pageMarginPt: number,
   solutionToSolutionGap: number,
   backgroundCache?: FlattenedBackgroundPptCache,
-  bookPageIndex = 0
+  bookPageIndex = 0,
+  suppressPageNumber = false
 ): Promise<void> {
   const slide = prs.addSlide();
 
@@ -869,8 +796,7 @@ async function buildSolutionSlide(
             .split(/\r?\n/)
             .map((l) => l.trim())
             .filter(Boolean);
-          const pNum = puzzle.puzzleNumber || idx + 1;
-          titleText = lines.length > 0 ? (lines[pNum - 1] ?? lines[lines.length - 1]) : "";
+          titleText = getPuzzleContentLine(lines, puzzle, settings, true);
           break;
         }
         default:
@@ -878,11 +804,11 @@ async function buildSolutionSlide(
       }
       numberingStyle = settings.typography.puzzleNumberingStyle || "none";
     } else {
-      titleText = settings.typography.customSolutionTitle || "Solution";
+      titleText = settings.typography.customSolutionTitle || "Solutions";
       numberingStyle = settings.typography.solutionNumberingStyle || "none";
     }
 
-    const pNum = puzzle.puzzleNumber || idx + 1;
+    const pNum = resolvePuzzleDisplayNumber(puzzle, settings, idx);
     if (titleText && numberingStyle !== "none") {
       if (numberingStyle === "prefix") titleText = `${pNum}. ${titleText}`;
       else if (numberingStyle === "suffix") titleText = `${titleText} #${pNum}`;
@@ -1022,7 +948,9 @@ async function buildSolutionSlide(
     }
   }
 
-  addPageNumberToSlide(slide, pageWidthPt, pageHeightPt, settings, bookPageIndex);
+  if (!suppressPageNumber) {
+    addPageNumberToSlide(slide, pageWidthPt, pageHeightPt, settings, bookPageIndex);
+  }
 }
 
 
@@ -1102,7 +1030,18 @@ export async function generatePuzzlePPTBlob(
     const backgroundCache = new FlattenedBackgroundPptCache();
 
     if (documentPages && documentPages.length > 0 && !onlySolutions) {
-      const layoutSettings = resolveLayoutSettingsForExport(documentPages, baseSettings);
+      const layoutSettingsRaw = resolveLayoutSettingsForExport(documentPages, baseSettings);
+      // Keep title/blank/WS slides on one slide size (matches buildSettingsForCompiledPage).
+      const layoutSettings: WordSearchSettings = {
+        ...layoutSettingsRaw,
+        bookCanvas: {
+          ...layoutSettingsRaw.bookCanvas,
+          customWidth: bookSettings.customWidth || layoutSettingsRaw.bookCanvas.customWidth || 8.5,
+          customHeight: bookSettings.customHeight || layoutSettingsRaw.bookCanvas.customHeight || 11,
+          includeBleed: bookSettings.includeBleed ?? layoutSettingsRaw.bookCanvas.includeBleed,
+          useCustomTrim: bookSettings.useCustomTrim ?? layoutSettingsRaw.bookCanvas.useCustomTrim,
+        },
+      };
       const pageNumberSettings = resolvePageNumberSettingsForBook(documentPages, baseSettings);
       const puzzleMap = groupPuzzlesByDocument(puzzles, documentPages);
       const compiled = compileBook(documentPages, puzzleMap, {
@@ -1137,6 +1076,10 @@ export async function generatePuzzlePPTBlob(
       const totalSlides = compiled.pages.length;
       for (let slideIdx = 0; slideIdx < compiled.pages.length; slideIdx++) {
         const compiledPage = compiled.pages[slideIdx];
+        const allowPageNumber = shouldDrawBookPageNumber(
+          compiledPage.bookPageIndex,
+          compiled.pages
+        );
         if (onProgress) {
           onProgress(`Building slide ${slideIdx + 1} of ${totalSlides}…`);
         }
@@ -1147,7 +1090,10 @@ export async function generatePuzzlePPTBlob(
             compiledPage.settings,
             layoutSettings,
             compiledPage.bookPageIndex,
-            backgroundCache
+            backgroundCache,
+            compiledPage.sourceDocumentName,
+            compiledPage.resolvedToc,
+            !allowPageNumber
           );
           continue;
         }
@@ -1157,7 +1103,8 @@ export async function generatePuzzlePPTBlob(
             prs,
             layoutSettings,
             compiledPage.bookPageIndex,
-            backgroundCache
+            backgroundCache,
+            !allowPageNumber
           );
           continue;
         }
@@ -1180,9 +1127,14 @@ export async function generatePuzzlePPTBlob(
 
         if (compiledPage.kind === "puzzle") {
           const puzzle = compiledPage.puzzle;
-          if (!puzzle.puzzleNumber) {
-            puzzle.puzzleNumber = compiledPage.puzzleIndexInDocument + 1;
-          }
+          puzzle.puzzleNumber = resolvePuzzleDisplayNumber(
+            {
+              ...puzzle,
+              puzzleIndexInDocument: compiledPage.puzzleIndexInDocument,
+            },
+            effectiveSettings,
+            compiledPage.puzzleIndexInDocument
+          );
 
           const layout = computeWordSearchPageLayout(
             puzzle,
@@ -1201,7 +1153,8 @@ export async function generatePuzzlePPTBlob(
             false,
             effectiveSettings,
             backgroundCache,
-            compiledPage.bookPageIndex
+            compiledPage.bookPageIndex,
+            !allowPageNumber
           );
           continue;
         }
@@ -1211,7 +1164,7 @@ export async function generatePuzzlePPTBlob(
 
           if (chunkSize === 1) {
             const puzzle = compiledPage.puzzles[0];
-            if (!puzzle.puzzleNumber) puzzle.puzzleNumber = 1;
+            puzzle.puzzleNumber = resolvePuzzleDisplayNumber(puzzle, effectiveSettings, 0);
 
             const layout = computeWordSearchPageLayout(
               puzzle,
@@ -1228,7 +1181,8 @@ export async function generatePuzzlePPTBlob(
               true,
               effectiveSettings,
               backgroundCache,
-              compiledPage.bookPageIndex
+              compiledPage.bookPageIndex,
+              !allowPageNumber
             );
           } else {
             await buildSolutionSlide(
@@ -1240,7 +1194,8 @@ export async function generatePuzzlePPTBlob(
               pageMargin,
               solutionToSolutionGap,
               backgroundCache,
-              compiledPage.bookPageIndex
+              compiledPage.bookPageIndex,
+              !allowPageNumber
             );
           }
         }
@@ -1278,7 +1233,11 @@ export async function generatePuzzlePPTBlob(
             onProgress(`Building puzzle slide ${pi + 1} of ${puzzles.length}…`);
 
           const puzzle = puzzles[pi];
-          if (!puzzle.puzzleNumber) puzzle.puzzleNumber = pi + 1;
+          puzzle.puzzleNumber = resolvePuzzleDisplayNumber(
+            puzzle,
+            getMergedSettingsForPage(baseSettings, pageOverrides, applyMode, currentPageIndex),
+            pi
+          );
 
           const effectiveSettings = getMergedSettingsForPage(
             baseSettings, pageOverrides, applyMode, currentPageIndex
@@ -1323,7 +1282,11 @@ export async function generatePuzzlePPTBlob(
               onProgress(`Building solution slide ${pi + 1} of ${puzzles.length}…`);
 
             const puzzle = puzzles[pi];
-            if (!puzzle.puzzleNumber) puzzle.puzzleNumber = pi + 1;
+            puzzle.puzzleNumber = resolvePuzzleDisplayNumber(
+              puzzle,
+              getMergedSettingsForPage(baseSettings, pageOverrides, applyMode, currentPageIndex),
+              pi
+            );
 
             const effectiveSettings = getMergedSettingsForPage(
               baseSettings, pageOverrides, applyMode, currentPageIndex

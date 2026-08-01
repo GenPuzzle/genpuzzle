@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { Redo2, Undo2, X } from 'lucide-react';
 import type { DocumentPage, DocumentModuleType } from '@/lib/document-model';
 import { cn } from '@/lib/utils';
 import { RemoveDocumentConfirmDialog } from '@/components/RemoveDocumentConfirmDialog';
@@ -15,6 +15,47 @@ interface CanvasDocumentTabsBarProps {
   onRemove: (id: string) => void;
   onReorder: (activeId: string, overId: string) => void;
   onInsert: (type: DocumentModuleType, position: 'before' | 'after', referenceId: string) => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
+}
+
+function DocumentHistoryButtons({
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+}: {
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
+}) {
+  return (
+    <div className="doc-tabs-history" role="group" aria-label="Undo and redo">
+      <button
+        type="button"
+        className="doc-tabs-history__btn"
+        disabled={!canUndo}
+        onClick={onUndo}
+        title="Undo (Ctrl+Z)"
+        aria-label="Undo"
+      >
+        <Undo2 className="h-3.5 w-3.5" strokeWidth={2.25} />
+      </button>
+      <button
+        type="button"
+        className="doc-tabs-history__btn"
+        disabled={!canRedo}
+        onClick={onRedo}
+        title="Redo (Ctrl+Y)"
+        aria-label="Redo"
+      >
+        <Redo2 className="h-3.5 w-3.5" strokeWidth={2.25} />
+      </button>
+    </div>
+  );
 }
 
 export function CanvasDocumentTabsBar({
@@ -24,6 +65,10 @@ export function CanvasDocumentTabsBar({
   onRemove,
   onReorder,
   onInsert,
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
 }: CanvasDocumentTabsBarProps) {
   const [pageToRemove, setPageToRemove] = useState<DocumentPage | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -35,6 +80,12 @@ export function CanvasDocumentTabsBar({
       <div className="doc-tabs-shell shrink-0 z-20">
         <div className="doc-tabs-header">
           <span className="doc-tabs-title">Documents</span>
+          <DocumentHistoryButtons
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={onUndo}
+            onRedo={onRedo}
+          />
           <div className="doc-tabs-bar" role="tablist" aria-label="Document pages">
             <CanvasDocumentInsertButton
               variant="tab"
@@ -99,8 +150,6 @@ export function CanvasDocumentTabsBar({
     onSelect(pageId);
   };
 
-  const appendReferenceId = documentPages[documentPages.length - 1]?.id ?? activeDocumentPageId;
-
   return (
     <>
       <RemoveDocumentConfirmDialog
@@ -115,6 +164,12 @@ export function CanvasDocumentTabsBar({
       <div className="doc-tabs-shell shrink-0 z-20">
         <div className="doc-tabs-header">
           <span className="doc-tabs-title">Documents</span>
+          <DocumentHistoryButtons
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={onUndo}
+            onRedo={onRedo}
+          />
           <div className="doc-tabs-bar" role="tablist" aria-label="Document pages">
             {documentPages.map((page, idx) => {
               const isActive = activeDocumentPageId === page.id;
@@ -124,62 +179,65 @@ export function CanvasDocumentTabsBar({
                 page.name.length > 22 ? `${page.name.slice(0, 22)}…` : page.name;
 
               return (
-                <div
-                  key={page.id}
-                  role="tab"
-                  aria-selected={isActive}
-                  tabIndex={isActive ? 0 : -1}
-                  className={cn(
-                    'doc-tab',
-                    isActive && 'doc-tab--active',
-                    isDragging && 'doc-tab--dragging',
-                    isDropTarget && 'doc-tab--drop-target'
-                  )}
-                  onDragOver={(event) => handleDragOver(page.id, event)}
-                  onDrop={(event) => handleDrop(page.id, event)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      handleSelect(page.id);
-                    }
-                  }}
-                >
+                <React.Fragment key={page.id}>
                   <div
-                    className="doc-tab__name"
-                    draggable
-                    onDragStart={(event) => handleDragStart(page.id, event)}
-                    onDragEnd={handleDragEnd}
-                    onClick={() => handleSelect(page.id)}
+                    role="tab"
+                    aria-selected={isActive}
+                    tabIndex={isActive ? 0 : -1}
+                    className={cn(
+                      'doc-tab',
+                      isActive && 'doc-tab--active',
+                      isDragging && 'doc-tab--dragging',
+                      isDropTarget && 'doc-tab--drop-target'
+                    )}
+                    onDragOver={(event) => handleDragOver(page.id, event)}
+                    onDrop={(event) => handleDrop(page.id, event)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        handleSelect(page.id);
+                      }
+                    }}
                   >
-                    <span className="doc-tab__pre-name" aria-hidden />
-                    <span className="doc-tab__label">
-                      <span className="doc-tab__select" title={page.name}>
-                        {idx + 1}. {displayName}
+                    <div
+                      className="doc-tab__name"
+                      draggable
+                      onDragStart={(event) => handleDragStart(page.id, event)}
+                      onDragEnd={handleDragEnd}
+                      onClick={() => handleSelect(page.id)}
+                    >
+                      <span className="doc-tab__pre-name" aria-hidden />
+                      <span className="doc-tab__label">
+                        <span className="doc-tab__select" title={page.name}>
+                          {idx + 1}. {displayName}
+                        </span>
+                        {documentPages.length > 1 && (
+                          <button
+                            type="button"
+                            aria-label={`Remove ${page.name}`}
+                            title={`Remove ${page.name}`}
+                            className="doc-tab__remove"
+                            onMouseDown={(event) => event.stopPropagation()}
+                            onClick={(e) => handleRemoveClick(page, e)}
+                          >
+                            <X className="h-2.5 w-2.5 stroke-[2.5]" />
+                          </button>
+                        )}
                       </span>
-                      {documentPages.length > 1 && (
-                        <button
-                          type="button"
-                          aria-label={`Remove ${page.name}`}
-                          title={`Remove ${page.name}`}
-                          className="doc-tab__remove"
-                          onMouseDown={(event) => event.stopPropagation()}
-                          onClick={(e) => handleRemoveClick(page, e)}
-                        >
-                          <X className="h-2.5 w-2.5 stroke-[2.5]" />
-                        </button>
-                      )}
-                    </span>
-                    <span className="doc-tab__pos-name" aria-hidden />
+                      <span className="doc-tab__pos-name" aria-hidden />
+                    </div>
                   </div>
-                </div>
+                  <CanvasDocumentInsertButton
+                    variant="tab"
+                    side="after"
+                    referenceId={page.id}
+                    onInsert={onInsert}
+                    className="doc-tabs-add--beside"
+                    title={`Add page after ${page.name}`}
+                  />
+                </React.Fragment>
               );
             })}
-            <CanvasDocumentInsertButton
-              variant="tab"
-              side="after"
-              referenceId={appendReferenceId}
-              onInsert={onInsert}
-            />
           </div>
         </div>
       </div>

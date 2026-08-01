@@ -1,6 +1,14 @@
-import type { TextModuleSettings, TextPageBlock, TextPageBlockKind } from './document-model';
+import type { TextModuleSettings, TextPageBlock, TextPageBlockKind, OwnershipNameLineType } from './document-model';
 import type { WordSearchSettings } from './puzzles/types';
 import { resolveTextPageTextColor } from './text-page-settings';
+import {
+  DEFAULT_IMAGE_BG_REMOVAL_TOLERANCE,
+  DEFAULT_IMAGE_EFFECT_EDGE_THRESHOLD,
+  DEFAULT_IMAGE_EFFECT_LUM_CUTOFF,
+  DEFAULT_IMAGE_EFFECT_SAT_CUTOFF,
+  DEFAULT_IMAGE_GRAYSCALE_CONTRAST,
+  MAX_IMAGE_EFFECT_EDGE_THRESHOLD,
+} from './text-page-image-effects';
 
 export type TitlePagePositionPreset =
   | 'top'
@@ -25,11 +33,83 @@ export function normalizeBlockKind(kind: TextPageBlockKind): TextPageBlockKind {
 }
 
 export function normalizeTextPageBlock(block: TextPageBlock): TextPageBlock {
-  return {
+  const kind = normalizeBlockKind(block.kind);
+  const defaultHeight =
+    kind === 'image' ? 28 : kind === 'title' ? 14 : kind === 'subtitle' ? 10 : 18;
+  const normalized: TextPageBlock = {
     ...block,
-    kind: normalizeBlockKind(block.kind),
+    kind,
     lineHeight: block.lineHeight ?? 1.35,
+    wordSpacingPx: block.wordSpacingPx ?? 0,
+    letterSpacingPx: block.letterSpacingPx ?? 0,
+    boxPaddingPx: block.boxPaddingPx ?? 10,
+    rotationDeg: block.rotationDeg ?? 0,
+    heightPercent: block.heightPercent ?? defaultHeight,
+    ...(kind === 'image'
+      ? {
+          imageFit: block.imageFit ?? 'stretch',
+          imageOpacity: block.imageOpacity ?? 100,
+          imageEffect: block.imageEffect ?? 'none',
+          imageEffectLumCutoff: block.imageEffectLumCutoff ?? DEFAULT_IMAGE_EFFECT_LUM_CUTOFF,
+          imageEffectSatCutoff: block.imageEffectSatCutoff ?? DEFAULT_IMAGE_EFFECT_SAT_CUTOFF,
+          imageEffectEdgeThreshold: Math.min(
+            MAX_IMAGE_EFFECT_EDGE_THRESHOLD,
+            block.imageEffectEdgeThreshold ?? DEFAULT_IMAGE_EFFECT_EDGE_THRESHOLD
+          ),
+          imageGrayscaleContrast:
+            block.imageGrayscaleContrast ?? DEFAULT_IMAGE_GRAYSCALE_CONTRAST,
+          imageBgRemovalTolerance:
+            block.imageBgRemovalTolerance ?? DEFAULT_IMAGE_BG_REMOVAL_TOLERANCE,
+          imageColoringPageUnsuitable: block.imageColoringPageUnsuitable ?? false,
+          imageFlipHorizontal: block.imageFlipHorizontal ?? false,
+          imageFlipVertical: block.imageFlipVertical ?? false,
+        }
+      : {}),
   };
+
+  if (kind === 'ownership') {
+    normalized.nameLineType =
+      block.nameLineType ?? (block.showNameLine === false ? 'none' : 'solid');
+  }
+
+  return normalized;
+}
+
+export function resolveOwnershipNameLineType(block: TextPageBlock): OwnershipNameLineType {
+  if (block.kind !== 'ownership') return 'none';
+  if (block.nameLineType) return block.nameLineType;
+  if (block.showNameLine === false) return 'none';
+  return 'solid';
+}
+
+export function ownershipNameLineIsVisible(type: OwnershipNameLineType): boolean {
+  return type !== 'none';
+}
+
+/** Horizontal placement of the box on the page (like PowerPoint slide align). */
+export function getPageHorizontalAlign(block: TextPageBlock): 'left' | 'center' | 'right' {
+  const boxCenter = block.xPercent + block.widthPercent / 2;
+  if (boxCenter < 42) return 'left';
+  if (boxCenter > 58) return 'right';
+  return 'center';
+}
+
+export function applyPageHorizontalAlign(
+  block: TextPageBlock,
+  align: 'left' | 'center' | 'right',
+  marginPercent = 4
+): Partial<TextPageBlock> {
+  const width = block.widthPercent;
+  switch (align) {
+    case 'left':
+      return { xPercent: marginPercent };
+    case 'center':
+      return { xPercent: clampPercent((100 - width) / 2) };
+    case 'right':
+      return { xPercent: clampPercent(100 - width - marginPercent) };
+    default:
+      return {};
+  }
 }
 
 function baseBlockFromSettings(
@@ -53,44 +133,32 @@ function baseBlockFromSettings(
   });
 }
 
+/** Title pages start blank — users add only the elements they need. */
 export function createDefaultTitlePageBlocks(
-  pageTitle: string,
-  settings: TextModuleSettings,
-  globalSettings: WordSearchSettings
+  _pageTitle: string,
+  _settings: TextModuleSettings,
+  _globalSettings: WordSearchSettings
 ): TextPageBlock[] {
+  return [];
+}
+
+export function createTitleBlock(
+  settings: TextModuleSettings,
+  globalSettings: WordSearchSettings,
+  pageTitle = 'Title'
+): TextPageBlock {
   const titleSize = settings.titleFontSize ?? settings.fontSize * 1.6;
-  return [
-    baseBlockFromSettings(settings, globalSettings, {
-      id: 'block-title',
-      kind: 'title',
-      text: settings.title || pageTitle,
-      xPercent: 10,
-      yPercent: 6,
-      widthPercent: 80,
-      fontSize: titleSize,
-      bold: true,
-    }),
-    baseBlockFromSettings(settings, globalSettings, {
-      id: 'block-subtitle',
-      kind: 'subtitle',
-      text: settings.content || 'Subtitle',
-      xPercent: 10,
-      yPercent: 16,
-      widthPercent: 75,
-      fontSize: Math.max(14, settings.fontSize),
-      bold: false,
-    }),
-    baseBlockFromSettings(settings, globalSettings, {
-      id: 'block-copyright',
-      kind: 'copyright',
-      text: `© ${new Date().getFullYear()} Your Name. All rights reserved.`,
-      xPercent: 10,
-      yPercent: 88,
-      widthPercent: 80,
-      fontSize: 9,
-      bold: false,
-    }),
-  ];
+  return baseBlockFromSettings(settings, globalSettings, {
+    kind: 'title',
+    text: settings.title || pageTitle,
+    xPercent: 10,
+    yPercent: 6,
+    widthPercent: 80,
+    heightPercent: 14,
+    fontSize: titleSize,
+    bold: true,
+    textColor: settings.textColor || '#000000',
+  });
 }
 
 export function createSubtitleBlock(
@@ -103,8 +171,9 @@ export function createSubtitleBlock(
     xPercent: 10,
     yPercent: 16,
     widthPercent: 75,
-    fontSize: Math.max(14, settings.fontSize),
+    fontSize: Math.max(14, settings.fontSize || 18),
     bold: false,
+    textColor: settings.textColor || '#000000',
   });
 }
 
@@ -112,14 +181,22 @@ export function createAdditionalTextBlock(
   settings: TextModuleSettings,
   globalSettings: WordSearchSettings
 ): TextPageBlock {
+  const widthPercent = 52;
   return baseBlockFromSettings(settings, globalSettings, {
     kind: 'text',
-    text: 'Additional text',
-    xPercent: 10,
-    yPercent: 42,
-    widthPercent: 70,
-    fontSize: settings.fontSize,
+    text: '',
+    xPercent: (100 - widthPercent) / 2,
+    yPercent: 36,
+    widthPercent,
+    heightPercent: 18,
+    fontSize: Math.max(14, settings.fontSize || 18),
     bold: false,
+    alignment: 'center',
+    lineHeight: 1.35,
+    wordSpacingPx: 0,
+    letterSpacingPx: 0,
+    boxPaddingPx: 10,
+    textColor: settings.textColor || '#000000',
   });
 }
 
@@ -134,7 +211,7 @@ export function createOwnershipBlock(
       xPercent: 20,
       yPercent: 68,
       widthPercent: 60,
-      fontSize: Math.max(12, settings.fontSize - 2),
+      fontSize: 18,
       bold: false,
       alignment: 'center',
     }),
@@ -145,7 +222,8 @@ export function createOwnershipBlock(
     frameBorderThicknessPx: 2,
     frameCornerRadiusPx: 10,
     framePaddingPx: 16,
-    showNameLine: true,
+    heightPercent: 14,
+    nameLineType: 'solid',
   });
 }
 
@@ -180,8 +258,9 @@ export function createImageBlock(
       alignment: 'center',
     }),
     heightPercent: 28,
-    imageFit: 'contain',
+    imageFit: 'stretch',
     imageOpacity: 100,
+    imageEffect: 'none',
   });
 }
 
@@ -198,7 +277,8 @@ export function resolveTextPageBlocks(
   pageTitle: string,
   globalSettings: WordSearchSettings
 ): TextPageBlock[] {
-  if (settings.blocks && settings.blocks.length > 0) {
+  // Explicit blocks (including empty) win — title pages stay clean until the user adds elements.
+  if (Array.isArray(settings.blocks)) {
     return settings.blocks.map(normalizeTextPageBlock);
   }
   return createDefaultTitlePageBlocks(pageTitle, settings, globalSettings);
@@ -273,6 +353,25 @@ export function removeTextPageBlock(
   return syncLegacyFieldsFromBlocks(blocks);
 }
 
+export function reorderTextPageBlock(
+  settings: TextModuleSettings,
+  blockId: string,
+  delta: 1 | -1,
+  pageTitle: string,
+  globalSettings: WordSearchSettings
+): Partial<TextModuleSettings> {
+  const blocks = [...getMutableTextPageBlocks(settings, pageTitle, globalSettings)];
+  const index = blocks.findIndex((block) => block.id === blockId);
+  if (index < 0) return {};
+
+  const targetIndex = index + delta;
+  if (targetIndex < 0 || targetIndex >= blocks.length) return {};
+
+  const [moved] = blocks.splice(index, 1);
+  blocks.splice(targetIndex, 0, moved);
+  return syncLegacyFieldsFromBlocks(blocks);
+}
+
 export function blockDisplayLabel(block: TextPageBlock): string {
   const kind = normalizeBlockKind(block.kind);
   switch (kind) {
@@ -281,7 +380,7 @@ export function blockDisplayLabel(block: TextPageBlock): string {
     case 'subtitle':
       return 'Subtitle';
     case 'text':
-      return block.text.trim().slice(0, 18) || 'Additional text';
+      return block.text.trim().slice(0, 18) || 'Text box';
     case 'ownership':
       return 'This book belongs to';
     case 'copyright':
@@ -300,6 +399,32 @@ export function blockKindLabel(kind: TextPageBlockKind): string {
 /** @deprecated */
 export function blockTabLabel(block: TextPageBlock): string {
   return blockDisplayLabel(block);
+}
+
+export function findTextPageBlockByKind(
+  blocks: TextPageBlock[],
+  kind: TextPageBlockKind
+): TextPageBlock | undefined {
+  const normalized = normalizeBlockKind(kind);
+  return blocks.find((block) => normalizeBlockKind(block.kind) === normalized);
+}
+
+export function toggleTextPageBlockKind(
+  settings: TextModuleSettings,
+  kind: TextPageBlockKind,
+  enabled: boolean,
+  pageTitle: string,
+  globalSettings: WordSearchSettings
+): Partial<TextModuleSettings> {
+  const blocks = getMutableTextPageBlocks(settings, pageTitle, globalSettings);
+  const existing = findTextPageBlockByKind(blocks, kind);
+  if (enabled) {
+    if (existing) return {};
+    const block = createBlockForKind(kind, settings, globalSettings);
+    return addTextPageBlock(settings, block, pageTitle, globalSettings);
+  }
+  if (!existing) return {};
+  return removeTextPageBlock(settings, existing.id, pageTitle, globalSettings);
 }
 
 export function canAddBlockKind(blocks: TextPageBlock[], kind: TextPageBlockKind): boolean {
@@ -344,7 +469,7 @@ export function createBlockForKind(
 ): TextPageBlock {
   switch (normalizeBlockKind(kind)) {
     case 'title':
-      return createDefaultTitlePageBlocks('Title', settings, globalSettings)[0];
+      return createTitleBlock(settings, globalSettings);
     case 'subtitle':
       return createSubtitleBlock(settings, globalSettings);
     case 'text':

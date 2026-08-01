@@ -7,7 +7,7 @@ import {
   DEFAULT_TITLE_START_AT,
 } from './puzzles/types';
 import { calculateLayout, cssPxToPoints, formatWords, getSolutionGridFontSize } from './puzzle-layout';
-import { getPuzzleContentLine } from './puzzle-line-index';
+import { getPuzzleContentLine, resolvePuzzleDisplayNumber } from './puzzle-line-index';
 import {
   computeWordSearchPageLayout,
   computeCenteredWordListLeftPt,
@@ -62,7 +62,7 @@ import {
   migrateLegacyHeaderLayout,
 } from './header-assembly/types';
 import type { DocumentPage, PuzzleModuleSettings } from './document-model';
-import { compileBook, groupPuzzlesByDocument, type CompiledPage } from './book-compiler';
+import { compileBook, groupPuzzlesByDocument, shouldDrawBookPageNumber, type CompiledPage } from './book-compiler';
 import {
   drawTextModuleOnPdfPage,
   resolveLayoutSettingsForExport,
@@ -444,14 +444,16 @@ function drawPageContainerFrame(
   if (!frame.enabled) return;
 
   const marginPt = frame.marginSizeIn * 72;
-  const x = marginPt;
-  const y = marginPt;
-  const width = pageWidth - marginPt * 2;
-  const height = pageHeight - marginPt * 2;
+  const strokePt = cssPxToPoints(frame.strokeThicknessPx);
+  const halfStroke = strokePt / 2;
+  // Inset so outer edge of centered stroke matches CSS border-box (canvas).
+  const x = marginPt + halfStroke;
+  const y = marginPt + halfStroke;
+  const width = pageWidth - marginPt * 2 - strokePt;
+  const height = pageHeight - marginPt * 2 - strokePt;
   if (width <= 0 || height <= 0) return;
 
   const radiusPt = pageFrameCornerRadiusPt(frame.cornerRadiusPx);
-  const strokePt = cssPxToPoints(frame.strokeThicknessPx);
   const strokeColor = safeColor(frame.borderColor, '#1f2937');
   const r = clampCornerRadius(radiusPt, width, height);
 
@@ -1156,13 +1158,14 @@ async function drawWordSearchPuzzle(
       const yPos = pageHeight - (wordRowTopY + wordListFontHeight);
 
       if (wl.addCheckboxes) {
+        // Outline-only (match canvas + PPT). Do not set `color` — that fills the box.
         page.drawRectangle({
           x: wordX,
           y: yPos,
           width: wl.checkboxSizePt,
           height: wl.checkboxSizePt,
-          color: safeColor(wl.checkboxColor, '#666666'),
-          borderWidth: 0.5,
+          borderColor: safeColor(wl.checkboxColor, '#666666'),
+          borderWidth: 0.75,
         });
       }
 
@@ -1272,12 +1275,12 @@ async function drawWordSearchSolutionPage(
       numberingStyle = settings.typography.puzzleNumberingStyle || 'none';
     } else {
       // Use custom solution title with its own numbering style
-      baseTitle = settings.typography.customSolutionTitle || 'Solution';
+      baseTitle = settings.typography.customSolutionTitle || 'Solutions';
       numberingStyle = settings.typography.solutionNumberingStyle || 'none';
     }
 
     // Apply numbering style to solution title
-    const puzzleNum = puzzle.puzzleNumber || index + 1;
+    const puzzleNum = resolvePuzzleDisplayNumber(puzzle, settings, index);
     if (baseTitle && numberingStyle !== 'none') {
       if (numberingStyle === 'prefix') {
         baseTitle = `${puzzleNum}. ${baseTitle}`;
@@ -1489,15 +1492,8 @@ async function drawWordSearchSolutionPage(
 }
 
 function getPageDimensionsFromSettings(settings: WordSearchSettings): { pageWidth: number; pageHeight: number; margin: number } {
-  let pageWidth: number;
-  let pageHeight: number;
-  if (settings.bookCanvas.customWidth && settings.bookCanvas.customHeight) {
-    pageWidth = inchesToPoints(settings.bookCanvas.customWidth);
-    pageHeight = inchesToPoints(settings.bookCanvas.customHeight);
-  } else {
-    pageWidth = inchesToPoints(8.5);
-    pageHeight = inchesToPoints(11);
-  }
+  const pageWidth = inchesToPoints(settings.bookCanvas.customWidth || 8.5);
+  const pageHeight = inchesToPoints(settings.bookCanvas.customHeight || 11);
   const margin = settings.bookCanvas.includeBleed ? inchesToPoints(0.125) : inchesToPoints(0.5);
   return { pageWidth, pageHeight, margin };
 }
@@ -1586,7 +1582,7 @@ function buildBaseSettingsFromWordSearch(
       spaceBetweenTitleAndAnswer: wordSearchSettings?.typography?.spaceBetweenTitleAndAnswer ?? 40,
       puzzleNumberingStyle: (wordSearchSettings?.typography?.puzzleNumberingStyle as 'none' | 'prefix' | 'suffix') || 'none',
       solutionTitleStyle: (wordSearchSettings?.typography?.solutionTitleStyle as 'same_as_puzzle' | 'custom') || 'same_as_puzzle',
-      customSolutionTitle: wordSearchSettings?.typography?.customSolutionTitle || 'Solution',
+      customSolutionTitle: wordSearchSettings?.typography?.customSolutionTitle || 'Solutions',
       solutionNumberingStyle: (wordSearchSettings?.typography?.solutionNumberingStyle as 'none' | 'prefix' | 'suffix') || 'none',
       pageNumber: normalizePageNumberSettings(wordSearchSettings?.typography?.pageNumber),
     },
@@ -1705,7 +1701,17 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
   };
 
   if (documentPages && documentPages.length > 0 && !onlySolutions) {
-    const layoutSettings = resolveLayoutSettingsForExport(documentPages, baseSettings);
+    const layoutSettingsRaw = resolveLayoutSettingsForExport(documentPages, baseSettings);
+    const layoutSettings: WordSearchSettings = {
+      ...layoutSettingsRaw,
+      bookCanvas: {
+        ...layoutSettingsRaw.bookCanvas,
+        customWidth: bookSettings.customWidth || layoutSettingsRaw.bookCanvas.customWidth || 8.5,
+        customHeight: bookSettings.customHeight || layoutSettingsRaw.bookCanvas.customHeight || 11,
+        includeBleed: bookSettings.includeBleed ?? layoutSettingsRaw.bookCanvas.includeBleed,
+        useCustomTrim: bookSettings.useCustomTrim ?? layoutSettingsRaw.bookCanvas.useCustomTrim,
+      },
+    };
     const pageNumberSettings = resolvePageNumberSettingsForBook(documentPages, baseSettings);
     const puzzleMap = groupPuzzlesByDocument(puzzles, documentPages);
     const compiled = compileBook(documentPages, puzzleMap, {
@@ -1721,6 +1727,11 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
     const layoutPageNumberFont = await getOrEmbedFont(pageNumberSettings.fontFamily || 'Arial', true);
 
     for (const compiledPage of compiled.pages) {
+      const allowPageNumber = shouldDrawBookPageNumber(
+        compiledPage.bookPageIndex,
+        compiled.pages
+      );
+
       if (compiledPage.kind === 'text') {
         const page = pdfDoc.addPage([pageWidth, pageHeight]);
         const textSettings = compiledPage.settings;
@@ -1742,7 +1753,10 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
           drawPageContainerFrame,
           backgroundCache,
           options.noText,
-          compiledPage.sourceDocumentName
+          compiledPage.sourceDocumentName,
+          getOrEmbedFont,
+          compiledPage.resolvedToc,
+          !allowPageNumber
         );
         continue;
       }
@@ -1758,7 +1772,7 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
         );
         await drawPageBackground(pdfDoc, blankPage, pageWidth, pageHeight, blankBg, backgroundCache);
         drawPageContainerFrame(blankPage, pageWidth, pageHeight, resolvePageFrameSettings(ws));
-        if (!options.noText) {
+        if (!options.noText && allowPageNumber) {
           await drawPageNumberOnPdfPage(
             pdfDoc,
             blankPage,
@@ -1803,6 +1817,14 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
 
       if (compiledPage.kind === 'puzzle') {
         const puzzle = compiledPage.puzzle;
+        puzzle.puzzleNumber = resolvePuzzleDisplayNumber(
+          {
+            ...puzzle,
+            puzzleIndexInDocument: compiledPage.puzzleIndexInDocument,
+          },
+          effectiveSettings,
+          compiledPage.puzzleIndexInDocument
+        );
         const puzzleGridFont = await getOrEmbedFont(
           effectiveSettings.typography.puzzleGridFontFamily || 'Arial',
           effectiveSettings.typography.puzzleGridFontWeight || false
@@ -1840,7 +1862,7 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
           backgroundCache,
           undefined,
           compiledPage.bookPageIndex,
-          sectionPageNumberFont
+          allowPageNumber ? sectionPageNumberFont : undefined
         );
         continue;
       }
@@ -1860,9 +1882,11 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
           effectiveSettings.colors.answerPage.answerTitleFontWeight || true
         );
         const page = pdfDoc.addPage([pageWidth, pageHeight]);
+        const solutionPageNumberFont = allowPageNumber ? sectionPageNumberFont : undefined;
 
         if (chunkSize === 1) {
           const puzzle = compiledPage.puzzles[0];
+          puzzle.puzzleNumber = resolvePuzzleDisplayNumber(puzzle, effectiveSettings, 0);
           const wordListFont = await getOrEmbedFont(
             effectiveSettings.wordList.wordListFontFamily || 'Arial',
             effectiveSettings.wordList.wordListFontWeight || false
@@ -1891,7 +1915,7 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
             backgroundCache,
             undefined,
             compiledPage.bookPageIndex,
-            sectionPageNumberFont
+            solutionPageNumberFont
           );
         } else {
           await drawWordSearchSolutionPage(
@@ -1911,7 +1935,7 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
             options.noText,
             backgroundCache,
             compiledPage.bookPageIndex,
-            sectionPageNumberFont
+            solutionPageNumberFont
           );
         }
       }
@@ -1942,10 +1966,12 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
   if (!onlySolutions) {
     for (let puzzleIndex = 0; puzzleIndex < puzzles.length; puzzleIndex++) {
       const puzzle = puzzles[puzzleIndex];
-      // Ensure puzzle number is set (for single puzzles or if not already set)
-      if (!puzzle.puzzleNumber) {
-        puzzle.puzzleNumber = puzzleIndex + 1;
-      }
+      // Ensure display number respects Quantity → Starting Number
+      puzzle.puzzleNumber = resolvePuzzleDisplayNumber(
+        puzzle,
+        getMergedSettingsForPage(baseSettings, pageOverrides, applyMode, puzzleIndex),
+        puzzleIndex
+      );
 
       // Get effective settings for this page (with page overrides merged in)
       const effectiveSettings = getMergedSettingsForPage(baseSettings, pageOverrides, applyMode, currentPageIndex);
@@ -2036,7 +2062,11 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
       // One solution per page: draw each solution using the unified layout
       for (let pi = 0; pi < puzzles.length; pi++) {
         const puzzle = puzzles[pi];
-        if (!puzzle.puzzleNumber) puzzle.puzzleNumber = pi + 1;
+        puzzle.puzzleNumber = resolvePuzzleDisplayNumber(
+          puzzle,
+          getMergedSettingsForPage(baseSettings, pageOverrides, applyMode, currentPageIndex),
+          pi
+        );
 
         const effectiveSettings = getMergedSettingsForPage(baseSettings, pageOverrides, applyMode, currentPageIndex);
 

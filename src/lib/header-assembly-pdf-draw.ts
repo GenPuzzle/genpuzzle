@@ -100,9 +100,20 @@ export function drawShapeOnPdfPage(
   };
 
   switch (opts.shapeId) {
-    case 'rectangle':
-      page.drawRectangle({ x, y, width: iw, height: ih, ...pathOpts });
+    case 'rectangle': {
+      const radiusPx = opts.borderRadiusPx ?? 0;
+      if (radiusPx > 0) {
+        const r = Math.min(
+          Math.max(0, cssPxToPoints(radiusPx) - half),
+          iw / 2,
+          ih / 2
+        );
+        page.drawSvgPath(buildPageFrameRoundedRectSvgPath(x, y, iw, ih, r), pathOpts);
+      } else {
+        page.drawRectangle({ x, y, width: iw, height: ih, ...pathOpts });
+      }
       break;
+    }
     case 'rounded-rect': {
       const r = Math.min(
         Math.max(0, cssPxToPoints(opts.borderRadiusPx ?? 0) - half),

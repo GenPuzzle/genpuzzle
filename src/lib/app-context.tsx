@@ -34,19 +34,34 @@ import {
 } from './settings-persistence';
 import {
   createDocumentPage,
+  createInsertableDocumentPage,
   createWordSearchDocumentFromGlobals,
   DocumentModuleType,
   DocumentPage,
+  InsertableDocumentKind,
   PuzzleModuleSettings,
   TextModuleSettings,
+  isPuzzleModuleType,
 } from './document-model';
+import {
+  CHAPTER_PAGE_STYLE_STORAGE_KEY,
+  createStyledChapterDocumentPage,
+  normalizeChapterPageStyle,
+} from './chapter-page-layouts';
 import { useDebouncedCallback } from '@/hooks/useDebouncedCallback';
 import { useProjectDirtyState } from '@/hooks/useProjectDirtyState';
+import { syncAutoTocInDocuments } from './sync-auto-toc';
+import { resolvePageNumberSettingsForBook } from './text-page-pdf-draw';
 import {
   clearShareHashFromUrl,
   extractSharedProjectFromLocation,
   type GpProjectFile,
 } from './project-file';
+import {
+  cloneEditHistorySnapshot,
+  EDIT_HISTORY_LIMIT,
+  type EditHistorySnapshot,
+} from './edit-history';
 import {
   applyTrimLayoutToSettings,
   applyTrimLayoutToTitleWords,
@@ -58,8 +73,23 @@ import {
   scalePageOverridesForTrim,
   scalePagePuzzleGridScalesForTrim,
 } from './trim-size-layout';
+import { buildSeparatorInsertAfterCompiledPage } from './insert-separator-page';
+import type { CompiledPage } from './book-compiler';
 import { mergePuzzlePageColors } from '@/lib/page-settings';
 import { normalizeBatchPuzzleDocumentIndices } from './puzzle-line-index';
+import {
+  getDefaultCrosswordSettings,
+  type CrosswordSettings,
+} from './crossword-settings';
+import {
+  detectVisualSyncScope,
+  mergeWordSearchSettingsUpdate,
+  findDivergentWordSearchDocumentNames,
+  findPagesWithVisualOverrides,
+  syncVisualSettingsAcrossWordSearchDocuments,
+  stripVisualOverridesFromMap,
+  buildVisualSyncWarningMessage,
+} from './visual-settings-sync';
 
 interface ValidationError {
   type: 'error' | 'warning';
@@ -82,6 +112,11 @@ interface AppContextType {
   wordSearchSettings: WordSearchSettings;
   setWordSearchSettings: (settings: WordSearchSettings) => void;
   updateWordSearchSettings: (updates: Partial<WordSearchSettings>) => void;
+
+  // Crossword Settings (left = generation, right = visual)
+  crosswordSettings: CrosswordSettings;
+  setCrosswordSettings: (settings: CrosswordSettings) => void;
+  updateCrosswordSettings: (updates: Partial<CrosswordSettings>) => void;
 
   // Book settings (general)
   bookSettings: BookSettings;
@@ -109,6 +144,7 @@ interface AppContextType {
 
   // Validation
   validationError: ValidationError | null;
+  clearValidationError: () => void;
   validateAndGenerate: (options?: GeneratePuzzleOptions) => boolean;
 
   // Generate puzzle (triggers validation)
@@ -190,15 +226,36 @@ interface AppContextType {
   activeDocumentPage: DocumentPage | null;
   setActiveDocumentPageId: (id: string) => void;
   insertDocumentPage: (
-    type: DocumentModuleType,
+    type: InsertableDocumentKind,
     position: 'before' | 'after',
     referenceId?: string
   ) => void;
+  /** Insert a blank title page after a compiled book page (splits word-search if mid-doc). */
+  insertSeparatorTitlePageAfter: (anchor: import('./book-compiler').CompiledPage) => void;
+  /** Remove a compiled book page (text doc, or a single puzzle). */
+  removeCompiledBookPage: (page: import('./book-compiler').CompiledPage) => void;
   removeDocumentPage: (id: string) => void;
   moveDocumentPage: (id: string, direction: 'up' | 'down') => void;
   reorderDocumentPages: (activeId: string, overId: string) => void;
   updateDocumentPage: (id: string, updates: Partial<DocumentPage>) => void;
-  updateActiveTextModuleSettings: (updates: Partial<TextModuleSettings>) => void;
+  /** Replace the full document tab list (batch chapter insert, etc.). */
+  replaceDocumentPages: (pages: DocumentPage[], activeId?: string | null) => void;
+  updateActiveTextModuleSettings: (
+    updates:
+      | Partial<TextModuleSettings>
+      | ((prev: TextModuleSettings) => Partial<TextModuleSettings>),
+    options?: { recordHistory?: boolean }
+  ) => void;
+  /** Apply full text-module settings to multiple document pages (e.g. separator layout sync). */
+  applyTextSettingsToDocumentPages: (
+    updates: Array<{ pageId: string; settings: TextModuleSettings }>,
+    options?: { recordHistory?: boolean }
+  ) => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => void;
+  redo: () => void;
+  pushEditHistory: () => void;
   persistPagePuzzleSettings: (
     pageId: string,
     titleWordsSettings: TitleWordsSettings,
@@ -325,6 +382,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [cryptogramText, setCryptogramText] = useState('');
   const [savedPuzzles, setSavedPuzzles] = useState<SavedPuzzle[]>([]);
   const [previewZoom, setPreviewZoom] = useState(75);
+  const previewZoomRef = useRef(previewZoom);
+  // Preview UI chrome — not part of document edits; kept out of undo/redo apply.
+  const previewRangeModeRef = useRef<'sample' | 'all' | 'flipbook'>('all');
+  const activePreviewTabRef = useRef<'puzzles' | 'solutions'>('puzzles');
   const [puzzleGridScale, setPuzzleGridScale] = useState(70);
   const [titleToAnswerGap, setTitleToAnswerGap] = useState(10);
   const [solutionToSolutionGap, setSolutionToSolutionGap] = useState(14);
@@ -332,6 +393,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Batch puzzles for word search
   const [batchPuzzles, setBatchPuzzles] = useState<WordSearchPuzzle[]>([]);
+  const [editHistoryPast, setEditHistoryPast] = useState<EditHistorySnapshot[]>([]);
+  const [editHistoryFuture, setEditHistoryFuture] = useState<EditHistorySnapshot[]>([]);
+  const skipEditHistoryRef = useRef(false);
+  const editHistoryCoalesceRef = useRef<{ active: boolean; timer: ReturnType<typeof setTimeout> | null }>({
+    active: false,
+    timer: null,
+  });
   const [currentBatchIndex, setCurrentBatchIndex] = useState(0);
 
   // Validation error
@@ -343,6 +411,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Word Search Settings
   const [wordSearchSettings, setWordSearchSettings] = useState<WordSearchSettings>(getDefaultWordSearchSettings());
+
+  // Crossword Settings
+  const [crosswordSettings, setCrosswordSettings] = useState<CrosswordSettings>(getDefaultCrosswordSettings());
 
   // Visual Page Editor: Page-level overrides (local edits for specific pages)
   const [pageOverrides, setPageOverrides] = useState<Map<number, Partial<WordSearchSettings>>>(new Map());
@@ -362,10 +433,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   // Performance Optimizer: Preview range mode (sample vs full)
-  const [previewRangeMode, setPreviewRangeMode] = useState<'sample' | 'all' | 'flipbook'>('sample');
+  const [previewRangeMode, setPreviewRangeMode] = useState<'sample' | 'all' | 'flipbook'>('all');
 
   // Performance Optimizer: Active preview tab (puzzles vs solutions)
   const [activePreviewTab, setActivePreviewTab] = useState<'puzzles' | 'solutions'>('puzzles');
+
+  useEffect(() => {
+    previewRangeModeRef.current = previewRangeMode;
+  }, [previewRangeMode]);
+
+  useEffect(() => {
+    activePreviewTabRef.current = activePreviewTab;
+  }, [activePreviewTab]);
 
   const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [projectName, setProjectName] = useState('Untitled Project');
@@ -386,7 +465,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         solutionToSolutionGap: 14,
         pageMargin: 40,
         previewZoom: 75,
-        previewRangeMode: 'sample',
+        previewRangeMode: 'all',
         activePreviewTab: 'puzzles',
         sudokuDifficulty: 'medium',
         mazeSize: 'medium',
@@ -416,9 +495,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setPageMargin(stored.pageMargin);
     setPreviewZoom(stored.previewZoom);
     const mode = stored.previewRangeMode;
-    setPreviewRangeMode(
-      mode === 'all' || mode === 'flipbook' || mode === 'sample' ? mode : 'sample'
-    );
+    // Prefer all-pages so word-search + title pages are both visible by default.
+    setPreviewRangeMode(mode === 'flipbook' ? 'flipbook' : 'all');
     setActivePreviewTab(stored.activePreviewTab);
     setSudokuDifficulty(stored.sudokuDifficulty);
     setMazeSize(stored.mazeSize);
@@ -463,9 +541,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           } as PuzzleModuleSettings,
         };
       }
+      if (page.id === activeDocumentPageId && page.moduleType === 'crossword') {
+        return {
+          ...page,
+          settings: {
+            ...page.settings,
+            titleWords,
+            crosswordSettings,
+          } as PuzzleModuleSettings,
+        };
+      }
       return page;
     });
-  }, [documentPages, activeDocumentPageId, titleWords, wordSearchSettings]);
+  }, [documentPages, activeDocumentPageId, titleWords, wordSearchSettings, crosswordSettings]);
 
   const buildCurrentPersistedSnapshot = useCallback((): PersistedAppSettings => {
     return buildPersistedSnapshot({
@@ -514,6 +602,115 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     documentPagesForPersistence,
     activeDocumentPageId,
   ]);
+
+  const captureEditHistorySnapshot = useCallback((): EditHistorySnapshot => {
+    const settings = buildCurrentPersistedSnapshot();
+    // View chrome (zoom / all-pages vs one-page / puzzles vs solutions) is UI-only —
+    // snapshots still store placeholders for PersistedAppSettings shape, but apply
+    // restores the live view mode so Undo never flips preview layout.
+    return {
+      settings: cloneEditHistorySnapshot({
+        ...settings,
+        previewZoom: previewZoomRef.current,
+        previewRangeMode: previewRangeModeRef.current,
+        activePreviewTab: activePreviewTabRef.current,
+      }),
+      batchPuzzles: cloneEditHistorySnapshot(batchPuzzles),
+    };
+  }, [buildCurrentPersistedSnapshot, batchPuzzles]);
+
+  useEffect(() => {
+    previewZoomRef.current = previewZoom;
+  }, [previewZoom]);
+
+  const applyEditHistorySnapshot = useCallback(
+    (snapshot: EditHistorySnapshot) => {
+      const keepZoom = previewZoomRef.current;
+      const keepRangeMode = previewRangeModeRef.current;
+      const keepPreviewTab = activePreviewTabRef.current;
+      skipEditHistoryRef.current = true;
+      applyPersistedSettings(snapshot.settings);
+      // Never restore preview UI from history — only document content/settings.
+      setPreviewZoom(keepZoom);
+      setPreviewRangeMode(keepRangeMode);
+      setActivePreviewTab(keepPreviewTab);
+      setBatchPuzzles(snapshot.batchPuzzles);
+      skipEditHistoryRef.current = false;
+      if (editHistoryCoalesceRef.current.timer) {
+        clearTimeout(editHistoryCoalesceRef.current.timer);
+      }
+      editHistoryCoalesceRef.current.active = false;
+      editHistoryCoalesceRef.current.timer = null;
+    },
+    [applyPersistedSettings]
+  );
+
+  const pushEditHistory = useCallback(() => {
+    if (skipEditHistoryRef.current) return;
+    if (editHistoryCoalesceRef.current.active) return;
+
+    const snapshot = captureEditHistorySnapshot();
+    setEditHistoryPast((prev) => [...prev.slice(-(EDIT_HISTORY_LIMIT - 1)), snapshot]);
+    setEditHistoryFuture([]);
+
+    editHistoryCoalesceRef.current.active = true;
+    if (editHistoryCoalesceRef.current.timer) {
+      clearTimeout(editHistoryCoalesceRef.current.timer);
+    }
+    editHistoryCoalesceRef.current.timer = setTimeout(() => {
+      editHistoryCoalesceRef.current.active = false;
+      editHistoryCoalesceRef.current.timer = null;
+    }, 450);
+  }, [captureEditHistorySnapshot]);
+
+  const undo = useCallback(() => {
+    if (editHistoryPast.length === 0) return;
+    const previous = editHistoryPast[editHistoryPast.length - 1];
+    const current = captureEditHistorySnapshot();
+    applyEditHistorySnapshot(previous);
+    setEditHistoryPast((past) => past.slice(0, -1));
+    setEditHistoryFuture((future) => [current, ...future]);
+  }, [editHistoryPast, captureEditHistorySnapshot, applyEditHistorySnapshot]);
+
+  const redo = useCallback(() => {
+    if (editHistoryFuture.length === 0) return;
+    const next = editHistoryFuture[0];
+    const current = captureEditHistorySnapshot();
+    applyEditHistorySnapshot(next);
+    setEditHistoryFuture((future) => future.slice(1));
+    setEditHistoryPast((past) => [...past.slice(-(EDIT_HISTORY_LIMIT - 1)), current]);
+  }, [editHistoryFuture, captureEditHistorySnapshot, applyEditHistorySnapshot]);
+
+  const canUndo = editHistoryPast.length > 0;
+  const canRedo = editHistoryFuture.length > 0;
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const mod = event.ctrlKey || event.metaKey;
+      if (!mod) return;
+
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      const isEditableField =
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        target?.isContentEditable;
+
+      if (isEditableField) return;
+
+      if (event.key === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        undo();
+      } else if (event.key === 'y' || (event.key === 'z' && event.shiftKey)) {
+        event.preventDefault();
+        redo();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [undo, redo]);
 
   const buildProjectSnapshot = useCallback((): GpProjectFile => {
     return {
@@ -568,6 +765,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setValidationError(null);
       setShowSolution(false);
       setShowEditorTutorial(false);
+      setEditHistoryPast([]);
+      setEditHistoryFuture([]);
       scheduleBaselineCapture();
       clearShareHashFromUrl();
       requestAnimationFrame(() => {
@@ -619,6 +818,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setValidationError(null);
     setShowSolution(false);
     setProjectName('Untitled Project');
+    setEditHistoryPast([]);
+    setEditHistoryFuture([]);
     scheduleBaselineCapture();
     clearShareHashFromUrl();
     requestAnimationFrame(() => {
@@ -696,6 +897,44 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return documentPages.find((page) => page.id === activeDocumentPageId) ?? null;
   }, [documentPages, activeDocumentPageId]);
 
+  const documentStructureKey = useMemo(
+    () =>
+      documentPages
+        .map((page) => {
+          if (page.moduleType === 'word-search') {
+            const moduleSettings = page.settings as PuzzleModuleSettings;
+            const ws = moduleSettings.wordSearchSettings;
+            const titleWords = moduleSettings.titleWords?.title ?? page.name;
+            const titleText = ws?.typography?.titleText ?? '';
+            const titleMode = ws?.typography?.selectTitleOption ?? '';
+            const solutionTitle = ws?.typography?.customSolutionTitle ?? '';
+            return `${page.id}:${page.moduleType}:${titleWords}:${titleMode}:${titleText}:${solutionTitle}`;
+          }
+          const settings = page.settings as TextModuleSettings;
+          if (page.moduleType === 'table-of-contents') {
+            const toc = settings.tocSettings;
+            return `${page.id}:${page.moduleType}:${settings.title ?? page.name}:${toc?.entryScope}:${toc?.chapterCount}:${(toc?.chapters ?? []).map((c) => c.title).join(',')}:${(toc?.excludedDocumentIds ?? []).join(',')}:${(toc?.revealedDocumentIds ?? []).join(',')}:${toc?.includePuzzlePages}:${toc?.includeSolutionPages}:${toc?.hideDocuments}:${toc?.hidePuzzleDocuments}:${(toc?.customEntries ?? []).map((c) => `${c.id}:${c.title}:${c.pageNumber}`).join(';')}:${toc?.columnLayout}:${toc?.twoColumnMinEntries}`;
+          }
+          return `${page.id}:${page.moduleType}:${settings.title ?? page.name}`;
+        })
+        .join('|'),
+    [documentPages]
+  );
+
+  // Keep auto TOC documents in sync with tab order, titles, and page numbering.
+  useEffect(() => {
+    if (!settingsHydrated) return;
+    setDocumentPages((prev) => {
+      const pageNumberSettings = resolvePageNumberSettingsForBook(prev, wordSearchSettings);
+      return syncAutoTocInDocuments(prev, batchPuzzles, pageNumberSettings);
+    });
+  }, [
+    settingsHydrated,
+    documentStructureKey,
+    batchPuzzles,
+    wordSearchSettings.typography.pageNumber,
+  ]);
+
   const persistPagePuzzleSettings = useCallback(
     (pageId: string, titleWordsSettings: TitleWordsSettings, ws: WordSearchSettings) => {
       setDocumentPages((prev) =>
@@ -716,6 +955,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const persistPageCrosswordSettings = useCallback(
+    (pageId: string, titleWordsSettings: TitleWordsSettings, cw: CrosswordSettings) => {
+      setDocumentPages((prev) =>
+        prev.map((page) =>
+          page.id === pageId
+            ? {
+                ...page,
+                settings: {
+                  ...page.settings,
+                  titleWords: titleWordsSettings,
+                  crosswordSettings: cw,
+                } as PuzzleModuleSettings,
+              }
+            : page
+        )
+      );
+    },
+    []
+  );
+
   const prevActiveDocumentPageId = useRef<string>(activeDocumentPageId);
 
   useEffect(() => {
@@ -724,6 +983,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const previousPage = documentPages.find((page) => page.id === previousPageId);
       if (previousPage?.moduleType === 'word-search') {
         persistPagePuzzleSettings(previousPageId, titleWords, wordSearchSettings);
+      } else if (previousPage?.moduleType === 'crossword') {
+        persistPageCrosswordSettings(previousPageId, titleWords, crosswordSettings);
       }
     }
     prevActiveDocumentPageId.current = activeDocumentPageId;
@@ -731,7 +992,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     activeDocumentPageId,
     documentPages,
     persistPagePuzzleSettings,
+    persistPageCrosswordSettings,
     wordSearchSettings,
+    crosswordSettings,
     titleWords,
   ]);
 
@@ -741,13 +1004,34 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const pageSettings = activeDocumentPage.settings as PuzzleModuleSettings;
       setWordSearchSettings(pageSettings.wordSearchSettings ?? getDefaultWordSearchSettings());
       setTitleWords(pageSettings.titleWords ?? defaultTitleWords);
+      setCurrentPuzzleType('word-search');
+    } else if (activeDocumentPage.moduleType === 'crossword') {
+      const pageSettings = activeDocumentPage.settings as PuzzleModuleSettings;
+      setCrosswordSettings(pageSettings.crosswordSettings ?? getDefaultCrosswordSettings());
+      setTitleWords(pageSettings.titleWords ?? defaultTitleWords);
+      setCurrentPuzzleType('crossword');
+    } else if (isPuzzleModuleType(activeDocumentPage.moduleType)) {
+      setCurrentPuzzleType(activeDocumentPage.moduleType as PuzzleType);
     }
   }, [activeDocumentPage?.id, settingsHydrated]);
 
   const insertDocumentPage = useCallback(
-    (type: DocumentModuleType, position: 'before' | 'after', referenceId?: string) => {
+    (type: InsertableDocumentKind, position: 'before' | 'after', referenceId?: string) => {
+      pushEditHistory();
       const refId = referenceId ?? activeDocumentPageId;
-      const newPage = createDocumentPage(type);
+      let newPage = createInsertableDocumentPage(type);
+      if (type === 'chapter-page') {
+        try {
+          const raw =
+            typeof window !== 'undefined'
+              ? window.localStorage.getItem(CHAPTER_PAGE_STYLE_STORAGE_KEY)
+              : null;
+          const style = normalizeChapterPageStyle(raw ? JSON.parse(raw) : null);
+          newPage = createStyledChapterDocumentPage('Chapter', style);
+        } catch {
+          newPage = createStyledChapterDocumentPage('Chapter');
+        }
+      }
       setDocumentPages((prev) => {
         if (prev.length === 0) {
           setShowEditorTutorial(false);
@@ -766,11 +1050,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return next;
       });
       setActiveDocumentPageId(newPage.id);
+      setShowEditorTutorial(false);
     },
-    [activeDocumentPageId]
+    [activeDocumentPageId, pushEditHistory]
+  );
+
+  const insertSeparatorTitlePageAfter = useCallback(
+    (anchor: CompiledPage) => {
+      const result = buildSeparatorInsertAfterCompiledPage(documentPages, batchPuzzles, anchor);
+      if (!result) return;
+      pushEditHistory();
+      setDocumentPages(result.documentPages);
+      setBatchPuzzles(result.batchPuzzles);
+      setActiveDocumentPageId(result.newTitlePageId);
+      setShowEditorTutorial(false);
+    },
+    [documentPages, batchPuzzles, pushEditHistory]
   );
 
   const removeDocumentPage = useCallback((id: string) => {
+    pushEditHistory();
     setDocumentPages((prev) => {
       if (prev.length <= 1) return prev;
       const filtered = prev.filter((page) => page.id !== id);
@@ -778,9 +1077,56 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setActiveDocumentPageId((current) => (current === id ? filtered[0].id : current));
       return filtered;
     });
-  }, []);
+    setBatchPuzzles((prev) => prev.filter((puzzle) => puzzle.pageId !== id));
+  }, [pushEditHistory]);
+
+  const removeCompiledBookPage = useCallback(
+    (page: CompiledPage) => {
+      if (page.kind === 'solution' || page.kind === 'blank') return;
+
+      if (page.kind === 'text') {
+        removeDocumentPage(page.sourceDocumentId);
+        return;
+      }
+
+      if (page.kind === 'puzzle') {
+        pushEditHistory();
+        const docId = page.sourceDocumentId;
+        const removeIndex = page.puzzleIndexInDocument;
+
+        setBatchPuzzles((prev) => {
+          const docPuzzles = prev.filter((puzzle) => puzzle.pageId === docId);
+          if (removeIndex < 0 || removeIndex >= docPuzzles.length) return prev;
+
+          const target = docPuzzles[removeIndex];
+          const next = prev.filter((puzzle) => puzzle !== target);
+          const remainingForDoc = next.filter((puzzle) => puzzle.pageId === docId);
+
+          if (remainingForDoc.length === 0) {
+            setDocumentPages((docs) => {
+              if (docs.length <= 1) return docs;
+              const filtered = docs.filter((doc) => doc.id !== docId);
+              setActiveDocumentPageId((current) =>
+                current === docId ? filtered[0]?.id ?? current : current
+              );
+              return filtered.length > 0 ? filtered : docs;
+            });
+            return next;
+          }
+
+          let keptIdx = 0;
+          return next.map((puzzle) => {
+            if (puzzle.pageId !== docId) return puzzle;
+            return { ...puzzle, puzzleIndexInDocument: keptIdx++ };
+          });
+        });
+      }
+    },
+    [pushEditHistory, removeDocumentPage]
+  );
 
   const moveDocumentPage = useCallback((id: string, direction: 'up' | 'down') => {
+    pushEditHistory();
     setDocumentPages((prev) => {
       const index = prev.findIndex((page) => page.id === id);
       if (index === -1) return prev;
@@ -790,10 +1136,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       [nextPages[index], nextPages[nextIndex]] = [nextPages[nextIndex], nextPages[index]];
       return nextPages;
     });
-  }, []);
+  }, [pushEditHistory]);
 
   const reorderDocumentPages = useCallback((activeId: string, overId: string) => {
     if (activeId === overId) return;
+    pushEditHistory();
     setDocumentPages((prev) => {
       const fromIndex = prev.findIndex((page) => page.id === activeId);
       const toIndex = prev.findIndex((page) => page.id === overId);
@@ -803,30 +1150,80 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       nextPages.splice(toIndex, 0, moved);
       return nextPages;
     });
-  }, []);
+  }, [pushEditHistory]);
 
   const updateDocumentPage = useCallback((id: string, updates: Partial<DocumentPage>) => {
+    pushEditHistory();
     setDocumentPages((prev) => prev.map((page) => (page.id === id ? { ...page, ...updates } : page)));
-  }, []);
+  }, [pushEditHistory]);
+
+  const replaceDocumentPages = useCallback(
+    (pages: DocumentPage[], activeId?: string | null) => {
+      if (pages.length === 0) return;
+      pushEditHistory();
+      setDocumentPages(pages);
+      setShowEditorTutorial(false);
+      if (activeId && pages.some((p) => p.id === activeId)) {
+        setActiveDocumentPageId(activeId);
+      } else {
+        setActiveDocumentPageId(pages[0].id);
+      }
+    },
+    [pushEditHistory]
+  );
 
   const updateActiveTextModuleSettings = useCallback(
-    (updates: Partial<TextModuleSettings>) => {
+    (
+      updates:
+        | Partial<TextModuleSettings>
+        | ((prev: TextModuleSettings) => Partial<TextModuleSettings>),
+      options?: { recordHistory?: boolean }
+    ) => {
       if (!activeDocumentPageId) return;
+      if (options?.recordHistory !== false) {
+        pushEditHistory();
+      }
       setDocumentPages((prev) =>
-        prev.map((page) =>
-          page.id === activeDocumentPageId
-            ? {
-                ...page,
-                settings: { ...page.settings, ...updates } as TextModuleSettings,
-              }
-            : page
-        )
+        prev.map((page) => {
+          if (page.id !== activeDocumentPageId) return page;
+          const current = page.settings as TextModuleSettings;
+          const patch = typeof updates === 'function' ? updates(current) : updates;
+          return {
+            ...page,
+            settings: { ...current, ...patch } as TextModuleSettings,
+          };
+        })
       );
     },
-    [activeDocumentPageId]
+    [activeDocumentPageId, pushEditHistory]
+  );
+
+  const applyTextSettingsToDocumentPages = useCallback(
+    (
+      updates: Array<{ pageId: string; settings: TextModuleSettings }>,
+      options?: { recordHistory?: boolean }
+    ) => {
+      if (updates.length === 0) return;
+      if (options?.recordHistory !== false) {
+        pushEditHistory();
+      }
+      const byId = new Map(updates.map((entry) => [entry.pageId, entry.settings]));
+      setDocumentPages((prev) =>
+        prev.map((page) => {
+          const nextSettings = byId.get(page.id);
+          if (!nextSettings) return page;
+          return {
+            ...page,
+            settings: nextSettings,
+          };
+        })
+      );
+    },
+    [pushEditHistory]
   );
 
   const updatePageOverride = useCallback((pageIndex: number, updates: Partial<WordSearchSettings>) => {
+    pushEditHistory();
     setPageOverrides(prev => {
       const newMap = new Map(prev);
       const current = newMap.get(pageIndex) || {};
@@ -866,21 +1263,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return newMap;
     });
     setStylingTrigger(t => t + 1);
-  }, []);
+  }, [pushEditHistory]);
 
   const clearPageOverride = useCallback((pageIndex: number) => {
+    pushEditHistory();
     setPageOverrides(prev => {
       const newMap = new Map(prev);
       newMap.delete(pageIndex);
       return newMap;
     });
     setStylingTrigger(t => t + 1);
-  }, []);
+  }, [pushEditHistory]);
 
   const clearAllPageOverrides = useCallback(() => {
+    pushEditHistory();
     setPageOverrides(new Map());
     setStylingTrigger(t => t + 1);
-  }, []);
+  }, [pushEditHistory]);
 
   const setPagePuzzleGridScale = useCallback((pageIndex: number, scale: number) => {
     setPagePuzzleGridScales((prev) => {
@@ -909,32 +1308,84 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
 
   const updateWordSearchSettings = useCallback((updates: Partial<WordSearchSettings>) => {
-    setWordSearchSettings(prev => ({
+    pushEditHistory();
+
+    const prev = wordSearchSettings;
+    const next = mergeWordSearchSettingsUpdate(prev, updates);
+    const visualScope = detectVisualSyncScope(prev, updates);
+
+    setWordSearchSettings(next);
+
+    if (
+      updates.core?.puzzlesStartingNumber !== undefined &&
+      updates.core.puzzlesStartingNumber !== prev.core.puzzlesStartingNumber
+    ) {
+      const start = updates.core.puzzlesStartingNumber;
+      setBatchPuzzles((batch) =>
+        batch.map((puzzle) => {
+          if (activeDocumentPageId && puzzle.pageId && puzzle.pageId !== activeDocumentPageId) {
+            return puzzle;
+          }
+          const idx = Math.max(0, puzzle.puzzleIndexInDocument ?? 0);
+          return { ...puzzle, puzzleNumber: start + idx };
+        })
+      );
+    }
+
+    if (visualScope) {
+      // Docs that already differed from this tab *before* the edit (customized separately).
+      const divergentDocNames = findDivergentWordSearchDocumentNames(
+        documentPages,
+        activeDocumentPageId,
+        prev,
+        visualScope
+      );
+      const divergentPageIndices = findPagesWithVisualOverrides(pageOverrides, visualScope);
+
+      setDocumentPages((pages) =>
+        syncVisualSettingsAcrossWordSearchDocuments(pages, next, visualScope)
+      );
+
+      if (divergentPageIndices.length > 0) {
+        setPageOverrides((overrides) => stripVisualOverridesFromMap(overrides, visualScope));
+      }
+
+      const visualWarning = buildVisualSyncWarningMessage({
+        scope: visualScope,
+        divergentDocNames,
+        divergentPageIndices,
+      });
+      if (visualWarning) {
+        setValidationError({ type: 'error', message: visualWarning });
+      }
+    }
+
+    // Trigger styling update without regenerating
+    setStylingTrigger((t) => t + 1);
+  }, [
+    pushEditHistory,
+    wordSearchSettings,
+    activeDocumentPageId,
+    documentPages,
+    pageOverrides,
+  ]);
+
+  const updateCrosswordSettings = useCallback((updates: Partial<CrosswordSettings>) => {
+    pushEditHistory();
+    setCrosswordSettings((prev) => ({
       ...prev,
       ...updates,
       bookCanvas: { ...prev.bookCanvas, ...updates.bookCanvas },
-      core: { ...prev.core, ...updates.core },
-      typography: { ...prev.typography, ...updates.typography },
-      wordList: { ...prev.wordList, ...updates.wordList },
-      colors: updates.colors
-        ? {
-            ...prev.colors,
-            ...updates.colors,
-            ...(updates.colors.puzzlePage
-              ? { puzzlePage: { ...prev.colors.puzzlePage, ...updates.colors.puzzlePage } }
-              : {}),
-            ...(updates.colors.answerPage
-              ? { answerPage: { ...prev.colors.answerPage, ...updates.colors.answerPage } }
-              : {}),
-          }
-        : prev.colors,
+      core: updates.core ? { ...prev.core, ...updates.core } : prev.core,
+      typography: updates.typography ? { ...prev.typography, ...updates.typography } : prev.typography,
+      colors: updates.colors ? { ...prev.colors, ...updates.colors } : prev.colors,
       pageFrameSettings: updates.pageFrameSettings
         ? { ...prev.pageFrameSettings, ...updates.pageFrameSettings }
         : prev.pageFrameSettings,
     }));
-    // Trigger styling update without regenerating
-    setStylingTrigger(t => t + 1);
-  }, []);
+    // Visual-only: restyle without regenerating puzzle structure
+    setStylingTrigger((t) => t + 1);
+  }, [pushEditHistory]);
 
   const applyTrimSizeLayoutChange = useCallback(
     (
@@ -1082,7 +1533,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (batchIndex !== undefined && preserveSet.has(batchIndex)) {
         const existing = existingByDocIndex.get(i);
         if (existing) {
-          newPuzzles.push(existing);
+          newPuzzles.push({
+            ...existing,
+            puzzleNumber: ws.core.puzzlesStartingNumber + i,
+            puzzleIndexInDocument: i,
+            pageId: activePage.id,
+            pageName: activePage.name,
+          });
           continue;
         }
       }
@@ -1202,7 +1659,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ws.wordList.aiLanguage
       ) as WordSearchPuzzle;
 
-      regenerated.puzzleNumber = puzzle.puzzleNumber ?? ws.core.puzzlesStartingNumber + idx;
+      regenerated.puzzleNumber = ws.core.puzzlesStartingNumber + idx;
       regenerated.puzzleIndexInDocument = idx;
       regenerated.pageId = puzzle.pageId;
       regenerated.pageName = puzzle.pageName;
@@ -1243,13 +1700,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let puzzle: Puzzle | null = null;
 
     switch (currentPuzzleType) {
-      case 'crossword':
-        const wordClues = titleWords.words.map(w => ({
+      case 'crossword': {
+        const core = crosswordSettings.core;
+        const maxClue = core.maxClueCharacters;
+        const words = titleWords.words
+          .filter(Boolean)
+          .slice(0, Math.max(1, core.cluesPerPuzzle || titleWords.words.length));
+        const wordClues = words.map((w) => ({
           word: w,
-          clue: `Clue for ${w}`,
+          clue: `Clue for ${w}`.slice(0, maxClue),
         }));
-        puzzle = generateCrossword(wordClues);
+        puzzle = generateCrossword(wordClues, {
+          lettersAcross: core.lettersAcross,
+          lettersDown: core.lettersDown,
+          allowNumbers: core.allowNumbersInAnswers,
+          maxAnswerLength: core.maxAnswerLength,
+        });
         break;
+      }
 
       case 'sudoku':
         puzzle = generateSudoku(sudokuDifficulty);
@@ -1287,7 +1755,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setCurrentPuzzle(puzzle);
     setBatchPuzzles([]);
     setShowSolution(false);
-  }, [currentPuzzleType, titleWords.words, sudokuDifficulty, cryptogramText, mazeSize, validateAndGenerate]);
+  }, [currentPuzzleType, titleWords.words, sudokuDifficulty, cryptogramText, mazeSize, validateAndGenerate, crosswordSettings]);
 
   // Save puzzle
   const savePuzzle = useCallback((name: string) => {
@@ -1351,6 +1819,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         wordSearchSettings,
         setWordSearchSettings,
         updateWordSearchSettings,
+        crosswordSettings,
+        setCrosswordSettings,
+        updateCrosswordSettings,
         bookSettings,
         setBookSettings,
         puzzleSettings,
@@ -1364,6 +1835,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         currentBatchIndex,
         setCurrentBatchIndex,
         validationError,
+        clearValidationError: () => setValidationError(null),
         validateAndGenerate,
         generatePuzzle,
         regeneratePuzzleAtIndex,
@@ -1413,11 +1885,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         activeDocumentPage,
         setActiveDocumentPageId,
         insertDocumentPage,
+        insertSeparatorTitlePageAfter,
+        removeCompiledBookPage,
         removeDocumentPage,
         moveDocumentPage,
         reorderDocumentPages,
         updateDocumentPage,
+        replaceDocumentPages,
         updateActiveTextModuleSettings,
+        applyTextSettingsToDocumentPages,
+        canUndo,
+        canRedo,
+        undo,
+        redo,
+        pushEditHistory,
         persistPagePuzzleSettings,
         applyTrimSizeLayoutChange,
         projectName,

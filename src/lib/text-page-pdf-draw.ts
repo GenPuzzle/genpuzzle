@@ -2,7 +2,25 @@ import type { PDFDocument, PDFFont, PDFPage, RGB } from 'pdf-lib';
 import type { WordSearchSettings } from './puzzles/types';
 import type { DocumentPage, PuzzleModuleSettings, TextModuleSettings, TextPageBlock } from './document-model';
 import { getPageMarginInches } from './puzzle-layout';
-import { resolveTextPageBlocks } from './text-page-blocks';
+import { resolveTextPageBlocks, resolveOwnershipNameLineType, ownershipNameLineIsVisible } from './text-page-blocks';
+import {
+  getFrameCornerRadiusPx,
+  getOwnershipNameLineRect,
+  getTextPageBlockRectPt,
+  getTextPageContentAreaPt,
+  resolveTextPageFrameShapeId,
+} from './text-page-export-layout';
+import { renderImageBlockToDataUrl } from './text-page-image-export';
+import {
+  layoutRichTextLines,
+  lineBaselineFromTopPt,
+  measureRunWidthPt,
+  parseRichTextRuns,
+  type RichTextLine,
+} from './text-page-rich-text-export';
+import { normalizeCssColorToHex } from './text-page-export-color';
+import { measureTextBlockLayoutFromDom, measureOwnershipBlockLayoutFromDom } from './text-page-dom-layout';
+import { drawShapeOnPdfPage } from './header-assembly-pdf-draw';
 import {
   resolveTextPageBackground,
   resolveTextPageFrameSettings,
@@ -14,8 +32,31 @@ import {
 } from './unified-background';
 import { drawPageNumberOnPdfPage } from './page-number-pdf-draw';
 import { normalizePageNumberSettings } from './page-number/settings';
+import type { ResolvedTocEntry } from './book-compiler';
+import {
+  buildTocExportLayout,
+  isTocModuleSettings,
+  parseTocEntriesFromContent,
+  tocLeaderDashPattern,
+} from './toc-export-draw';
+import { normalizeTocSettings } from './toc-settings';
 
 type GetColorFn = (hex: string | undefined, fallback?: string) => RGB;
+
+export type GetPdfFontFn = (
+  fontFamily: string,
+  bold: boolean
+) => Promise<PDFFont>;
+
+function dataUrlToBytes(dataUrl: string): Uint8Array {
+  const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
 
 function drawLegacyCenteredText(
   page: PDFPage,
@@ -37,7 +78,10 @@ function drawLegacyCenteredText(
   const titleLine = (settings.title || '').trim();
   const bodyText = (settings.content || '').trim();
   const alignment = settings.alignment || 'center';
-  const textColor = getColor(resolveTextPageTextColor(settings, layoutSettings), '#1f2937');
+  const textColor = getColor(
+    normalizeCssColorToHex(resolveTextPageTextColor(settings, layoutSettings), '#1f2937'),
+    '#1f2937'
+  );
 
   const titleLines = titleLine ? [titleLine] : [];
   const bodyLines = bodyText ? bodyText.split('\n') : [];
@@ -79,88 +123,271 @@ function drawLegacyCenteredText(
   }
 }
 
-function drawBlockTextLines(
-  page: PDFPage,
-  lines: string[],
-  block: TextPageBlock,
-  layoutSettings: WordSearchSettings,
-  x: number,
-  topY: number,
-  width: number,
-  font: PDFFont,
-  titleFont: PDFFont,
-  getColor: GetColorFn
-) {
-  const textColor = getColor(
-    block.textColor ?? resolveTextPageTextColor(settings, layoutSettings),
-    '#1f2937'
-  );
-  const activeFont = block.bold ? titleFont : font;
-  const lineHeight = block.fontSize * 1.35;
-  let cursorY = topY;
-
-  for (const line of lines) {
-    if (!line.trim()) {
-      cursorY -= lineHeight;
-      continue;
-    }
-    const textWidth = activeFont.widthOfTextAtSize(line, block.fontSize);
-    let drawX = x;
-    if (block.alignment === 'center') {
-      drawX = x + Math.max(0, (width - textWidth) / 2);
-    } else if (block.alignment === 'right') {
-      drawX = x + Math.max(0, width - textWidth);
-    }
-    page.drawText(line, {
-      x: drawX,
-      y: cursorY - block.fontSize,
-      size: block.fontSize,
-      font: activeFont,
-      color: textColor,
-    });
-    cursorY -= lineHeight;
-  }
-  return cursorY;
+function alignOffsetX(
+  alignment: TextPageBlock['alignment'],
+  lineWidth: number,
+  boxWidth: number
+): number {
+  if (alignment === 'center') return Math.max(0, (boxWidth - lineWidth) / 2);
+  if (alignment === 'right') return Math.max(0, boxWidth - lineWidth);
+  return 0;
 }
 
-function dataUrlToBytes(dataUrl: string): Uint8Array {
-  const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
+async function drawDomMeasuredRunsOnPdf(
+  page: PDFPage,
+  pageHeight: number,
+  runs: Array<{
+    text: string;
+    xPt: number;
+    baselinePt: number;
+    fontFamily: string;
+    fontSize: number;
+    bold: boolean;
+    underline: boolean;
+    color: string;
+  }>,
+  innerLeft: number,
+  innerTopFromPageTop: number,
+  getColor: GetColorFn,
+  getFont: GetPdfFontFn
+) {
+  for (const run of runs) {
+    if (!run.text || run.text === '\n') continue;
+    const pdfFont = await getFont(run.fontFamily, run.bold);
+    const x = innerLeft + run.xPt;
+    const baselineY = pageHeight - innerTopFromPageTop - run.baselinePt;
+    page.drawText(run.text, {
+      x,
+      y: baselineY,
+      size: run.fontSize,
+      font: pdfFont,
+      color: getColor(normalizeCssColorToHex(run.color, '#1f2937'), '#1f2937'),
+    });
+    if (run.underline) {
+      const textWidth = pdfFont.widthOfTextAtSize(run.text, run.fontSize);
+      page.drawLine({
+        start: { x, y: baselineY - 1 },
+        end: { x: x + textWidth, y: baselineY - 1 },
+        thickness: Math.max(0.5, run.fontSize * 0.05),
+        color: getColor(normalizeCssColorToHex(run.color, '#1f2937'), '#1f2937'),
+      });
+    }
   }
-  return bytes;
+}
+
+async function drawRichTextLineOnPdf(
+  page: PDFPage,
+  pageHeight: number,
+  line: RichTextLine,
+  block: TextPageBlock,
+  baseX: number,
+  baseTopFromPageTop: number,
+  innerWidth: number,
+  getColor: GetColorFn,
+  getFont: GetPdfFontFn
+): Promise<number> {
+  const lineWidth = line.runs.reduce((sum, run) => sum + measureRunWidthPt(run), 0);
+  const alignShift = alignOffsetX(block.alignment, lineWidth, innerWidth);
+  const baselineFromLineTop = lineBaselineFromTopPt(line);
+  const baselineY = pageHeight - baseTopFromPageTop - baselineFromLineTop;
+
+  for (const run of line.runs) {
+    if (!run.text || run.text === '\n') continue;
+    const pdfFont = await getFont(run.fontFamily, run.bold);
+    const x = baseX + alignShift + run.xPt;
+    page.drawText(run.text, {
+      x,
+      y: baselineY,
+      size: run.fontSize,
+      font: pdfFont,
+      color: getColor(normalizeCssColorToHex(run.color, '#1f2937'), '#1f2937'),
+    });
+    if (run.underline) {
+      const textWidth = pdfFont.widthOfTextAtSize(run.text, run.fontSize);
+      page.drawLine({
+        start: { x, y: baselineY - 1 },
+        end: { x: x + textWidth, y: baselineY - 1 },
+        thickness: Math.max(0.5, run.fontSize * 0.05),
+        color: getColor(normalizeCssColorToHex(run.color, '#1f2937'), '#1f2937'),
+      });
+    }
+  }
+
+  return baseTopFromPageTop + line.lineHeightPt;
+}
+
+async function drawTextBlockContent(
+  page: PDFPage,
+  block: TextPageBlock,
+  layoutSettings: WordSearchSettings,
+  pageHeight: number,
+  rect: ReturnType<typeof getTextPageBlockRectPt>,
+  getColor: GetColorFn,
+  getFont: GetPdfFontFn
+) {
+  const fallbackColor = resolveTextPageTextColor(
+    { textColor: block.textColor } as TextModuleSettings,
+    layoutSettings
+  );
+
+  if (block.kind === 'ownership') {
+    const nameLineType = resolveOwnershipNameLineType(block);
+    const ownershipLayout = measureOwnershipBlockLayoutFromDom(
+      block,
+      rect.innerWidth,
+      rect.innerHeight,
+      fallbackColor,
+      nameLineType
+    );
+
+    if (ownershipLayout) {
+      for (const line of ownershipLayout.textLines) {
+        await drawDomMeasuredRunsOnPdf(
+          page,
+          pageHeight,
+          line.runs,
+          rect.innerLeft,
+          rect.innerTopFromPageTop,
+          getColor,
+          getFont
+        );
+      }
+
+      if (ownershipNameLineIsVisible(nameLineType)) {
+        const nameLine = getOwnershipNameLineRect(
+          rect,
+          block,
+          ownershipLayout.nameLineBottomPt
+        );
+        const lineY = pageHeight - nameLine.lineBottomFromPageTop;
+        page.drawLine({
+          start: { x: rect.innerLeft, y: lineY },
+          end: { x: rect.innerLeft + rect.innerWidth, y: lineY },
+          thickness: 1,
+          color: getColor(
+            normalizeCssColorToHex(block.frameBorderColor ?? block.textColor, '#1f2937'),
+            '#1f2937'
+          ),
+          dashArray:
+            nameLineType === 'dashed'
+              ? [4, 3]
+              : nameLineType === 'dotted'
+                ? [1, 2]
+                : undefined,
+        });
+      }
+      return;
+    }
+  }
+
+  const domLines = measureTextBlockLayoutFromDom(block, rect.innerWidth, fallbackColor);
+  if (domLines && domLines.length > 0) {
+    for (const line of domLines) {
+      await drawDomMeasuredRunsOnPdf(
+        page,
+        pageHeight,
+        line.runs,
+        rect.innerLeft,
+        rect.innerTopFromPageTop,
+        getColor,
+        getFont
+      );
+    }
+  } else {
+    const runs = parseRichTextRuns(block, fallbackColor);
+    const lineHeightMultiplier = block.lineHeight ?? 1.35;
+    const lines = layoutRichTextLines(runs, rect.innerWidth, lineHeightMultiplier, {
+      wordSpacingPx: block.wordSpacingPx ?? 0,
+      letterSpacingPx: block.letterSpacingPx ?? 0,
+    });
+
+    let cursorTop = rect.innerTopFromPageTop;
+    for (const line of lines) {
+      cursorTop = await drawRichTextLineOnPdf(
+        page,
+        pageHeight,
+        line,
+        block,
+        rect.innerLeft,
+        cursorTop,
+        rect.innerWidth,
+        getColor,
+        getFont
+      );
+    }
+  }
+
+  if (block.kind === 'ownership') {
+    const nameLineType = resolveOwnershipNameLineType(block);
+    if (ownershipNameLineIsVisible(nameLineType)) {
+      const nameLine = getOwnershipNameLineRect(rect, block);
+      const lineY = pageHeight - nameLine.lineBottomFromPageTop;
+      page.drawLine({
+        start: { x: rect.innerLeft, y: lineY },
+        end: { x: rect.innerLeft + rect.innerWidth, y: lineY },
+        thickness: 1,
+        color: getColor(
+          normalizeCssColorToHex(block.frameBorderColor ?? block.textColor, '#1f2937'),
+          '#1f2937'
+        ),
+        dashArray:
+          nameLineType === 'dashed'
+            ? [4, 3]
+            : nameLineType === 'dotted'
+              ? [1, 2]
+              : undefined,
+      });
+    }
+  }
 }
 
 async function drawImagePageBlock(
   pdfDoc: PDFDocument,
   page: PDFPage,
   block: TextPageBlock,
+  rect: ReturnType<typeof getTextPageBlockRectPt>,
   pageHeight: number,
-  marginPt: number,
-  contentWidth: number,
-  contentHeight: number
+  getColor: GetColorFn
 ) {
-  if (!block.imageSrc) return;
+  if (block.frameEnabled) {
+    drawShapeOnPdfPage(
+      page,
+      pageHeight,
+      rect.left,
+      rect.topFromPageTop,
+      rect.width,
+      rect.height,
+      {
+        shapeId: resolveTextPageFrameShapeId(block),
+        fillColor: block.frameFillColor ?? '#ffffff',
+        borderColor: block.frameBorderColor ?? '#1f2937',
+        borderThicknessPx: block.frameBorderThicknessPx ?? 2,
+        borderRadiusPx: getFrameCornerRadiusPx(
+          block,
+          rect.width * (96 / 72),
+          rect.height * (96 / 72)
+        ),
+      },
+      (hex) => getColor(hex, '#1f2937')
+    );
+  }
 
-  const blockWidth = (block.widthPercent / 100) * contentWidth;
-  const blockHeight = ((block.heightPercent ?? 28) / 100) * contentHeight;
-  const blockLeft = marginPt + (block.xPercent / 100) * contentWidth;
-  const blockTopFromTop = (block.yPercent / 100) * contentHeight;
-  const blockBottomY = pageHeight - marginPt - blockTopFromTop - blockHeight;
+  const dataUrl = await renderImageBlockToDataUrl(
+    block,
+    rect.innerWidth,
+    rect.innerHeight
+  );
+  if (!dataUrl) return;
 
   try {
-    const bytes = dataUrlToBytes(block.imageSrc);
-    const image = block.imageSrc.includes('image/png')
-      ? await pdfDoc.embedPng(bytes)
-      : await pdfDoc.embedJpg(bytes);
+    const bytes = dataUrlToBytes(dataUrl);
+    const image = await pdfDoc.embedPng(bytes);
+    const imgBottomY = pageHeight - rect.innerTopFromPageTop - rect.innerHeight;
     page.drawImage(image, {
-      x: blockLeft,
-      y: blockBottomY,
-      width: blockWidth,
-      height: blockHeight,
-      opacity: (block.imageOpacity ?? 100) / 100,
+      x: rect.innerLeft,
+      y: imgBottomY,
+      width: rect.innerWidth,
+      height: rect.innerHeight,
     });
   } catch {
     // Skip invalid image data during export
@@ -171,71 +398,164 @@ async function drawTextPageBlock(
   pdfDoc: PDFDocument,
   page: PDFPage,
   block: TextPageBlock,
-  settings: TextModuleSettings,
   layoutSettings: WordSearchSettings,
   pageWidth: number,
   pageHeight: number,
   marginPt: number,
-  font: PDFFont,
-  titleFont: PDFFont,
-  getColor: GetColorFn
+  getColor: GetColorFn,
+  getFont: GetPdfFontFn
 ) {
-  const contentWidth = pageWidth - marginPt * 2;
-  const contentHeight = pageHeight - marginPt * 2;
+  const area = getTextPageContentAreaPt(pageWidth, pageHeight, marginPt);
+  const rect = getTextPageBlockRectPt(block, pageHeight, area);
 
   if (block.kind === 'image') {
-    await drawImagePageBlock(pdfDoc, page, block, pageHeight, marginPt, contentWidth, contentHeight);
+    await drawImagePageBlock(pdfDoc, page, block, rect, pageHeight, getColor);
     return;
   }
 
-  const blockWidth = (block.widthPercent / 100) * contentWidth;
-  const blockLeft = marginPt + (block.xPercent / 100) * contentWidth;
-  const blockTopFromTop = (block.yPercent / 100) * contentHeight;
-  const padding = block.framePaddingPx ?? 12;
-  const lines = block.text ? block.text.split('\n') : [''];
-  const lineCount = lines.length + (block.kind === 'ownership' && block.showNameLine !== false ? 1 : 0);
-  const textHeight = lineCount * block.fontSize * 1.35 + padding * 2;
-  const frameHeight = Math.max(textHeight, blockWidth * (block.frameShape === 'circle' ? 0.35 : 0.2));
-
-  const blockTopY = pageHeight - marginPt - blockTopFromTop;
-  const blockBottomY = blockTopY - frameHeight;
-
   if (block.frameEnabled) {
-    page.drawRectangle({
-      x: blockLeft,
-      y: blockBottomY,
-      width: blockWidth,
-      height: frameHeight,
-      borderColor: getColor(block.frameBorderColor, '#1f2937'),
-      borderWidth: block.frameBorderThicknessPx ?? 2,
-      color: getColor(block.frameFillColor, '#ffffff'),
-    });
+    drawShapeOnPdfPage(
+      page,
+      pageHeight,
+      rect.left,
+      rect.topFromPageTop,
+      rect.width,
+      rect.height,
+      {
+        shapeId: resolveTextPageFrameShapeId(block),
+        fillColor: block.frameFillColor ?? '#ffffff',
+        borderColor: block.frameBorderColor ?? '#1f2937',
+        borderThicknessPx: block.frameBorderThicknessPx ?? 2,
+        borderRadiusPx: getFrameCornerRadiusPx(
+          block,
+          rect.width * (96 / 72),
+          rect.height * (96 / 72)
+        ),
+      },
+      (hex) => getColor(hex, '#1f2937')
+    );
   }
 
-  const textTopY = blockTopY - padding;
-  const textX = blockLeft + padding;
-  const textWidth = Math.max(1, blockWidth - padding * 2);
-  const afterTextY = drawBlockTextLines(
-    page,
-    lines,
-    block,
+  await drawTextBlockContent(page, block, layoutSettings, pageHeight, rect, getColor, getFont);
+}
+
+async function drawTocModuleOnPdfPage(
+  page: PDFPage,
+  settings: TextModuleSettings,
+  layoutSettings: WordSearchSettings,
+  _pageWidth: number,
+  pageHeight: number,
+  getColor: GetColorFn,
+  getFont: GetPdfFontFn,
+  entries: ResolvedTocEntry[],
+  pageTitle: string
+): Promise<void> {
+  const toc = normalizeTocSettings(settings.tocSettings);
+  const layout = buildTocExportLayout(
     settings,
-    textX,
-    textTopY,
-    textWidth,
-    font,
-    titleFont,
-    getColor
+    layoutSettings,
+    entries,
+    pageTitle,
+    settings.tocTotalEntryCount
   );
 
-  if (block.kind === 'ownership' && block.showNameLine !== false) {
-    const lineY = afterTextY - block.fontSize * 0.5;
-    page.drawLine({
-      start: { x: textX, y: lineY },
-      end: { x: textX + textWidth, y: lineY },
-      thickness: 1,
-      color: getColor(block.frameBorderColor ?? block.textColor, '#1f2937'),
-    });
+  const titleFont = await getFont(layout.titleFontFamily, layout.titleBold);
+  const entryFont = await getFont(layout.entryFontFamily, layout.entryBold);
+  const titleColor = getColor(
+    normalizeCssColorToHex(layout.titleColor, '#1f2937'),
+    '#1f2937'
+  );
+  const entryColor = getColor(
+    normalizeCssColorToHex(layout.entryColor, '#1f2937'),
+    '#1f2937'
+  );
+
+  const titleSize = layout.titleFontSizePt;
+  const titleWidth = titleFont.widthOfTextAtSize(layout.titleText, titleSize);
+  const contentWidth = Math.max(
+    40,
+    layout.columns.reduce((w, c) => Math.max(w, c.xPt + c.widthPt), layout.titleXPt) -
+      layout.titleXPt
+  );
+  let titleX = layout.titleXPt;
+  if (layout.titleAlign === 'center') {
+    titleX = layout.titleXPt + Math.max(0, (contentWidth - titleWidth) / 2);
+  } else if (layout.titleAlign === 'right') {
+    titleX = layout.titleXPt + Math.max(0, contentWidth - titleWidth);
+  }
+
+  page.drawText(layout.titleText, {
+    x: titleX,
+    y: pageHeight - layout.titleYFromTopPt - titleSize,
+    size: titleSize,
+    font: titleFont,
+    color: titleColor,
+    maxWidth: contentWidth,
+  });
+
+  const entrySize = layout.entryFontSizePt;
+  for (const column of layout.columns) {
+    for (const row of column.rows) {
+      const rowLeft = column.xPt + row.indentPt;
+      const rowWidth = Math.max(20, column.widthPt - row.indentPt);
+      const baseline = pageHeight - row.yFromTopPt - entrySize;
+      const pageNum = toc.showPageNumbers ? row.pageNumber : '';
+      const pageWidthText = pageNum
+        ? entryFont.widthOfTextAtSize(pageNum, entrySize)
+        : 0;
+      const titleMax = Math.max(
+        12,
+        rowWidth - pageWidthText - (pageNum ? layout.entryGapPt + 8 : 0)
+      );
+
+      // Truncate title to one line to match canvas.
+      let titleText = row.title;
+      while (
+        titleText.length > 1 &&
+        entryFont.widthOfTextAtSize(titleText, entrySize) > titleMax
+      ) {
+        titleText = titleText.slice(0, -1);
+      }
+      if (titleText !== row.title && titleText.length > 1) {
+        titleText = `${titleText.slice(0, -1)}…`;
+      }
+
+      page.drawText(titleText, {
+        x: rowLeft,
+        y: baseline,
+        size: entrySize,
+        font: entryFont,
+        color: entryColor,
+      });
+
+      if (pageNum) {
+        const pageX = column.xPt + column.widthPt - pageWidthText;
+        page.drawText(pageNum, {
+          x: pageX,
+          y: baseline,
+          size: entrySize,
+          font: entryFont,
+          color: entryColor,
+        });
+
+        if (row.showLeader) {
+          const titleDrawnW = entryFont.widthOfTextAtSize(titleText, entrySize);
+          const leaderStart = rowLeft + titleDrawnW + layout.entryGapPt;
+          const leaderEnd = pageX - layout.entryGapPt;
+          if (leaderEnd > leaderStart + 4) {
+            const dash = tocLeaderDashPattern(row.leaderStyle);
+            page.drawLine({
+              start: { x: leaderStart, y: baseline - 1 },
+              end: { x: leaderEnd, y: baseline - 1 },
+              thickness: 0.75,
+              color: entryColor,
+              opacity: 0.45,
+              dashArray: dash ?? undefined,
+            });
+          }
+        }
+      }
+    }
   }
 }
 
@@ -267,11 +587,17 @@ export async function drawTextModuleOnPdfPage(
   ) => void,
   backgroundCache: FlattenedBackgroundPdfCache,
   noText?: boolean,
-  pageTitle = 'Text Page'
+  pageTitle = 'Text Page',
+  getFont?: GetPdfFontFn,
+  resolvedToc?: ResolvedTocEntry[],
+  suppressPageNumber = false
 ): Promise<void> {
   const marginPt = getPageMarginInches(layoutSettings) * 72;
   const pageBackground = resolveTextPageBackground(settings, layoutSettings);
   const pageFrame = resolveTextPageFrameSettings(settings, layoutSettings);
+  const resolveFont: GetPdfFontFn =
+    getFont ??
+    (async (_family, bold) => (bold ? titleFont : font));
 
   const bgConfig = puzzlePageBackgroundConfig(
     pageWidth,
@@ -282,7 +608,24 @@ export async function drawTextModuleOnPdfPage(
   await drawBackground(pdfDoc, page, pageWidth, pageHeight, bgConfig, backgroundCache);
   drawFrame(page, pageWidth, pageHeight, pageFrame);
 
-  if (!noText) {
+  if (!noText && isTocModuleSettings(settings)) {
+    const toc = normalizeTocSettings(settings.tocSettings);
+    const entries =
+      resolvedToc && resolvedToc.length > 0
+        ? resolvedToc
+        : parseTocEntriesFromContent(settings.content || '', toc.tableFormat);
+    await drawTocModuleOnPdfPage(
+      page,
+      settings,
+      layoutSettings,
+      pageWidth,
+      pageHeight,
+      getColor,
+      resolveFont,
+      entries,
+      pageTitle
+    );
+  } else if (!noText) {
     const blocks = resolveTextPageBlocks(settings, pageTitle, layoutSettings);
     if (blocks.length > 0) {
       for (const block of blocks) {
@@ -290,17 +633,16 @@ export async function drawTextModuleOnPdfPage(
           pdfDoc,
           page,
           block,
-          settings,
           layoutSettings,
           pageWidth,
           pageHeight,
           marginPt,
-          font,
-          titleFont,
-          getColor
+          getColor,
+          resolveFont
         );
       }
-    } else {
+    } else if (!Array.isArray(settings.blocks)) {
+      // Explicit empty blocks (title/separator pages) stay blank — match canvas.
       drawLegacyCenteredText(
         page,
         settings,
@@ -315,7 +657,13 @@ export async function drawTextModuleOnPdfPage(
     }
   }
 
-  if (!noText && pageNumberFont) {
+  if (
+    !noText &&
+    !suppressPageNumber &&
+    pageNumberFont &&
+    settings.tocMode !== 'auto' &&
+    settings.tocMode !== 'manual'
+  ) {
     await drawPageNumberOnPdfPage(
       pdfDoc,
       page,

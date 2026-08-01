@@ -381,6 +381,41 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               }
             });
 
+            // Backup: notify React app via window.postMessage in case content script listener missed it
+            chrome.scripting.executeScript({
+              target: { tabId: targetTabId },
+              func: (payload) => {
+                if (payload.wordsText) {
+                  document.dispatchEvent(new CustomEvent('genpuzzle-paste-data', { detail: { text: payload.wordsText } }));
+                }
+                if (payload.funFactsText) {
+                  document.dispatchEvent(new CustomEvent('genpuzzle-paste-fun-facts', { detail: { text: payload.funFactsText } }));
+                }
+                window.postMessage({
+                  type: 'GENPUZZLE_RESPONSE',
+                  data: {
+                    action: payload.action,
+                    dataType: 'text',
+                    requestId: payload.requestId,
+                    textData: payload.wordsText,
+                    funFacts: payload.funFactsText,
+                    title: payload.title,
+                    rawText: payload.rawText,
+                  },
+                }, '*');
+              },
+              args: [{
+                action: action || 'GENERATE_WORDS',
+                requestId,
+                wordsText: request.textData || '',
+                funFactsText: request.funFacts || '',
+                title: request.title || '',
+                rawText: request.rawText || '',
+              }],
+            }).catch((err) => {
+              console.warn('[Background] postMessage backup failed:', err);
+            });
+
             // Send fun facts to a separate message if they exist
             if (request.funFacts && request.funFacts.length > 0) {
               setTimeout(() => {
@@ -426,7 +461,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
 
         // Last resort: search for localhost/127.0.0.1 tabs (older behavior)
-        chrome.tabs.query({ url: ['*://localhost:*/*', '*://127.0.0.1:*/*'] }, (tabs) => {
+        chrome.tabs.query({ url: ['*://localhost:*/*', '*://127.0.0.1:*/*', 'https://*.puzzlertool.com/*'] }, (tabs) => {
           if (tabs && tabs.length > 0) {
             const targetTab = tabs[0];
             console.log('[Background] ✅ Found GenPuzzle tab via localhost search:', targetTab.id, 'in window:', targetTab.windowId);

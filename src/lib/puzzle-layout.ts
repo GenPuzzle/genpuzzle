@@ -26,16 +26,11 @@ export function getPageDimensionsInches(settings: WordSearchSettings): {
   width: number;
   height: number;
 } {
-  if (
-    settings.bookCanvas.customWidth &&
-    settings.bookCanvas.customHeight
-  ) {
-    return {
-      width: settings.bookCanvas.customWidth,
-      height: settings.bookCanvas.customHeight,
-    };
-  }
-  return { width: 8.5, height: 11 };
+  // Match PPT defineLayout / title-page export: each axis falls back independently.
+  return {
+    width: settings.bookCanvas.customWidth || 8.5,
+    height: settings.bookCanvas.customHeight || 11,
+  };
 }
 
 export function getPageMarginInches(settings: WordSearchSettings): number {

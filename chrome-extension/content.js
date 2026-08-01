@@ -555,33 +555,31 @@ function hideLoader() {
 
       scanCount++;
 
-      // SPEC 4: Monitor for actions-container-v2 render completion
-      const actionsContainer = document.querySelector('div[class*="actions-container-v2"]');
+      // Monitor for response completion — actions toolbar or model message content
+      const actionsContainer = document.querySelector('div[class*="actions-container"]');
+      const modelResponse = document.querySelector('[data-message-author-role="model"], message-content, .model-response-text');
+      const copyButton = findCopyButton();
 
-      if (actionsContainer) {
+      if (actionsContainer || modelResponse || copyButton) {
         console.log("[Content] ✅ Response detected at scan #" + scanCount + " (~" + Math.round(scanCount * 1.5) + "s)");
         console.log("[Content] 🔍 Locating copy button...");
 
-        // Stop scanning once found
         responseProcessed = true;
         clearInterval(scanInterval);
 
-        // SPEC 4: Grab nested button from copy-button component or aria-labeled copy button
-        const copyButton = actionsContainer.querySelector(
+        const resolvedCopyButton = copyButton || (actionsContainer && actionsContainer.querySelector(
           'copy-button button, button[aria-label="Copy"], button[data-test-id="copy-button"]'
-        );
+        ));
 
-        if (copyButton) {
-          console.log("[Content] ✅ Copy button located via selector");
+        if (resolvedCopyButton) {
+          console.log("[Content] ✅ Copy button located");
 
-          // SPEC 4: Proper timing - wait before triggering click
           setTimeout(() => {
             try {
               console.log("[Content] 📋 Triggering programmatic .click()");
-              copyButton.click();
+              resolvedCopyButton.click();
               console.log("[Content] ✅ Copy command executed");
 
-              // Step 4: Clipboard read after copy completion
               setTimeout(() => {
                 console.log("[Content] 📝 Reading from navigator.clipboard...");
                 readAndSendClipboard();
@@ -589,20 +587,23 @@ function hideLoader() {
             } catch (err) {
               console.error("[Content] ❌ Copy click failed:", err);
               console.log("[Content] Falling back to DOM text extraction...");
-              const textContent = extractAndCleanTextContentGemini();
-              if (textContent && textContent.length > 0) {
-                sendTextBack(textContent);
+              const domRawText = extractGeminiRawResponseText();
+              if (domRawText && domRawText.length > 0) {
+                sendParsedTextResponse(domRawText);
               }
             }
           }, 100);
           return;
         } else {
-          console.warn("[Content] ⚠️ Copy button not found in actions container");
-          console.log("[Content] Using DOM text extraction as fallback...");
-          responseProcessed = true;
-          const textContent = extractAndCleanTextContentGemini();
-          if (textContent && textContent.length > 0) {
-            sendTextBack(textContent);
+          console.warn("[Content] ⚠️ Copy button not found — using DOM text extraction");
+          const domRawText = extractGeminiRawResponseText();
+          if (domRawText && domRawText.length > 0) {
+            sendParsedTextResponse(domRawText);
+          } else {
+            const textContent = extractAndCleanTextContentGemini();
+            if (textContent) {
+              sendTextBack(textContent);
+            }
           }
           return;
         }
@@ -661,89 +662,154 @@ function hideLoader() {
       try {
         const rawText = await navigator.clipboard.readText();
         if (!rawText) {
-          console.warn("[Content] Clipboard returned no text.");
+          console.warn("[Content] Clipboard returned no text — trying DOM extraction.");
+          const domRawText = extractGeminiRawResponseText();
+          if (domRawText && domRawText.length > 0) {
+            sendParsedTextResponse(domRawText);
+          }
           return;
         }
         console.log("[Content] Clipboard text successfully intercepted while focused.");
         console.log("[Content] Raw clipboard length:", rawText.length);
         console.log("[Content] Raw clipboard preview:", rawText.substring(0, 300) + "...");
-
-        const allLines = rawText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-        console.log("[Content] Total non-empty lines:", allLines.length);
-        
-        let themeTitle = '';
-        for (const line of allLines) {
-          if (line.startsWith('-') && !line.toLowerCase().startsWith('-fun fact')) {
-            themeTitle = line.replace(/^-+\s*/, '').trim();
-            break;
-          }
-        }
-        if (!themeTitle && allLines.length > 0) {
-          for (const line of allLines) {
-            const lower = line.toLowerCase();
-            if (!line.includes(',') && !lower.startsWith('-fun fact') && !lower.startsWith('fun fact')) {
-              themeTitle = line.replace(/^-+\s*/, '').trim();
-              break;
-            }
-          }
-        }
-
-        const wordLines = [];
-        const funFactLines = [];
-        let i = 0;
-        
-        while (i < allLines.length) {
-          const line = allLines[i];
-          const lineLower = line.toLowerCase();
-          
-          if (lineLower.startsWith('-fun fact') || lineLower.startsWith('fun fact')) {
-            funFactLines.push(line);
-            i++;
-            
-            while (i < allLines.length && !allLines[i].startsWith('-') && !allLines[i].includes(',')) {
-              console.log("[Content] Continuation of fun fact:", allLines[i].substring(0, 80));
-              i++;
-            }
-          } else if (line.startsWith('-')) {
-            console.log("[Content] Skipping theme line:", line.substring(0, 80));
-            i++;
-          } else if (line.includes(',')) {
-            wordLines.push(line);
-            i++;
-          } else {
-            i++;
-          }
-        }
-        
-        console.log("[Content] Extracted " + wordLines.length + " word lines");
-        console.log("[Content] Extracted " + funFactLines.length + " fun fact lines");
-        
-        const filteredLines = wordLines
-          .flatMap(line => line.split(','))
-          .map(word => word.trim())
-          .filter(word => word.length > 0 && !/\d/.test(word))
-          .join('\n');
-        
-        const funFacts = funFactLines
-          .map(line => line.trim())
-          .filter(line => line.length > 0)
-          .join('\n');
-
-        console.log("[Content] Final word lines: " + (filteredLines ? filteredLines.split('\n').length : 0));
-        console.log("[Content] Final fun facts: " + (funFacts ? funFacts.split('\n').length : 0));
-        console.log("[Content] Theme title extracted:", themeTitle);
-
-        chrome.runtime.sendMessage({
-          type: "RESPONSE_GENERATED",
-          textData: filteredLines,
-          funFacts: funFacts || '',
-          title: themeTitle || '',
-          rawText: rawText,
-        });
+        sendParsedTextResponse(rawText);
       } catch (err) {
         console.error("[Content] Clipboard execution error caught safely:", err);
+        console.log("[Content] Falling back to DOM text extraction after clipboard failure...");
+        const domRawText = extractGeminiRawResponseText();
+        if (domRawText && domRawText.length > 0) {
+          sendParsedTextResponse(domRawText);
+        } else {
+          hideLoader();
+          chrome.runtime.sendMessage({
+            type: "RESPONSE_GENERATED",
+            error: "Could not read clipboard or extract response from Gemini page",
+          });
+        }
       }
     }, 500);
+  }
+
+  /**
+   * Strip numbered list prefixes and return clean word tokens from a line
+   */
+  function normalizeWordToken(token) {
+    return token.trim().replace(/^\d+\.\s*/, '').trim();
+  }
+
+  /**
+   * Parse raw Gemini text into word lines, fun facts, and title for RESPONSE_GENERATED
+   */
+  function sendParsedTextResponse(rawText) {
+    const allLines = rawText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+
+    let themeTitle = '';
+    for (const line of allLines) {
+      if (line.startsWith('-') && !line.toLowerCase().startsWith('-fun fact')) {
+        themeTitle = line.replace(/^-+\s*/, '').trim();
+        break;
+      }
+    }
+    if (!themeTitle && allLines.length > 0) {
+      for (const line of allLines) {
+        const lower = line.toLowerCase();
+        if (!line.includes(',') && !lower.startsWith('-fun fact') && !lower.startsWith('fun fact')) {
+          themeTitle = line.replace(/^-+\s*/, '').trim();
+          break;
+        }
+      }
+    }
+
+    const wordLines = [];
+    const funFactLines = [];
+    for (let i = 0; i < allLines.length; i++) {
+      const line = allLines[i];
+      const lineLower = line.toLowerCase();
+      if (lineLower.startsWith('-fun fact') || lineLower.startsWith('fun fact')) {
+        funFactLines.push(line);
+      } else if (line.startsWith('-') && !line.includes(',')) {
+        // theme line
+      } else if (line.includes(',')) {
+        wordLines.push(line);
+      }
+    }
+
+    const filteredLines = wordLines
+      .flatMap(line => line.split(','))
+      .map(normalizeWordToken)
+      .filter(word => word.length > 0 && !/^\d+$/.test(word))
+      .join('\n');
+
+    const funFacts = funFactLines
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+      .join('\n');
+
+    chrome.runtime.sendMessage({
+      type: "RESPONSE_GENERATED",
+      textData: filteredLines,
+      funFacts: funFacts || '',
+      title: themeTitle || '',
+      rawText: rawText,
+    });
+  }
+
+  /**
+   * Extract the latest model response as plain text from the Gemini DOM
+   */
+  function extractGeminiRawResponseText() {
+    const selectors = [
+      '[data-message-author-role="model"]',
+      'message-content',
+      '.model-response-text',
+      '[class*="model-response"]',
+      '[class*="response-container"]',
+      'div[class*="markdown"]',
+    ];
+
+    for (const selector of selectors) {
+      const nodes = document.querySelectorAll(selector);
+      if (nodes.length > 0) {
+        const text = nodes[nodes.length - 1].innerText || nodes[nodes.length - 1].textContent || '';
+        if (text.trim().length > 20) {
+          console.log('[Content] Extracted Gemini response via selector:', selector);
+          return text.trim();
+        }
+      }
+    }
+
+    const regions = document.querySelectorAll('[role="region"]');
+    for (let i = regions.length - 1; i >= 0; i--) {
+      const text = regions[i].innerText || '';
+      if (text.includes(',') && (text.toLowerCase().includes('fun fact') || text.split(',').length >= 3)) {
+        return text.trim();
+      }
+    }
+
+    return null;
+  }
+
+  function findCopyButton() {
+    const selectors = [
+      'copy-button button',
+      'button[aria-label="Copy"]',
+      'button[aria-label*="Copy"]',
+      'button[data-test-id="copy-button"]',
+      'button[aria-label*="copy"]',
+    ];
+
+    for (const selector of selectors) {
+      const btn = document.querySelector(selector);
+      if (btn) return btn;
+    }
+
+    const actionsContainer = document.querySelector('div[class*="actions-container"]');
+    if (actionsContainer) {
+      const btn = actionsContainer.querySelector('button');
+      if (btn) return btn;
+    }
+
+    return null;
   }
 
   /**
@@ -1071,9 +1137,7 @@ function hideLoader() {
   function sendTextBack(textData) {
     console.log("[Content] Sending text back to background script...");
     console.log("[Content] Text data:", textData);
-    // Do not hide the loader here. Keep the importing animation active until GenPuzzle confirms final import completion.
 
-    // FIX #3: Prevent duplicate sends
     if (responseCompletionSignaled) {
       console.log("[Content] Response already sent, ignoring duplicate send");
       return;
@@ -1082,11 +1146,31 @@ function hideLoader() {
     responseCompletionSignaled = true;
     console.log("[Content] ✅ Completion signal set - response will be sent");
 
+    // If structured array from DOM parser, convert to raw text and send with metadata
+    if (Array.isArray(textData)) {
+      const rawParts = [];
+      for (const block of textData) {
+        if (block && block.theme) rawParts.push('-' + block.theme);
+        if (block && block.words && Array.isArray(block.words)) {
+          rawParts.push(block.words.map((w, idx) => `${idx + 1}.${w}`).join(', '));
+        }
+      }
+      const rawText = rawParts.join('\n');
+      if (rawText.length > 0) {
+        sendParsedTextResponse(rawText);
+        return;
+      }
+    }
+
+    const payload = typeof textData === 'string'
+      ? { rawText: textData }
+      : { textData };
+
     chrome.runtime.sendMessage(
       {
         type: "RESPONSE_GENERATED",
         dataType: "text",
-        textData,
+        ...payload,
         timestamp: Date.now(),
       },
       (response) => {

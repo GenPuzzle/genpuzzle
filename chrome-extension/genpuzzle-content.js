@@ -231,7 +231,7 @@ function performStrictParsing(rawText, cleanWordsFallback = "", cleanFunFactsFal
 
   const cleanWordList = finalWords
     .map(w => w.replace(/^\d+\.\s*/, '').trim())
-    .filter(w => w.length > 0 && !/\d/.test(w))
+    .filter(w => w.length > 0 && !/^\d+$/.test(w))
     .join('\n');
 
   const cleanFunFacts = extractedFunFactLines
@@ -267,6 +267,26 @@ async function handlePasteData(request) {
   console.log("[GenPuzzle Content] Parsed fun facts:", parsed.funFacts ? parsed.funFacts.substring(0, 100) : "(empty)");
   console.log("[GenPuzzle Content] Parsed words:", parsed.words ? parsed.words.substring(0, 100) : "(empty)");
   console.log("[GenPuzzle Content] Parsed title:", parsed.title ? parsed.title.substring(0, 100) : "(empty)");
+
+  // Notify React app listeners as a backup to DOM injection
+  if (parsed.words) {
+    document.dispatchEvent(new CustomEvent('genpuzzle-paste-data', { detail: { text: parsed.words } }));
+  }
+  if (parsed.funFacts) {
+    document.dispatchEvent(new CustomEvent('genpuzzle-paste-fun-facts', { detail: { text: parsed.funFacts } }));
+  }
+  window.postMessage({
+    type: 'GENPUZZLE_RESPONSE',
+    data: {
+      action: 'GENERATE_WORDS',
+      dataType: 'text',
+      requestId: currentRequestId,
+      words: parsed.words ? parsed.words.split('\n').filter(Boolean).map(w => ({ theme: '', words: [w] })) : [],
+      textData: parsed.words,
+      funFacts: parsed.funFacts,
+      title: parsed.title,
+    },
+  }, '*');
 
   // ─── Helper: native React-aware textarea injection ───────────────────────
   const injectTextarea = (el, value) => {
@@ -352,17 +372,28 @@ async function handlePasteData(request) {
   // ══════════════════════════════════════════════════════════════════════════
   // STEP 4: Enable "Add Fun Facts / Quotes" checkbox
   // ══════════════════════════════════════════════════════════════════════════
-  const checkbox = document.getElementById('includeFunFacts');
+  const checkbox =
+    document.getElementById('includeFunFacts1') ||
+    document.getElementById('includeFunFacts') ||
+    document.querySelector('[id^="includeFunFacts"]');
   if (checkbox) {
     const isChecked = checkbox.getAttribute('aria-checked') === 'true' || checkbox.checked === true;
     if (!isChecked) {
       console.log("[GenPuzzle Content] Enabling includeFunFacts checkbox...");
       checkbox.click();
+      await new Promise(r => setTimeout(r, 200));
     } else {
       console.log("[GenPuzzle Content] includeFunFacts already enabled");
     }
   } else {
-    console.warn("[GenPuzzle Content] includeFunFacts checkbox not found by ID");
+    console.warn("[GenPuzzle Content] includeFunFacts checkbox not found by ID — trying label click");
+    const funFactsLabel = Array.from(document.querySelectorAll('label')).find(
+      l => l.textContent && l.textContent.includes('Fun Facts')
+    );
+    if (funFactsLabel) {
+      funFactsLabel.click();
+      await new Promise(r => setTimeout(r, 200));
+    }
   }
 
   // ══════════════════════════════════════════════════════════════════════════

@@ -45,7 +45,10 @@
     {
       "matches": [
         "http://localhost:*/*",
-        "http://127.0.0.1:*/*"
+        "http://127.0.0.1:*/*",
+        "https://puzzlertool.com/*",
+        "https://www.puzzlertool.com/*",
+        "https://*.puzzlertool.com/*"
       ],
       "js": [
         "genpuzzle-content.js"

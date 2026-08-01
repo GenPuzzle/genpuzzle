@@ -71,7 +71,10 @@ function resolvePptShape(
 
   switch (shapeId) {
     case 'rectangle':
-      return { shape: 'rect' };
+      // Match CSS: rectangle + border-radius still paints rounded corners.
+      return rectRadiusIn > 0
+        ? { shape: 'roundRect', rectRadius: rectRadiusIn }
+        : { shape: 'rect' };
     case 'rounded-rect':
       return rectRadiusIn > 0
         ? { shape: 'roundRect', rectRadius: rectRadiusIn }

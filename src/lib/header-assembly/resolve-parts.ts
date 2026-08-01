@@ -1,5 +1,5 @@
 import type { WordSearchPuzzle, WordSearchSettings, TitleWordsSettings } from '../puzzles/types';
-import { getPuzzleContentLine } from '../puzzle-line-index';
+import { getPuzzleContentLine, resolvePuzzleDisplayNumber } from '../puzzle-line-index';
 
 export interface HeaderTextParts {
   numberText: string;
@@ -44,7 +44,7 @@ function resolveSubtitle(puzzle: WordSearchPuzzle, settings: WordSearchSettings)
 }
 
 function formatNumber(puzzle: WordSearchPuzzle, settings: WordSearchSettings): string {
-  const puzzleNum = puzzle.puzzleNumber || 1;
+  const puzzleNum = resolvePuzzleDisplayNumber(puzzle, settings);
   const style = settings.typography.puzzleNumberingStyle || 'none';
   if (style === 'none') return '';
   if (style === 'prefix') return `${puzzleNum}`;

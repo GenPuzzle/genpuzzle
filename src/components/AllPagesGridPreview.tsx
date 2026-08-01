@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Pencil } from 'lucide-react';
+import { Pencil, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const GRID_GAP_PX = 24;
@@ -61,6 +61,10 @@ export function computeAllPagesRenderScale(
 export interface AllPagesGridItemProps {
   children: React.ReactNode;
   onEdit?: () => void;
+  /** Insert a blank title page after this page */
+  onInsertAfter?: () => void;
+  /** Remove this page from the book */
+  onRemove?: () => void;
   itemRef?: (el: HTMLDivElement | null) => void;
   pageWidthPx?: number;
   pageHeightPx?: number;
@@ -70,6 +74,8 @@ export interface AllPagesGridItemProps {
 function AllPagesGridItem({
   children,
   onEdit,
+  onInsertAfter,
+  onRemove,
   itemRef,
   pageWidthPx = 0,
   pageHeightPx = 0,
@@ -98,13 +104,43 @@ function AllPagesGridItem({
         >
           {children}
         </div>
-        {onEdit ? (
-          <button type="button" className="all-pages-grid__edit-btn" onClick={onEdit}>
-            <Pencil className="h-3.5 w-3.5" aria-hidden />
-            Edit
-          </button>
-        ) : null}
+        <div className="all-pages-grid__actions">
+          {onEdit ? (
+            <button type="button" className="all-pages-grid__edit-btn" onClick={onEdit}>
+              <Pencil className="h-3.5 w-3.5" aria-hidden />
+              Edit
+            </button>
+          ) : null}
+          {onRemove ? (
+            <button
+              type="button"
+              className="all-pages-grid__remove-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove();
+              }}
+              title="Remove page"
+              aria-label="Remove page"
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+            </button>
+          ) : null}
+        </div>
       </div>
+      {onInsertAfter ? (
+        <button
+          type="button"
+          className="all-pages-grid__insert-after"
+          onClick={(e) => {
+            e.stopPropagation();
+            onInsertAfter();
+          }}
+          title="Add blank page after"
+          aria-label="Add blank page after"
+        >
+          +
+        </button>
+      ) : null}
     </div>
   );
 }

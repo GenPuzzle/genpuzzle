@@ -10,6 +10,8 @@ import {
   PageFrameSettings,
   getDefaultWordSearchSettings,
 } from './puzzles/types';
+import { getDefaultCrosswordSettings } from './crossword-settings';
+import { DEFAULT_TOC_SETTINGS } from './toc-settings';
 
 export type DocumentModuleCategory = 'front-matter' | 'puzzle';
 
@@ -26,6 +28,12 @@ export type DocumentModuleType =
   | 'maze'
   | 'cryptogram'
   | 'word-scramble';
+
+/** Kinds shown in the + add-document menus (includes virtual empty/chapter inserts). */
+export type InsertableDocumentKind =
+  | DocumentModuleType
+  | 'empty-page'
+  | 'chapter-page';
 
 export type PuzzleModuleType = Extract<
   DocumentModuleType,
@@ -49,24 +57,36 @@ export type TextPageBlockKind =
 
 export type TextPageBlockFrameShape = 'rectangle' | 'rounded' | 'circle' | 'pill';
 
+export type OwnershipNameLineType = 'none' | 'solid' | 'dashed' | 'dotted';
+
 export interface TextPageBlock {
   id: string;
   kind: TextPageBlockKind;
   text: string;
+  /** Inline HTML for partial character formatting inside the text box */
+  richTextHtml?: string;
   /** Top-left X as % of content area (0–100) */
   xPercent: number;
   /** Top-left Y as % of content area (0–100) */
   yPercent: number;
   /** Width as % of content area */
   widthPercent: number;
-  /** Height as % of content area (image blocks) */
+  /** Height as % of content area */
   heightPercent?: number;
+  /** Clockwise rotation in degrees */
+  rotationDeg?: number;
   fontFamily: string;
   fontSize: number;
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
   lineHeight?: number;
+  /** Extra space between words in px */
+  wordSpacingPx?: number;
+  /** Space between letters in px */
+  letterSpacingPx?: number;
+  /** Inner padding for text box content in px */
+  boxPaddingPx?: number;
   textColor?: string;
   alignment: 'left' | 'center' | 'right';
   frameEnabled?: boolean;
@@ -76,12 +96,31 @@ export interface TextPageBlock {
   frameBorderThicknessPx?: number;
   frameCornerRadiusPx?: number;
   framePaddingPx?: number;
-  /** Ownership block: blank name line under label */
+  /** Ownership block: name line style under label */
+  nameLineType?: OwnershipNameLineType;
+  /** @deprecated Use nameLineType instead */
   showNameLine?: boolean;
   /** Image block */
   imageSrc?: string;
   imageFit?: 'cover' | 'contain' | 'stretch';
   imageOpacity?: number;
+  imageEffect?: 'none' | 'grayscale' | 'coloring-page';
+  /** Coloring page: ink sensitivity (0–100%) */
+  imageEffectLumCutoff?: number;
+  /** Coloring page: color tolerance (0–100%) */
+  imageEffectSatCutoff?: number;
+  /** Coloring page: line detection strength (0–100%) */
+  imageEffectEdgeThreshold?: number;
+  /** Grayscale: contrast (0–100%) */
+  imageGrayscaleContrast?: number;
+  /** Remove background: tolerance (0–100%) */
+  imageBgRemovalTolerance?: number;
+  /** Last coloring-page attempt could not produce usable line art */
+  imageColoringPageUnsuitable?: boolean;
+  imageNaturalWidth?: number;
+  imageNaturalHeight?: number;
+  imageFlipHorizontal?: boolean;
+  imageFlipVertical?: boolean;
 }
 
 export interface TextModuleSettings extends BaseModuleSettings {
@@ -106,6 +145,26 @@ export interface TextModuleSettings extends BaseModuleSettings {
   blocks?: TextPageBlock[];
   /** TOC-only: auto-build from compiled book map */
   tocMode?: 'auto' | 'manual';
+  /** TOC-only: table appearance (leaders, colors, sizes) */
+  tocSettings?: import('./toc-settings').TocSettings;
+  /** TOC-only: per-entry title overrides keyed by documentId:bookPageIndex:level */
+  tocEntryOverrides?: Record<string, string>;
+  /** TOC-only: per-entry page-number overrides (same key scheme as tocEntryOverrides) */
+  tocPageNumberOverrides?: Record<string, string>;
+  /** TOC continuation page index (0-based) when the TOC spans multiple book pages */
+  tocPageIndex?: number;
+  /** Total TOC book pages for this document */
+  tocPageCount?: number;
+  /** Total resolved TOC entry count (all TOC pages) — used for auto-fit sizing */
+  tocTotalEntryCount?: number;
+  /** Blank separator page inserted between book pages (e.g. "Pg 3 - sep") */
+  isSeparatorPage?: boolean;
+  /** Chapter divider title page (TOC chapters / batch chapter insert) */
+  isChapterPage?: boolean;
+  /** Active chapter layout preset id (shared style system) */
+  chapterLayoutId?: string;
+  /** Preserved chapter image when showImage is temporarily off */
+  chapterImageSrc?: string;
 }
 
 export interface PuzzleModuleSettings extends BaseModuleSettings {
@@ -115,6 +174,7 @@ export interface PuzzleModuleSettings extends BaseModuleSettings {
   puzzleSettings: PuzzleSettings;
   colorSettings: ColorSettings;
   wordSearchSettings?: WordSearchSettings;
+  crosswordSettings?: import('./crossword-settings').CrosswordSettings;
 }
 
 export type ModuleSettings = TextModuleSettings | PuzzleModuleSettings;
@@ -137,6 +197,19 @@ export const FRONT_MATTER_MODULES: Array<{ type: DocumentModuleType; name: strin
   { type: 'instructions', name: 'Instructions' },
 ];
 
+/** Front-matter options for the + add menus (no copyright / CTA). */
+export const INSERTABLE_FRONT_MATTER_MODULES: Array<{
+  type: InsertableDocumentKind;
+  name: string;
+}> = [
+  { type: 'title-page', name: 'Title Page' },
+  { type: 'table-of-contents', name: 'Table of Contents' },
+  { type: 'introduction', name: 'Introduction' },
+  { type: 'instructions', name: 'Instructions' },
+  { type: 'empty-page', name: 'Empty Page' },
+  { type: 'chapter-page', name: 'Chapter Page' },
+];
+
 export const PUZZLE_MODULES: Array<{ type: DocumentModuleType; name: string }> = [
   { type: 'word-search', name: 'Word Search' },
   { type: 'sudoku', name: 'Sudoku' },
@@ -146,8 +219,22 @@ export const PUZZLE_MODULES: Array<{ type: DocumentModuleType; name: string }> =
   { type: 'word-scramble', name: 'Word Scramble' },
 ];
 
-export const ALL_DOCUMENT_MODULES: Array<{ type: DocumentModuleType; name: string; category: DocumentModuleCategory }> = [
+export const ALL_DOCUMENT_MODULES: Array<{
+  type: DocumentModuleType;
+  name: string;
+  category: DocumentModuleCategory;
+}> = [
   ...FRONT_MATTER_MODULES.map((m) => ({ ...m, category: 'front-matter' as const })),
+  ...PUZZLE_MODULES.map((m) => ({ ...m, category: 'puzzle' as const })),
+];
+
+/** Flat list for + menus: insertable front matter + puzzle types. */
+export const INSERTABLE_DOCUMENT_MODULES: Array<{
+  type: InsertableDocumentKind;
+  name: string;
+  category: DocumentModuleCategory;
+}> = [
+  ...INSERTABLE_FRONT_MATTER_MODULES.map((m) => ({ ...m, category: 'front-matter' as const })),
   ...PUZZLE_MODULES.map((m) => ({ ...m, category: 'puzzle' as const })),
 ];
 
@@ -175,10 +262,14 @@ export function getDefaultTextModuleSettings(type: DocumentModuleType): TextModu
     content: '',
     fontFamily: 'Arial',
     fontSize: 18,
-    alignment: 'center',
+    alignment: type === 'table-of-contents' ? 'left' : 'center',
     useCustomFrame: false,
     useCustomBackground: false,
+    // Title pages start empty so users add only the boxes they need.
+    blocks: type === 'title-page' ? [] : undefined,
+    textColor: type === 'title-page' ? '#000000' : undefined,
     tocMode: type === 'table-of-contents' ? 'auto' : undefined,
+    tocSettings: type === 'table-of-contents' ? { ...DEFAULT_TOC_SETTINGS } : undefined,
   };
 }
 
@@ -228,7 +319,7 @@ export function getDefaultPuzzleModuleSettings(type: PuzzleModuleType): PuzzleMo
         solutionFrameStyle: 'rounded',
         solutionFrameRadius: 6,
         solutionHighlightAlpha: 30,
-        answerTitlePrefix: 'Solution',
+                        answerTitlePrefix: 'Solution',
         answerTitleFontFamily: 'Arial',
         answerTitleFontSize: 20,
         answerTitleAlignment: 'center',
@@ -236,6 +327,7 @@ export function getDefaultPuzzleModuleSettings(type: PuzzleModuleType): PuzzleMo
       },
     },
     wordSearchSettings: type === 'word-search' ? getDefaultWordSearchSettings() : undefined,
+    crosswordSettings: type === 'crossword' ? getDefaultCrosswordSettings() : undefined,
   };
 }
 
@@ -251,6 +343,32 @@ export function createDocumentPage(type: DocumentModuleType): DocumentPage {
     createdAt: Date.now(),
     settings: isPuzzle ? getDefaultPuzzleModuleSettings(type) : getDefaultTextModuleSettings(type),
   };
+}
+
+/** Resolve + menu kinds (including virtual empty/chapter) into a real document page. */
+export function createInsertableDocumentPage(kind: InsertableDocumentKind): DocumentPage {
+  if (kind === 'empty-page') {
+    const page = createDocumentPage('title-page');
+    page.name = 'Empty Page';
+    const settings = page.settings as TextModuleSettings;
+    settings.title = 'Empty Page';
+    settings.isSeparatorPage = true;
+    settings.blocks = [];
+    settings.textColor = '#000000';
+    return page;
+  }
+  if (kind === 'chapter-page') {
+    const page = createDocumentPage('title-page');
+    page.name = 'Chapter';
+    const settings = page.settings as TextModuleSettings;
+    settings.title = 'Chapter';
+    settings.isChapterPage = true;
+    settings.textColor = '#000000';
+    // Blocks are filled by chapter style when opened/synced from Chapter Pages panel
+    settings.blocks = [];
+    return page;
+  }
+  return createDocumentPage(kind);
 }
 
 /** Seed a single word-search document from existing global settings (migration). */

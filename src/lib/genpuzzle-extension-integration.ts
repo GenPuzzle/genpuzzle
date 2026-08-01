@@ -171,6 +171,39 @@ export function generateImage(
 }
 
 /**
+ * Capture the GenPuzzle tab before opening Gemini so results can be routed back.
+ */
+export function startAiGeneration(requestId: string): Promise<ExtensionResponse> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined') {
+      reject(new Error('Window object not available'));
+      return;
+    }
+
+    if (typeof chrome === 'undefined' || !chrome?.runtime?.sendMessage) {
+      reject(new Error('Chrome extension API not available. Make sure the extension is installed.'));
+      return;
+    }
+
+    try {
+      chrome.runtime.sendMessage(
+        EXTENSION_ID,
+        { action: 'START_AI_GENERATION', requestId },
+        (response: ExtensionResponse) => {
+          if (chrome.runtime.lastError) {
+            reject(chrome.runtime.lastError);
+          } else {
+            resolve(response);
+          }
+        }
+      );
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+/**
  * Queue a prompt in the extension to be injected when the AI provider tab opens
  * This method ensures the prompt is safely stored before opening the tab
  * 
@@ -208,29 +241,36 @@ export function queuePrompt(options: {
 
     try {
       const requestId = `queue_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      
-      chrome.runtime.sendMessage(
-        EXTENSION_ID,
-        {
-          action: "QUEUE_PROMPT",
-          provider: options.provider || "gemini",
-          prompt: options.prompt,
-          requestId,
-        },
-        (response: ExtensionResponse) => {
-          if (chrome.runtime.lastError) {
-            reject(chrome.runtime.lastError);
-          } else if (response.success) {
-            resolve({
-              success: true,
-              requestId: response.requestId || requestId,
-              tabId: response.tabId,
-            });
-          } else {
-            reject(new Error(response.error || 'Failed to queue prompt'));
-          }
-        }
-      );
+
+      // Capture this tab so Gemini results route back here reliably
+      startAiGeneration(requestId)
+        .catch((err) => {
+          console.warn('[GenPuzzle] startAiGeneration failed (continuing):', err);
+        })
+        .finally(() => {
+          chrome.runtime.sendMessage(
+            EXTENSION_ID,
+            {
+              action: "QUEUE_PROMPT",
+              provider: options.provider || "gemini",
+              prompt: options.prompt,
+              requestId,
+            },
+            (response: ExtensionResponse) => {
+              if (chrome.runtime.lastError) {
+                reject(chrome.runtime.lastError);
+              } else if (response.success) {
+                resolve({
+                  success: true,
+                  requestId: response.requestId || requestId,
+                  tabId: response.tabId,
+                });
+              } else {
+                reject(new Error(response.error || 'Failed to queue prompt'));
+              }
+            }
+          );
+        });
     } catch (error) {
       reject(error);
     }

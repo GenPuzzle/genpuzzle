@@ -1,6 +1,25 @@
 import type { WordSearchPuzzle, WordSearchSettings } from './puzzles/types';
 
 /**
+ * Display puzzle number from Quantity → Starting Number + per-document index.
+ * Prefer index+start so changing Starting Number updates PDF/PPT without regenerate.
+ */
+export function resolvePuzzleDisplayNumber(
+  puzzle: WordSearchPuzzle,
+  settings?: WordSearchSettings,
+  fallbackIndex = 0
+): number {
+  const start = Math.max(1, Math.round(settings?.core?.puzzlesStartingNumber ?? 1));
+  if (typeof puzzle.puzzleIndexInDocument === 'number' && puzzle.puzzleIndexInDocument >= 0) {
+    return start + puzzle.puzzleIndexInDocument;
+  }
+  if (typeof puzzle.puzzleNumber === 'number' && Number.isFinite(puzzle.puzzleNumber)) {
+    return puzzle.puzzleNumber;
+  }
+  return start + Math.max(0, fallbackIndex);
+}
+
+/**
  * 0-based index into per-document lines (fun facts, custom titles).
  * Multi-document books use global puzzleNumber for display but each document
  * has its own line list starting at line 0.

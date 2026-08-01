@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { WordSearchSidebar } from '@/components/WordSearchSidebar';
+import { CrosswordSidebar } from '@/components/CrosswordSidebar';
 import { PreviewCanvas } from '@/components/PreviewCanvas';
 import { FloatingHelpWidget } from '@/components/FloatingHelpWidget';
 import { EditorTutorial } from '@/components/auth/EditorTutorial';
@@ -10,13 +11,14 @@ import { useApp } from '@/lib/app-context';
 import { cn } from '@/lib/utils';
 
 function PuzzleGeneratorApp() {
-  const { currentPuzzleType, previewRangeMode, setPreviewRangeMode } = useApp();
+  const { currentPuzzleType, previewRangeMode, setPreviewRangeMode, activeDocumentPage } = useApp();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const settingsLocked = previewRangeMode === 'all' || previewRangeMode === 'flipbook';
 
   const exitLockedPreview = () => setPreviewRangeMode('sample');
 
-  const isWordSearch = currentPuzzleType === 'word-search';
+  const isCrossword =
+    activeDocumentPage?.moduleType === 'crossword' || currentPuzzleType === 'crossword';
 
   return (
     <div className="gp-app-shell flex h-full flex-col lg:flex-row min-h-0 bg-gradient-to-br from-[#F0F5F6] to-white dark:from-slate-950 dark:to-slate-900">
@@ -87,7 +89,7 @@ function PuzzleGeneratorApp() {
             </div>
           </div>
         )}
-        {isWordSearch ? <WordSearchSidebar /> : <WordSearchSidebar />}
+        {isCrossword ? <CrosswordSidebar /> : <WordSearchSidebar />}
       </div>
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden w-full lg:w-auto min-h-0">

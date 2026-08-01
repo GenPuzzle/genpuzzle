@@ -525,7 +525,7 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
       puzzleNumberingStyle: 'none',
       pageNumber: { ...DEFAULT_PAGE_NUMBER_SETTINGS },
       solutionTitleStyle: 'same_as_puzzle',
-      customSolutionTitle: 'Solution',
+      customSolutionTitle: 'Solutions',
       solutionNumberingStyle: 'none',
       includeFunFacts: false,
       funFactsText: '',

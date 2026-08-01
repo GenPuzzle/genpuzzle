@@ -28,7 +28,7 @@ import {
   migrateLegacyHeaderLayout,
   type HeaderAssemblySettings,
 } from './header-assembly/types';
-import { getPuzzleContentLine } from './puzzle-line-index';
+import { getPuzzleContentLine, resolvePuzzleDisplayNumber } from './puzzle-line-index';
 import { resolveHeaderTextParts } from './header-assembly/resolve-parts';
 import {
   resolveHeaderBlockGeometry,
@@ -250,7 +250,7 @@ function resolveTitleText(
   showSolution: boolean
 ): string {
   const { typography, colors } = settings;
-  const puzzleNum = puzzle.puzzleNumber || 1;
+  const puzzleNum = resolvePuzzleDisplayNumber(puzzle, settings);
 
   if (showSolution) {
     // Solution title logic

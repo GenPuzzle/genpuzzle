@@ -27,11 +27,37 @@ import { TRIM_SIZE_PRESETS, type TrimSizePresetId } from '@/lib/trim-size-layout
 import type { PageNumberSettings } from '@/lib/puzzles/types';
 import { useDebouncedCallback } from '@/hooks/useDebouncedCallback';
 import { usePersistedState } from '@/hooks/usePersistedState';
-import { SETTINGS_TAB_STORAGE_KEY } from '@/lib/settings-persistence';
+import { SETTINGS_TAB_STORAGE_KEY, SETTINGS_PANEL_STORAGE_KEY } from '@/lib/settings-persistence';
 import { computeWordSearchGenerationFingerprint } from '@/lib/generation-fingerprint';
 import { getEditedBatchIndicesForDocument } from '@/lib/canvas-edit-session';
 import { CanvasApplyToAllConfirmDialog } from '@/components/CanvasApplyToAllConfirmDialog';
+import { ChapterPagesBatchPanel } from '@/components/ChapterPagesBatchPanel';
 import type { GeneratePuzzleOptions } from '@/lib/app-context';
+
+const LAYOUT_TABS = ['book', 'colors', 'pages'] as const;
+const DOCUMENT_TABS = ['puzzle', 'words', 'design'] as const;
+
+function normalizeSettingsPanel(value: string): 'layout' | 'document' {
+  if (value === 'document' || (DOCUMENT_TABS as readonly string[]).includes(value) || value === 'page') {
+    return 'document';
+  }
+  return 'layout';
+}
+
+function normalizeSettingsTab(
+  value: string,
+  panel: 'layout' | 'document',
+  isWordSearch: boolean
+): string {
+  if (panel === 'layout') {
+    return (LAYOUT_TABS as readonly string[]).includes(value) ? value : 'book';
+  }
+  if (!isWordSearch) return 'page';
+  if (value === 'book' || value === 'colors' || value === 'pages' || value === 'page') {
+    return 'puzzle';
+  }
+  return (DOCUMENT_TABS as readonly string[]).includes(value) ? value : 'puzzle';
+}
 
 const LANGUAGES = ['English', 'Spanish', 'French', 'German', 'Italian', 'Portuguese', 'Arabic'];
 const AGE_LEVELS = ['Children (6-8)', 'Children (9-12)', 'Teen', 'Adult', 'Senior'];
@@ -320,7 +346,7 @@ function BackgroundImageControl({
               <p className="text-xs font-medium text-gray-500 truncate">Background Image Active</p>
               <div className="flex items-center gap-2 mt-1">
                 <span className="text-[10px] bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-gray-300 px-1.5 py-0.5 rounded">
-                  {fit ? fit.charAt(0).toUpperCase() + fit.slice(1) : 'Cover'}
+                  {fit === 'stretch' || !fit ? 'Cover' : fit.charAt(0).toUpperCase() + fit.slice(1)}
                 </span>
                 <span className="text-[10px] bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-gray-300 px-1.5 py-0.5 rounded">
                   {opacity ?? 100}% Opacity
@@ -333,14 +359,13 @@ function BackgroundImageControl({
             <div className="space-y-1">
               <Label className="text-[11px] text-gray-500">Image Fit</Label>
               <Select 
-                value={fit || 'cover'} 
-                onValueChange={(val) => onFitChange(val as any)}
+                value={fit === 'stretch' || !fit ? 'cover' : fit}
+                onValueChange={(val) => onFitChange(val as 'cover' | 'contain')}
               >
                 <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="cover" className="text-xs">Cover</SelectItem>
                   <SelectItem value="contain" className="text-xs">Contain</SelectItem>
-                  <SelectItem value="stretch" className="text-xs">Stretch</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -532,6 +557,11 @@ export function WordSearchSidebar() {
 
   // Collapsed/expanded sidebar state
   const [collapsed, setCollapsed] = React.useState(false);
+  const [settingsPanel, setSettingsPanel] = usePersistedState<'layout' | 'document'>(
+    SETTINGS_PANEL_STORAGE_KEY,
+    'layout',
+    { debounceMs: 300 }
+  );
   // Persist active settings tab across tab switches and page refresh
   const [activeTab, setActiveTab] = usePersistedState<string>(
     SETTINGS_TAB_STORAGE_KEY,
@@ -539,12 +569,27 @@ export function WordSearchSidebar() {
     { debounceMs: 300 }
   );
 
+  React.useEffect(() => {
+    const panel = normalizeSettingsPanel(settingsPanel);
+    const tab = normalizeSettingsTab(activeTab, panel, moduleIsWordSearch);
+    if (panel !== settingsPanel) setSettingsPanel(panel);
+    if (tab !== activeTab) setActiveTab(tab);
+    // One-time normalize of persisted legacy tab ids + when switching doc types
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moduleIsWordSearch]);
+
   // Chrome Extension Integration for AI Word Generation
   const { generateWords: generateWordsFromExtension, isLoading: isGeneratingWords, data: generatedWordsData, error: generationError } = useWordGeneration();
 
+  const handlePanelChange = (panel: 'layout' | 'document') => {
+    setSettingsPanel(panel);
+    setActiveTab(normalizeSettingsTab(activeTab, panel, moduleIsWordSearch));
+    setCollapsed(false);
+  };
+
   const handleTabChange = (value: string) => {
-    // When switching tabs, set active tab and ensure sidebar is expanded
     setActiveTab(value);
+    setSettingsPanel(normalizeSettingsPanel(value));
     setCollapsed(false);
   };
 
@@ -753,8 +798,8 @@ export function WordSearchSidebar() {
       if (funFactsText && funFactsText.length > 0) {
         console.log('[WordSearchSidebar] Injecting fun facts into funFactsText');
         
-        // Update typography with the pasted fun facts
         updateTypography({
+          includeFunFacts: true,
           funFactsText: funFactsText
         });
       }
@@ -1201,8 +1246,6 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
     (puzzle) => puzzle.pageId === activeDocumentPageId
   );
   const hasWordList = wordCount > 0;
-  const isGenerateLocked = !activeDocumentHasPuzzles && !hasWordList;
-
   const generationFingerprint = useMemo(
     () => computeWordSearchGenerationFingerprint(wordSearchSettings, titleWords),
     [wordSearchSettings, titleWords]
@@ -1240,6 +1283,11 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
     syncedFingerprint !== undefined &&
     syncedFingerprint !== generationFingerprint;
 
+  // First generate: need a word list. Update: only after grid size / word list / directions change.
+  const isGenerateLocked = activeDocumentHasPuzzles
+    ? !needsRegeneration
+    : !hasWordList;
+
   const shouldPulseGenerate =
     !isGenerateLocked &&
     !isGeneratingPuzzles &&
@@ -1248,6 +1296,14 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
   const generatePuzzlesLabel = activeDocumentHasPuzzles
     ? `Update the ${activeDocumentPuzzleCount} ${activeDocumentPuzzleCount === 1 ? 'puzzle' : 'puzzles'}`
     : `Generate the ${activeDocumentPuzzleCount} ${activeDocumentPuzzleCount === 1 ? 'puzzle' : 'puzzles'}`;
+
+  const generateButtonTitle = isGeneratingPuzzles
+    ? 'Generating…'
+    : isGenerateLocked
+      ? activeDocumentHasPuzzles
+        ? 'Change grid size, word list, or directions to enable update'
+        : 'Add a word list to enable puzzle generation'
+      : generatePuzzlesLabel;
 
   const editedPageIndicesInDocument = useMemo(
     () =>
@@ -1280,6 +1336,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
   };
 
   const handleGeneratePuzzles = async () => {
+    if (isGenerateLocked || isGeneratingPuzzles) return;
     if (activeDocumentHasPuzzles && editedPageIndicesInDocument.length > 0) {
       setPreserveEditedPagesOnGenerate(true);
       setGenerateConfirmOpen(true);
@@ -1551,25 +1608,150 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
         }
       `}</style>
 
-      {moduleIsWordSearch ? (
-      <Tabs defaultValue="book" orientation="vertical" className="w-full flex-1 flex min-h-0" onValueChange={handleTabChange}>
-        <TabsList className="flex h-auto flex-col w-24 gap-3 bg-transparent shrink-0">
-          <TabsTrigger value="book" title="Book" className="transition-all duration-200" onPointerDown={(e) => handleTriggerPointerDown(e, 'book')}>
-            <Book className="w-6 h-6" />
-          </TabsTrigger>
-          <TabsTrigger value="design" title="Design" className="transition-all duration-200" onPointerDown={(e) => handleTriggerPointerDown(e, 'design')}>
-            <Type className="w-6 h-6" />
-          </TabsTrigger>
-          <TabsTrigger value="words" title="Words" className="transition-all duration-200" onPointerDown={(e) => handleTriggerPointerDown(e, 'words')}>
-            <List className="w-6 h-6" />
-          </TabsTrigger>
-          <TabsTrigger value="puzzle" title="Puzzle" className="transition-all duration-200" onPointerDown={(e) => handleTriggerPointerDown(e, 'puzzle')}>
-            <Grid3X3 className="w-6 h-6" />
-          </TabsTrigger>
-          <TabsTrigger value="colors" title="Colors" className="transition-all duration-200" onPointerDown={(e) => handleTriggerPointerDown(e, 'colors')}>
-            <Palette className="w-6 h-6" />
-          </TabsTrigger>
-          <div className="sidebar-generate-wrap">
+      <Tabs value={activeTab} orientation="vertical" className="w-full flex-1 flex min-h-0" onValueChange={handleTabChange}>
+        <TabsList className="flex h-auto flex-col w-[6.5rem] gap-2 bg-transparent shrink-0 px-1">
+          {/* ── Panel A: book-wide layout ── */}
+          <div className="w-full space-y-1.5 pb-2 border-b border-gray-200 dark:border-slate-700">
+            <button
+              type="button"
+              onClick={() => handlePanelChange('layout')}
+              className={cn(
+                'w-full rounded-lg px-1.5 py-1.5 text-left transition-colors',
+                settingsPanel === 'layout'
+                  ? 'bg-sky-50 dark:bg-sky-950/40 ring-1 ring-sky-300/60 dark:ring-sky-700/50'
+                  : 'hover:bg-gray-50 dark:hover:bg-slate-800/60'
+              )}
+              title="Page layout for all document tabs"
+            >
+              <p className="text-[10px] font-bold uppercase tracking-wide text-sky-700 dark:text-sky-300 leading-tight">
+                Layout
+              </p>
+              <p className="text-[9px] text-muted-foreground leading-tight mt-0.5">
+                All tabs
+              </p>
+            </button>
+            <div
+              className={cn(
+                'flex flex-col gap-1.5 transition-opacity',
+                settingsPanel !== 'layout' && 'opacity-40'
+              )}
+            >
+              <TabsTrigger
+                value="book"
+                title="Trim size & page layout"
+                className="transition-all duration-200 w-full"
+                onPointerDown={(e) => {
+                  setSettingsPanel('layout');
+                  handleTriggerPointerDown(e, 'book');
+                }}
+              >
+                <Book className="w-5 h-5" />
+              </TabsTrigger>
+              <TabsTrigger
+                value="colors"
+                title="Colors, background, frame, header & page numbers"
+                className="transition-all duration-200 w-full"
+                onPointerDown={(e) => {
+                  setSettingsPanel('layout');
+                  handleTriggerPointerDown(e, 'colors');
+                }}
+              >
+                <Palette className="w-5 h-5" />
+              </TabsTrigger>
+              <TabsTrigger
+                value="pages"
+                title="Chapter pages for all puzzle documents"
+                className="transition-all duration-200 w-full"
+                onPointerDown={(e) => {
+                  setSettingsPanel('layout');
+                  handleTriggerPointerDown(e, 'pages');
+                }}
+              >
+                <Sparkles className="w-5 h-5" />
+              </TabsTrigger>
+            </div>
+          </div>
+
+          {/* ── Panel B: current document ── */}
+          <div className="w-full space-y-1.5 pt-1">
+            <button
+              type="button"
+              onClick={() => handlePanelChange('document')}
+              className={cn(
+                'w-full rounded-lg px-1.5 py-1.5 text-left transition-colors',
+                settingsPanel === 'document'
+                  ? 'bg-sky-50 dark:bg-sky-950/40 ring-1 ring-sky-300/60 dark:ring-sky-700/50'
+                  : 'hover:bg-gray-50 dark:hover:bg-slate-800/60'
+              )}
+              title="Settings for the current document tab"
+            >
+              <p className="text-[10px] font-bold uppercase tracking-wide text-sky-700 dark:text-sky-300 leading-tight">
+                Document
+              </p>
+              <p className="text-[9px] text-muted-foreground leading-tight mt-0.5">
+                This tab
+              </p>
+            </button>
+            <div
+              className={cn(
+                'flex flex-col gap-1.5 transition-opacity',
+                settingsPanel !== 'document' && 'opacity-40'
+              )}
+            >
+              {moduleIsWordSearch ? (
+                <>
+              <TabsTrigger
+                value="puzzle"
+                title="Puzzle settings"
+                className="transition-all duration-200 w-full"
+                onPointerDown={(e) => {
+                  setSettingsPanel('document');
+                  handleTriggerPointerDown(e, 'puzzle');
+                }}
+              >
+                <Grid3X3 className="w-5 h-5" />
+              </TabsTrigger>
+              <TabsTrigger
+                value="words"
+                title="Word list"
+                className="transition-all duration-200 w-full"
+                onPointerDown={(e) => {
+                  setSettingsPanel('document');
+                  handleTriggerPointerDown(e, 'words');
+                }}
+              >
+                <List className="w-5 h-5" />
+              </TabsTrigger>
+              <TabsTrigger
+                value="design"
+                title="Puzzle titles"
+                className="transition-all duration-200 w-full"
+                onPointerDown={(e) => {
+                  setSettingsPanel('document');
+                  handleTriggerPointerDown(e, 'design');
+                }}
+              >
+                <Type className="w-5 h-5" />
+              </TabsTrigger>
+                </>
+              ) : (
+              <TabsTrigger
+                value="page"
+                title="This page settings"
+                className="transition-all duration-200 w-full"
+                onPointerDown={(e) => {
+                  setSettingsPanel('document');
+                  handleTriggerPointerDown(e, 'page');
+                }}
+              >
+                <Type className="w-5 h-5" />
+              </TabsTrigger>
+              )}
+            </div>
+          </div>
+
+          {moduleIsWordSearch && (
+          <div className="sidebar-generate-wrap mt-2">
             <button
               type="button"
               className={cn(
@@ -1578,16 +1760,8 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
               )}
               onClick={handleGeneratePuzzles}
               disabled={isGenerateLocked || isGeneratingPuzzles}
-              title={
-                isGenerateLocked
-                  ? 'Add a word list to enable puzzle generation'
-                  : generatePuzzlesLabel
-              }
-              aria-label={
-                isGenerateLocked
-                  ? 'Add a word list to enable puzzle generation'
-                  : generatePuzzlesLabel
-              }
+              title={generateButtonTitle}
+              aria-label={generateButtonTitle}
             >
               {activeDocumentHasPuzzles ? (
                 <RefreshCw className={cn('w-5 h-5', isGeneratingPuzzles && 'animate-spin')} />
@@ -1597,16 +1771,46 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
             </button>
             <p className="sidebar-generate-caption">{generatePuzzlesLabel}</p>
           </div>
+          )}
         </TabsList>
 
         {/* ==================== PUZZLE SETTINGS ==================== */}
         <TabsContent value="puzzle" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', collapsed && 'hidden')}>
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="font-semibold text-gray-900 dark:text-white">Puzzle Settings</h3>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
+                  Document · This tab
+                </p>
+                <h3 className="font-semibold text-gray-900 dark:text-white">Puzzle Settings</h3>
+              </div>
               <Button variant="outline" size="sm" onClick={handleSave} className="transition-all duration-200 border-gray-300 dark:border-slate-600">
                 <Save className="w-4 h-4 mr-2" />Save
               </Button>
+            </div>
+
+            {/* Quantity */}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">Quantity</Label>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs text-gray-500">Number of Puzzles</Label>
+                  <IntegerInput
+                    value={core.numberOfPuzzles}
+                    onChange={(value) => updateCore({ numberOfPuzzles: value })}
+                    min={1}
+                    max={1000}
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-gray-500">Starting Number</Label>
+                  <IntegerInput
+                    value={core.puzzlesStartingNumber}
+                    onChange={(value) => updateCore({ puzzlesStartingNumber: value })}
+                    min={1}
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Grid Size */}
@@ -1814,7 +2018,12 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
         <TabsContent value="design" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', collapsed && 'hidden')}>
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="font-semibold text-gray-900">Design Settings</h3>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
+                  Document · This tab
+                </p>
+                <h3 className="font-semibold text-gray-900">Titles</h3>
+              </div>
               <Button variant="outline" size="sm" onClick={handleSave}>
                 <Save className="w-4 h-4 mr-2" />Save
               </Button>
@@ -1905,102 +2114,6 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   <p className="text-xs text-gray-500">Choose how to display puzzle numbers with titles.</p>
                 </div>
               )}
-
-              <div className="space-y-3 pt-2 border-t">
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    id="page-number-enabled"
-                    checked={pageNumber.enabled}
-                    onCheckedChange={(checked) => updatePageNumber({ enabled: !!checked })}
-                  />
-                  <Label htmlFor="page-number-enabled" className="text-sm font-medium cursor-pointer select-none">
-                    Page Number
-                  </Label>
-                </div>
-
-                {pageNumber.enabled && (
-                  <div className="space-y-3">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <Label className="text-xs text-gray-500">Start numbering from</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          value={pageNumber.startNumberingFrom}
-                          onChange={(e) =>
-                            updatePageNumber({ startNumberingFrom: Number(e.target.value) || 1 })
-                          }
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-gray-500">Start at page</Label>
-                        <Input
-                          type="number"
-                          min={1}
-                          value={pageNumber.startAtPage}
-                          onChange={(e) =>
-                            updatePageNumber({ startAtPage: Number(e.target.value) || 1 })
-                          }
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-1">
-                      <Label className="text-xs text-gray-500">Position</Label>
-                      <Select
-                        value={pageNumber.position}
-                        onValueChange={(value) =>
-                          updatePageNumber({ position: value as PageNumberSettings['position'] })
-                        }
-                      >
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="bottom-center">Bottom centre</SelectItem>
-                          <SelectItem value="bottom-left">Bottom left</SelectItem>
-                          <SelectItem value="bottom-right">Bottom right</SelectItem>
-                          <SelectItem value="alternating">Alternating (even left, odd right)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <SliderField
-                        label="Bottom offset"
-                        value={pageNumber.bottomOffsetPx}
-                        onValueChange={(v) => updatePageNumber({ bottomOffsetPx: v })}
-                        min={0}
-                        max={80}
-                        step={1}
-                        format="px"
-                      />
-                      <SliderField
-                        label="Side offset"
-                        value={pageNumber.sideOffsetPx}
-                        onValueChange={(v) => updatePageNumber({ sideOffsetPx: v })}
-                        min={0}
-                        max={80}
-                        step={1}
-                        format="px"
-                        disabled={pageNumber.position === 'bottom-center'}
-                      />
-                    </div>
-
-                    <PageNumberShapeEditor
-                      shape={pageNumber.shape}
-                      textColor={pageNumber.textColor}
-                      fontFamily={pageNumber.fontFamily}
-                      fontSize={pageNumber.fontSize}
-                      fontOptions={PUBLISHING_FONTS}
-                      onShapeChange={(patch) =>
-                        updatePageNumber({ shape: { ...pageNumber.shape, ...patch } })
-                      }
-                      onTextColorChange={(v) => updatePageNumber({ textColor: v })}
-                      onFontFamilyChange={(v) => updatePageNumber({ fontFamily: v })}
-                      onFontSizeChange={(v) => updatePageNumber({ fontSize: v })}
-                    />
-                  </div>
-                )}
-              </div>
             </div>
 
             {/* Fonts */}
@@ -2099,41 +2212,6 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                 />
 
               </div>
-            </div>
-
-            {/* Layout Margins */}
-            <div className="space-y-3">
-              <Label className="text-sm font-medium">Page Layout</Label>
-              <div className="grid grid-cols-2 gap-3">
-                <SliderField
-                  label="Title to Answer"
-                  value={titleToAnswerGap}
-                  onValueChange={setTitleToAnswerGap}
-                  min={0}
-                  max={100}
-                  step={1}
-                  format="px"
-                />
-                <SliderField
-                  label="Solution to Solution"
-                  value={solutionToSolutionGap}
-                  onValueChange={setSolutionToSolutionGap}
-                  min={6}
-                  max={80}
-                  step={1}
-                  format="px"
-                />
-                <SliderField
-                  label="Solution Page Margin"
-                  value={pageMargin}
-                  onValueChange={setPageMargin}
-                  min={70}
-                  max={200}
-                  step={5}
-                  format="px"
-                />
-              </div>
-              <p className="text-xs text-gray-500">Solution Page Margin controls distance from solution page edges only (KDP safe zone).</p>
             </div>
 
             {/* Answer Page Fonts */}
@@ -2242,7 +2320,12 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
         >
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="font-semibold text-gray-900">Word List Settings</h3>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
+                  Document · This tab
+                </p>
+                <h3 className="font-semibold text-gray-900">Word List Settings</h3>
+              </div>
               <Button variant="outline" size="sm" onClick={handleSave}>
                 <Save className="w-4 h-4 mr-2" />Save
               </Button>
@@ -2537,10 +2620,115 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
         <TabsContent value="colors" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', collapsed && 'hidden')}>
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="font-semibold text-gray-900">Color Settings</h3>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
+                  Layout · All documents
+                </p>
+                <h3 className="font-semibold text-gray-900">Colors, Frame, Header &amp; Page #</h3>
+              </div>
               <Button variant="outline" size="sm" onClick={handleSave}>
                 <Save className="w-4 h-4 mr-2" />Save
               </Button>
+            </div>
+
+            {/* Global Page Frame (puzzle + solution pages) */}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">Page Number</Label>
+              <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="page-number-enabled"
+                    checked={pageNumber.enabled}
+                    onCheckedChange={(checked) => updatePageNumber({ enabled: !!checked })}
+                  />
+                  <Label htmlFor="page-number-enabled" className="text-sm font-medium cursor-pointer select-none">
+                    Show page numbers on all pages
+                  </Label>
+                </div>
+
+                {pageNumber.enabled && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs text-gray-500">Start numbering from</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          value={pageNumber.startNumberingFrom}
+                          onChange={(e) =>
+                            updatePageNumber({ startNumberingFrom: Number(e.target.value) || 1 })
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs text-gray-500">Start at page</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          value={pageNumber.startAtPage}
+                          onChange={(e) =>
+                            updatePageNumber({ startAtPage: Number(e.target.value) || 1 })
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-xs text-gray-500">Position</Label>
+                      <Select
+                        value={pageNumber.position}
+                        onValueChange={(value) =>
+                          updatePageNumber({ position: value as PageNumberSettings['position'] })
+                        }
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="bottom-center">Bottom centre</SelectItem>
+                          <SelectItem value="bottom-left">Bottom left</SelectItem>
+                          <SelectItem value="bottom-right">Bottom right</SelectItem>
+                          <SelectItem value="alternating">Alternating (even left, odd right)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <SliderField
+                        label="Bottom offset"
+                        value={pageNumber.bottomOffsetPx}
+                        onValueChange={(v) => updatePageNumber({ bottomOffsetPx: v })}
+                        min={0}
+                        max={80}
+                        step={1}
+                        format="px"
+                      />
+                      <SliderField
+                        label="Side offset"
+                        value={pageNumber.sideOffsetPx}
+                        onValueChange={(v) => updatePageNumber({ sideOffsetPx: v })}
+                        min={0}
+                        max={80}
+                        step={1}
+                        format="px"
+                        disabled={pageNumber.position === 'bottom-center'}
+                      />
+                    </div>
+
+                    <PageNumberShapeEditor
+                      shape={pageNumber.shape}
+                      textColor={pageNumber.textColor}
+                      fontFamily={pageNumber.fontFamily}
+                      fontSize={pageNumber.fontSize}
+                      fontOptions={PUBLISHING_FONTS}
+                      onShapeChange={(patch) =>
+                        updatePageNumber({ shape: { ...pageNumber.shape, ...patch } })
+                      }
+                      onTextColorChange={(v) => updatePageNumber({ textColor: v })}
+                      onFontFamilyChange={(v) => updatePageNumber({ fontFamily: v })}
+                      onFontSizeChange={(v) => updatePageNumber({ fontSize: v })}
+                    />
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Global Page Frame (puzzle + solution pages) */}
@@ -2691,34 +2879,15 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
         <TabsContent value="book" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', collapsed && 'hidden')}>
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="font-semibold text-gray-900">Book Settings</h3>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
+                  Layout · All documents
+                </p>
+                <h3 className="font-semibold text-gray-900">Trim &amp; Page Size</h3>
+              </div>
               <Button variant="outline" size="sm" onClick={handleSave}>
                 <Save className="w-4 h-4 mr-2" />Save
               </Button>
-            </div>
-
-            {/* Quantity */}
-            <div className="space-y-3">
-              <Label className="text-sm font-medium">Quantity</Label>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-xs text-gray-500">Number of Puzzles</Label>
-                  <IntegerInput
-                    value={core.numberOfPuzzles}
-                    onChange={(value) => updateCore({ numberOfPuzzles: value })}
-                    min={1}
-                    max={1000}
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Starting Number</Label>
-                  <IntegerInput
-                    value={core.puzzlesStartingNumber}
-                    onChange={(value) => updateCore({ puzzlesStartingNumber: value })}
-                    min={1}
-                  />
-                </div>
-              </div>
             </div>
 
             {/* Measurement Units */}
@@ -2824,12 +2993,84 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
               </Select>
             </div>
 
+            {/* Page Layout gaps (book-wide) */}
+            <div className="space-y-3 pt-2 border-t">
+              <Label className="text-sm font-medium">Page Layout Spacing</Label>
+              <div className="grid grid-cols-2 gap-3">
+                <SliderField
+                  label="Title to Answer"
+                  value={titleToAnswerGap}
+                  onValueChange={setTitleToAnswerGap}
+                  min={0}
+                  max={100}
+                  step={1}
+                  format="px"
+                />
+                <SliderField
+                  label="Solution to Solution"
+                  value={solutionToSolutionGap}
+                  onValueChange={setSolutionToSolutionGap}
+                  min={6}
+                  max={80}
+                  step={1}
+                  format="px"
+                />
+                <SliderField
+                  label="Solution Page Margin"
+                  value={pageMargin}
+                  onValueChange={setPageMargin}
+                  min={70}
+                  max={200}
+                  step={5}
+                  format="px"
+                />
+              </div>
+              <p className="text-xs text-gray-500">Solution Page Margin controls distance from solution page edges only (KDP safe zone).</p>
+            </div>
+
           </div>
         </TabsContent>
-      </Tabs>
-      ) : (
-        <div className={cn('flex-1 min-h-0 p-4 space-y-4 overflow-y-auto', collapsed && 'hidden')}>
-          <h3 className="font-semibold text-gray-900 dark:text-white">{activeDocumentPage?.name ?? 'Text Page'}</h3>
+
+        {/* ==================== CHAPTER PAGES (Layout · All documents) ==================== */}
+        <TabsContent
+          value="pages"
+          style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
+          className={cn(
+            'flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2',
+            collapsed && 'hidden'
+          )}
+        >
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
+                  Layout · All documents
+                </p>
+                <h3 className="font-semibold text-gray-900 dark:text-white">Chapter title</h3>
+              </div>
+              <Button variant="outline" size="sm" onClick={handleSave}>
+                <Save className="w-4 h-4 mr-2" />Save
+              </Button>
+            </div>
+            <ChapterPagesBatchPanel />
+          </div>
+        </TabsContent>
+
+        {!moduleIsWordSearch && (
+        <TabsContent
+          value="page"
+          style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
+          className={cn(
+            'flex-1 min-h-0 p-4 space-y-4 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2',
+            collapsed && 'hidden'
+          )}
+        >
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
+              Document · This tab
+            </p>
+            <h3 className="font-semibold text-gray-900 dark:text-white">{activeDocumentPage?.name ?? 'Text Page'}</h3>
+          </div>
           {activeTextSettings && (
             <>
               <div className="space-y-2">
@@ -2850,10 +3091,16 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   >
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="auto">Auto (from book map)</SelectItem>
+                      <SelectItem value="auto">Auto (from document tabs)</SelectItem>
                       <SelectItem value="manual">Manual</SelectItem>
                     </SelectContent>
                   </Select>
+                  {(activeTextSettings.tocMode ?? 'auto') === 'auto' && (
+                    <p className="text-xs text-muted-foreground">
+                      Titles and page numbers update automatically from your document tab order.
+                      Use the floating panel on the canvas to style the table.
+                    </p>
+                  )}
                 </div>
               )}
               <div className="space-y-2">
@@ -2882,11 +3129,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                 <Label>Text Color</Label>
                 <input
                   type="color"
-                  value={
-                    activeTextSettings.textColor ??
-                    wordSearchSettings.colors.puzzlePage.titleColor ??
-                    '#1f2937'
-                  }
+                  value={activeTextSettings.textColor ?? '#000000'}
                   onChange={(e) => updateActiveTextModuleSettings({ textColor: e.target.value })}
                   className="h-8 w-full cursor-pointer rounded border border-gray-200"
                 />
@@ -2909,17 +3152,29 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
               </div>
               <div className="space-y-2">
                 <Label>Content</Label>
-                <Textarea
-                  value={activeTextSettings.content}
-                  onChange={(e) => updateActiveTextModuleSettings({ content: e.target.value })}
-                  rows={12}
-                  placeholder="Enter page content..."
-                />
+                {(activeDocumentPage?.moduleType === 'table-of-contents' &&
+                  (activeTextSettings.tocMode ?? 'auto') === 'auto') ? (
+                  <Textarea
+                    value={activeTextSettings.content}
+                    readOnly
+                    rows={12}
+                    className="bg-muted/40"
+                    placeholder="Auto-generated from your documents…"
+                  />
+                ) : (
+                  <Textarea
+                    value={activeTextSettings.content}
+                    onChange={(e) => updateActiveTextModuleSettings({ content: e.target.value })}
+                    rows={12}
+                    placeholder="Enter page content..."
+                  />
+                )}
               </div>
             </>
           )}
-        </div>
-      )}
+        </TabsContent>
+        )}
+      </Tabs>
       <CanvasApplyToAllConfirmDialog
         open={generateConfirmOpen}
         onOpenChange={setGenerateConfirmOpen}
