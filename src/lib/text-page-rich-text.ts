@@ -1,4 +1,5 @@
 import type { TextPageBlock } from './document-model';
+import { matchPublishingFont } from './publishing-fonts';
 
 export type TextRichFormatCommand =
   | { type: 'fontFamily'; value: string }
@@ -94,10 +95,6 @@ function rgbToHex(color: string): string | null {
   return `#${[r, g, b].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
 }
 
-function normalizeFontFamily(fontFamily: string): string {
-  return fontFamily.split(',')[0]?.replace(/['"]/g, '').trim() || 'Arial';
-}
-
 function isBold(fontWeight: string): boolean {
   if (fontWeight === 'bold' || fontWeight === 'bolder') return true;
   const numeric = Number.parseInt(fontWeight, 10);
@@ -106,7 +103,7 @@ function isBold(fontWeight: string): boolean {
 
 function blockDefaultsToFormat(block: TextPageBlock, textColor: string): TextSelectionFormat {
   return {
-    fontFamily: block.fontFamily,
+    fontFamily: matchPublishingFont(block.fontFamily) ?? 'Arial',
     fontSize: block.fontSize,
     bold: !!block.bold,
     italic: !!block.italic,
@@ -132,7 +129,7 @@ function getFormatForElement(
 > {
   const computed = window.getComputedStyle(element);
   return {
-    fontFamily: normalizeFontFamily(computed.fontFamily) || block.fontFamily,
+    fontFamily: matchPublishingFont(computed.fontFamily) ?? matchPublishingFont(block.fontFamily) ?? 'Arial',
     fontSize: cssFontSizeToPt(computed.fontSize) || block.fontSize,
     bold: isBold(computed.fontWeight),
     italic: computed.fontStyle === 'italic',

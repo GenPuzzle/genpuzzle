@@ -1,9 +1,9 @@
 import type { PageNumberSettings } from './puzzles/types';
-import { resolveBookPageNumberText } from './page-number/settings';
+import { resolveTocEntryPageNumber } from './page-number/settings';
 import type { ResolvedTocEntry } from './book-compiler';
 import type { TextModuleSettings } from './document-model';
 import type { WordSearchSettings } from './puzzles/types';
-import { normalizeTocSettings } from './toc-settings';
+import { normalizeTocSettings, DEFAULT_TOC_SETTINGS } from './toc-settings';
 import { getPageDimensionsInches, getPageMarginInches } from './puzzle-layout';
 import {
   resolveTextPageFrameSettings,
@@ -57,7 +57,7 @@ export function buildTocLayoutMetrics(
   const frameInsetIn = pageFrame.enabled ? pageFrame.marginSizeIn : 0;
   const innerPadPx = ptToPx(12);
   const safetyPx = 20;
-  const titleGap = toc.titleBottomGapPx ?? 16;
+  const titleGap = toc.titleBottomGapPx ?? DEFAULT_TOC_SETTINGS.titleBottomGapPx;
 
   const entriesTopGap = toc.entriesTopGapPx ?? 0;
   // Full inner content box (after margins/frame/padding). Title + gaps subtracted at fit time.
@@ -102,8 +102,8 @@ export function applyTocEntryOverrides(
 }
 
 function tocEntriesAvailableHeightPx(metrics: TocLayoutMetrics): number {
-  const titleGap = metrics.titleBottomGapPx ?? 16;
-  const entriesTop = metrics.entriesTopGapPx ?? 0;
+  const titleGap = metrics.titleBottomGapPx ?? DEFAULT_TOC_SETTINGS.titleBottomGapPx;
+  const entriesTop = metrics.entriesTopGapPx ?? DEFAULT_TOC_SETTINGS.entriesTopGapPx;
   // Single-line title + gaps; small bottom cushion so last row isn’t clipped by overflow:hidden.
   const titleBlock = metrics.titleFontPx * 1.2 + titleGap + entriesTop;
   const bottomCushion = 8;
@@ -280,9 +280,7 @@ export function remapTocEntriesAfterPageInsertion(
     return {
       ...entry,
       bookPageIndex: shifted,
-      pageNumber: pageNumberSettings
-        ? resolveBookPageNumberText(shifted, pageNumberSettings)
-        : String(shifted + 1),
+      pageNumber: resolveTocEntryPageNumber(shifted, pageNumberSettings),
     };
   });
 }

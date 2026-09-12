@@ -1,7 +1,26 @@
-import type { TitleWordsSettings, WordSearchPuzzle } from './puzzles/types';
+import type { TitleWordsSettings, WordSearchPuzzle, WordListSettings } from './puzzles/types';
 
 export function getPuzzleIndexInDocument(puzzle: WordSearchPuzzle): number {
   return Math.max(0, puzzle.puzzleIndexInDocument ?? 0);
+}
+
+/** Words assigned to each puzzle from the master list (1 when one-word mode is on). */
+export function getEffectiveWordsPerPuzzle(wordList: Pick<WordListSettings, 'wordsPerPuzzle' | 'oneWordPerPuzzle'>): number {
+  if (wordList.oneWordPerPuzzle) return 1;
+  return Math.max(1, wordList.wordsPerPuzzle || 1);
+}
+
+/** How many times to place the puzzle's word(s) on the grid. */
+export function getWordRepeatCount(wordList: Pick<WordListSettings, 'oneWordPerPuzzle' | 'wordRepeatCount'>): number {
+  if (!wordList.oneWordPerPuzzle) return 1;
+  return Math.max(1, Math.min(40, Math.round(wordList.wordRepeatCount ?? 5) || 5));
+}
+
+/** Whether empty grid cells should use only letters from the puzzle word(s). */
+export function getFillWithWordLettersOnly(
+  wordList: Pick<WordListSettings, 'oneWordPerPuzzle' | 'fillWithWordLettersOnly'>
+): boolean {
+  return Boolean(wordList.oneWordPerPuzzle && wordList.fillWithWordLettersOnly);
 }
 
 export function getWordsForPuzzlePage(
@@ -61,4 +80,31 @@ export function clampPuzzleWordLineInput(value: string, wordsPerPuzzle: number):
 export function countPuzzleWordLines(value: string): number {
   if (!value) return 1;
   return value.split('\n').length;
+}
+
+/** Remove one puzzle's word slot from the shared document word list. */
+export function removePuzzleWordsFromTitleList(
+  titleWords: TitleWordsSettings,
+  puzzleIndexInDocument: number,
+  wordsPerPuzzle: number
+): TitleWordsSettings {
+  const wpp = Math.max(1, Math.round(wordsPerPuzzle) || 1);
+  const idx = Math.max(0, Math.round(puzzleIndexInDocument) || 0);
+  const start = idx * wpp;
+  if (start >= titleWords.words.length) {
+    return { ...titleWords, words: [...titleWords.words] };
+  }
+  return {
+    ...titleWords,
+    words: [...titleWords.words.slice(0, start), ...titleWords.words.slice(start + wpp)],
+  };
+}
+
+/** Remove one line from multiline title / fun-fact text (keeps blank lines elsewhere). */
+export function removeContentLineAt(text: string, index: number): string {
+  if (!text) return text;
+  const lines = text.split(/\r?\n/);
+  if (index < 0 || index >= lines.length) return text;
+  lines.splice(index, 1);
+  return lines.join('\n');
 }

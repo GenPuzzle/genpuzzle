@@ -1,6 +1,7 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect } from 'react';
+import { usePathname } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import Header from '@/components/Header';
 import { LoginPage } from '@/components/auth/LoginPage';
@@ -11,7 +12,15 @@ import { LeavePagePromptProvider } from '@/lib/leave-page-prompt-context';
 import { useAuth } from '@/lib/auth-context';
 
 export function AuthenticatedApp({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const { session, isReady, inEditor, enterEditor } = useAuth();
+  const isStandaloneTool = pathname.startsWith('/app/other-tools');
+
+  useEffect(() => {
+    if (isReady && session && isStandaloneTool && !inEditor) {
+      enterEditor();
+    }
+  }, [isReady, session, isStandaloneTool, inEditor, enterEditor]);
 
   if (!isReady) {
     return (
@@ -33,10 +42,12 @@ export function AuthenticatedApp({ children }: { children: React.ReactNode }) {
     );
   }
 
+  const showEditor = inEditor || isStandaloneTool;
+
   return (
     <LeavePagePromptProvider>
       <TemplateUrlCapture />
-      {!inEditor ? (
+      {!showEditor ? (
         <>
           <TemplateLaunchHandler onEnterEditor={enterEditor} />
           <ProjectHomePage onEnterEditor={enterEditor} />

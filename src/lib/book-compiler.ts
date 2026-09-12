@@ -3,10 +3,46 @@
  * Shared by preview (page map) and export (PDF/PPT compiler).
  */
 
-import type { WordSearchPuzzle, WordSearchSettings, TitleWordsSettings } from './puzzles/types';
+import { getDefaultWordSearchSettings } from './puzzles/types';
+import type {
+  WordSearchPuzzle,
+  WordSearchSettings,
+  TitleWordsSettings,
+  CrosswordPuzzle,
+  GenericBatchPuzzle,
+  MurdokuPuzzle,
+} from './puzzles/types';
+import {
+  getDefaultGenericPuzzleSettings,
+  normalizeGenericPuzzleSettings,
+  mergeGenericPuzzlePageOverride,
+  resolveGenericPuzzleTitle,
+  isGenericPuzzleModuleType,
+  type GenericPuzzleSettings,
+  type GenericPuzzleModuleType,
+} from './generic-puzzle-settings';
+import {
+  computeTriviaSolutionsPerPage,
+  packTriviaGamesForSolutionPages,
+} from './puzzles/trivia';
 import type { DocumentPage, PuzzleModuleSettings, TextModuleSettings } from './document-model';
 import { isPuzzleModuleType, isTextModuleType } from './document-model';
-import { resolveBookPageNumberText } from './page-number/settings';
+import {
+  getDefaultCrosswordSettings,
+  normalizeCrosswordSettings,
+  resolveCrosswordPuzzleTitle,
+  type CrosswordSettings,
+} from './crossword-settings';
+import { applyCrosswordAutoFit } from './auto-page-fit';
+import { buildCrosswordPuzzlesForDocumentPage } from './generate-document-puzzles';
+import {
+  getDefaultMurdokuSettings,
+  normalizeMurdokuSettings,
+  resolveMurdokuPuzzleTitle,
+  type MurdokuSettings,
+} from './murdoku-settings';
+import type { MurdokuPagePart } from './murdoku-page-layout';
+import { resolveBookPageNumberText, resolveTocEntryPageNumber } from './page-number/settings';
 import type { PageNumberSettings } from './puzzles/types';
 import {
   formatTocLines,
@@ -25,10 +61,21 @@ import {
   type TocLayoutMetrics,
 } from './toc-layout';
 import { getPageDimensionsInches, getPageMarginInches } from './puzzle-layout';
+import { reorderCompiledPagesForMixedPuzzles } from './mix-compiled-pages';
 
 export { TOC_SOLUTIONS_DOCUMENT_ID };
 
-export type CompiledPageKind = 'text' | 'puzzle' | 'solution' | 'blank';
+export type CompiledPageKind =
+  | 'text'
+  | 'puzzle'
+  | 'solution'
+  | 'blank'
+  | 'crossword'
+  | 'crossword-solution'
+  | 'generic-puzzle'
+  | 'generic-puzzle-solution'
+  | 'murdoku'
+  | 'murdoku-solution';
 
 export interface CompiledPageBase {
   bookPageIndex: number;
@@ -44,11 +91,14 @@ export interface CompiledTextPage extends CompiledPageBase {
   resolvedToc?: ResolvedTocEntry[];
 }
 
+export type WordSearchPagePart = 'clues' | 'grid';
+
 export interface CompiledPuzzlePage extends CompiledPageBase {
   kind: 'puzzle';
   puzzle: WordSearchPuzzle;
   puzzleIndexInDocument: number;
   wordSearchSettings: WordSearchSettings;
+  pagePart?: WordSearchPagePart;
 }
 
 export interface CompiledSolutionPage extends CompiledPageBase {
@@ -61,11 +111,64 @@ export interface CompiledBlankPage extends CompiledPageBase {
   kind: 'blank';
 }
 
+/** One crossword puzzle page (mirrors CompiledPuzzlePage for crossword documents). */
+export interface CompiledCrosswordPage extends CompiledPageBase {
+  kind: 'crossword';
+  puzzle: CrosswordPuzzle;
+  puzzleIndexInDocument: number;
+  crosswordSettings: CrosswordSettings;
+}
+
+/** Crossword solution page — holds up to answersPerPage puzzles. */
+export interface CompiledCrosswordSolutionPage extends CompiledPageBase {
+  kind: 'crossword-solution';
+  puzzles: CrosswordPuzzle[];
+  crosswordSettings: CrosswordSettings;
+}
+
+/** One generic puzzle page — holds 1..puzzlesPerPage puzzles. */
+export interface CompiledGenericPuzzlePage extends CompiledPageBase {
+  kind: 'generic-puzzle';
+  puzzleType: GenericPuzzleModuleType;
+  puzzles: GenericBatchPuzzle[];
+  /** Index of the first puzzle on this page. */
+  puzzleIndexInDocument: number;
+  genericSettings: GenericPuzzleSettings;
+}
+
+/** Sudoku/maze solution page — holds up to solutionsPerPage puzzles. */
+export interface CompiledGenericPuzzleSolutionPage extends CompiledPageBase {
+  kind: 'generic-puzzle-solution';
+  puzzleType: GenericPuzzleModuleType;
+  puzzles: GenericBatchPuzzle[];
+  genericSettings: GenericPuzzleSettings;
+}
+
+export interface CompiledMurdokuPage extends CompiledPageBase {
+  kind: 'murdoku';
+  puzzle: MurdokuPuzzle;
+  puzzleIndexInDocument: number;
+  murdokuSettings: MurdokuSettings;
+  pagePart: MurdokuPagePart;
+}
+
+export interface CompiledMurdokuSolutionPage extends CompiledPageBase {
+  kind: 'murdoku-solution';
+  puzzles: MurdokuPuzzle[];
+  murdokuSettings: MurdokuSettings;
+}
+
 export type CompiledPage =
   | CompiledTextPage
   | CompiledPuzzlePage
   | CompiledSolutionPage
-  | CompiledBlankPage;
+  | CompiledBlankPage
+  | CompiledCrosswordPage
+  | CompiledCrosswordSolutionPage
+  | CompiledGenericPuzzlePage
+  | CompiledGenericPuzzleSolutionPage
+  | CompiledMurdokuPage
+  | CompiledMurdokuSolutionPage;
 
 export interface ResolvedTocEntry {
   title: string;
@@ -78,6 +181,46 @@ export interface ResolvedTocEntry {
 export interface CompileBookOptions {
   includeSolutions?: boolean;
   pageNumberSettings?: PageNumberSettings;
+  /** Generated crossword puzzles keyed by crossword document id. */
+  crosswordPuzzlesByDocumentId?: Map<string, CrosswordPuzzle[]>;
+  /** Per-page crossword style overrides keyed by document-local puzzle index. */
+  crosswordPageOverrides?: Map<number, Partial<CrosswordSettings>>;
+  /** Generated sudoku/maze puzzles keyed by document id. */
+  genericPuzzlesByDocumentId?: Map<string, GenericBatchPuzzle[]>;
+  /** Per-page sudoku/maze style overrides keyed by document-local puzzle index. */
+  genericPageOverrides?: Map<number, Partial<GenericPuzzleSettings>>;
+  /** Generated Murdoku puzzles keyed by Murdoku document id. */
+  murdokuPuzzlesByDocumentId?: Map<string, MurdokuPuzzle[]>;
+  /**
+   * Interleave puzzle types within each chapter (word search #1, crossword #1, …).
+   * Solutions stay at the end. Murdoku two-page units stay together.
+   */
+  mixPuzzles?: boolean;
+  /** Thematic chapter topics used to place chapter divider pages when mixing. */
+  chapterTopics?: string[];
+}
+
+/** Merge a per-page crossword override onto the document's crossword settings. */
+export function mergeCrosswordPageOverride(
+  base: CrosswordSettings,
+  override: Partial<CrosswordSettings> | undefined
+): CrosswordSettings {
+  if (!override) return base;
+  return normalizeCrosswordSettings({
+    ...base,
+    ...override,
+    core: override.core ? { ...base.core, ...override.core } : base.core,
+    typography: override.typography
+      ? { ...base.typography, ...override.typography }
+      : base.typography,
+    colors: override.colors ? { ...base.colors, ...override.colors } : base.colors,
+    bookCanvas: override.bookCanvas
+      ? { ...base.bookCanvas, ...override.bookCanvas }
+      : base.bookCanvas,
+    pageFrameSettings: override.pageFrameSettings
+      ? { ...(base.pageFrameSettings ?? {}), ...override.pageFrameSettings }
+      : base.pageFrameSettings,
+  });
 }
 
 export interface CompiledBook {
@@ -119,6 +262,15 @@ export function shouldDrawBookPageNumber(
   return true;
 }
 
+export function isCompiledSolutionKind(kind: CompiledPage['kind']): boolean {
+  return (
+    kind === 'solution' ||
+    kind === 'crossword-solution' ||
+    kind === 'generic-puzzle-solution' ||
+    kind === 'murdoku-solution'
+  );
+}
+
 interface TocSourceEntry {
   title: string;
   documentId: string;
@@ -145,6 +297,19 @@ function getPrimaryTocSettings(documents: DocumentPage[]): TocSettings {
   return normalizeTocSettings((tocDoc.settings as TextModuleSettings).tocSettings);
 }
 
+function getTextPageSubtitle(settings: TextModuleSettings): string {
+  return settings.blocks?.find((block) => block.kind === 'subtitle')?.text?.trim() || '';
+}
+
+export function formatTocTitleWithSubtitle(title: string, subtitle?: string): string {
+  const heading = title.trim().replace(/[:\s]+$/g, '');
+  const extra = (subtitle || '').trim().replace(/^[:\s]+/g, '');
+  if (!extra) return heading || title.trim();
+  if (!heading) return extra;
+  if (heading.toLowerCase().includes(extra.toLowerCase())) return heading;
+  return `${heading}: ${extra}`;
+}
+
 function resolveDocumentTocTitle(doc: DocumentPage, settings: TextModuleSettings | PuzzleModuleSettings): string {
   if (doc.moduleType === 'word-search') {
     const puzzleSettings = settings as PuzzleModuleSettings;
@@ -155,7 +320,14 @@ function resolveDocumentTocTitle(doc: DocumentPage, settings: TextModuleSettings
     );
   }
   const textSettings = settings as TextModuleSettings;
-  return textSettings.title?.trim() || doc.name;
+  const heading =
+    textSettings.blocks?.find((block) => block.kind === 'title')?.text?.trim() ||
+    textSettings.title?.trim() ||
+    doc.name;
+  if (textSettings.isChapterPage || doc.moduleType === 'title-page') {
+    return formatTocTitleWithSubtitle(heading, getTextPageSubtitle(textSettings));
+  }
+  return heading;
 }
 
 /**
@@ -213,12 +385,28 @@ export function resolveFinalTocEntries(
       const matched = filtered.find((e) => e.documentId === doc.id);
       const pageTitle = resolveDocumentTocTitle(doc, doc.settings as TextModuleSettings);
       const customTitle = toc.chapters[index]?.title?.trim();
+      const pageHeading =
+        (doc.settings as TextModuleSettings).blocks?.find((block) => block.kind === 'title')
+          ?.text?.trim() ||
+        (doc.settings as TextModuleSettings).title?.trim() ||
+        doc.name;
+      const customIsPlaceholder =
+        !customTitle ||
+        /^chapter\s+\d+$/i.test(customTitle) ||
+        customTitle === pageHeading;
       return {
-        title: customTitle || pageTitle,
+        title: customIsPlaceholder
+          ? pageTitle
+          : formatTocTitleWithSubtitle(
+              customTitle,
+              getTextPageSubtitle(doc.settings as TextModuleSettings)
+            ),
         documentId: doc.id,
         level: 1 as const,
         bookPageIndex: matched?.bookPageIndex ?? 0,
-        pageNumber: matched?.pageNumber ?? null,
+        pageNumber:
+          matched?.pageNumber ||
+          resolveTocEntryPageNumber(matched?.bookPageIndex ?? 0, undefined),
       };
     });
     // Solutions still appear in chapters mode when enabled.
@@ -313,14 +501,38 @@ function shouldIncludeIndividualPuzzleEntries(
   return new Set(titles).size > 1;
 }
 
-function resolveSolutionsTocTitle(solutionPage: PendingSolutionPage): string {
-  const custom = solutionPage.wordSearchSettings.typography.customSolutionTitle?.trim();
+function resolveSolutionsTocTitle(solutionPage: AnyPendingSolutionPage): string {
+  const custom =
+    solutionPage.kind === 'crossword-solution'
+      ? solutionPage.crosswordSettings.typography.customSolutionTitle?.trim()
+      : solutionPage.kind === 'generic-puzzle-solution'
+        ? solutionPage.genericSettings.typography.customSolutionTitle?.trim()
+        : solutionPage.kind === 'murdoku-solution'
+          ? undefined
+          : solutionPage.wordSearchSettings.typography.customSolutionTitle?.trim();
   // Default product copy uses singular "Solution"; TOC always prefers plural.
   if (!custom || /^solution$/i.test(custom)) return 'Solutions';
   return custom;
 }
 
 type PendingSolutionPage = Omit<CompiledSolutionPage, 'bookPageIndex' | 'pageNumber'>;
+type PendingCrosswordSolutionPage = Omit<
+  CompiledCrosswordSolutionPage,
+  'bookPageIndex' | 'pageNumber'
+>;
+type PendingGenericSolutionPage = Omit<
+  CompiledGenericPuzzleSolutionPage,
+  'bookPageIndex' | 'pageNumber'
+>;
+type PendingMurdokuSolutionPage = Omit<
+  CompiledMurdokuSolutionPage,
+  'bookPageIndex' | 'pageNumber'
+>;
+type AnyPendingSolutionPage =
+  | PendingSolutionPage
+  | PendingCrosswordSolutionPage
+  | PendingGenericSolutionPage
+  | PendingMurdokuSolutionPage;
 
 export function getTitleWordsForDocument(
   documentPages: DocumentPage[],
@@ -328,7 +540,7 @@ export function getTitleWordsForDocument(
   fallback: TitleWordsSettings
 ): TitleWordsSettings {
   const doc = documentPages.find((page) => page.id === documentId);
-  if (doc?.moduleType === 'word-search') {
+  if (doc && isPuzzleModuleType(doc.moduleType)) {
     return (doc.settings as PuzzleModuleSettings).titleWords ?? fallback;
   }
   return fallback;
@@ -341,8 +553,21 @@ export function compileBook(
 ): CompiledBook {
   const includeSolutions = options.includeSolutions ?? true;
   const pageNumberSettings = options.pageNumberSettings;
+  const crosswordPuzzlesByDocumentId =
+    options.crosswordPuzzlesByDocumentId ?? new Map<string, CrosswordPuzzle[]>();
+  const crosswordPageOverrides =
+    options.crosswordPageOverrides ?? new Map<number, Partial<CrosswordSettings>>();
+  const genericPuzzlesByDocumentId =
+    options.genericPuzzlesByDocumentId ?? new Map<string, GenericBatchPuzzle[]>();
+  const genericPageOverrides =
+    options.genericPageOverrides ?? new Map<number, Partial<GenericPuzzleSettings>>();
+  const murdokuPuzzlesByDocumentId =
+    options.murdokuPuzzlesByDocumentId ?? new Map<string, MurdokuPuzzle[]>();
   const pages: CompiledPage[] = [];
   const pendingSolutions: PendingSolutionPage[] = [];
+  const pendingCrosswordSolutions: PendingCrosswordSolutionPage[] = [];
+  const pendingGenericSolutions: PendingGenericSolutionPage[] = [];
+  const pendingMurdokuSolutions: PendingMurdokuSolutionPage[] = [];
   const tocSources: TocSourceEntry[] = [];
 
   for (const doc of documents) {
@@ -369,6 +594,275 @@ export function compileBook(
           level: 1,
           pageIndex,
         });
+      }
+      continue;
+    }
+
+    if (doc.moduleType === 'crossword') {
+      const moduleSettings = doc.settings as PuzzleModuleSettings;
+      const rawCw = normalizeCrosswordSettings(
+        moduleSettings.crosswordSettings ?? getDefaultCrosswordSettings()
+      );
+      const docCrosswords = crosswordPuzzlesByDocumentId.get(doc.id) ?? [];
+      if (docCrosswords.length === 0) continue;
+
+      const docLayoutSettings = moduleSettings.wordSearchSettings ?? getDefaultWordSearchSettings();
+      const cw = applyCrosswordAutoFit(rawCw, docLayoutSettings, docCrosswords);
+      const cwForIndex = (idx: number) =>
+        mergeCrosswordPageOverride(cw, crosswordPageOverrides.get(idx));
+      const startNumber = cw.core.puzzlesStartingNumber;
+      const listIndividualCrosswords = docCrosswords.length > 1;
+
+      if (!listIndividualCrosswords) {
+        tocSources.push({
+          title:
+            resolveCrosswordPuzzleTitle({
+              typography: cw.typography,
+              puzzleIndex: 0,
+              puzzlesStartingNumber: startNumber,
+              fallback: doc.name,
+            }) || doc.name,
+          documentId: doc.id,
+          level: 1,
+          pageIndex: pages.length,
+        });
+      }
+
+      for (let i = 0; i < docCrosswords.length; i++) {
+        const puzzle = docCrosswords[i];
+        puzzle.puzzleIndexInDocument = i;
+        puzzle.puzzleNumber = startNumber + i;
+        const pageIndex = pages.length;
+        pages.push({
+          kind: 'crossword',
+          ...baseMeta,
+          bookPageIndex: pageIndex,
+          pageNumber: null,
+          puzzle,
+          puzzleIndexInDocument: i,
+          crosswordSettings: cwForIndex(i),
+        });
+        if (listIndividualCrosswords) {
+          tocSources.push({
+            title:
+              resolveCrosswordPuzzleTitle({
+                typography: cw.typography,
+                puzzleIndex: i,
+                puzzlesStartingNumber: startNumber,
+                fallback: doc.name,
+              }) || `${doc.name} ${startNumber + i}`,
+            documentId: doc.id,
+            level: 1,
+            pageIndex,
+          });
+        }
+
+        if (cw.bookCanvas.includePageBetweenPuzzleAndSolutions) {
+          pages.push({
+            kind: 'blank',
+            ...baseMeta,
+            bookPageIndex: pages.length,
+            pageNumber: null,
+          });
+        }
+      }
+
+      if (includeSolutions) {
+        const chunkSize = cw.bookCanvas.answersPerPage || 1;
+        for (let i = 0; i < docCrosswords.length; i += chunkSize) {
+          pendingCrosswordSolutions.push({
+            kind: 'crossword-solution',
+            ...baseMeta,
+            puzzles: docCrosswords.slice(i, i + chunkSize),
+            crosswordSettings: cwForIndex(i),
+          });
+        }
+      }
+      continue;
+    }
+
+    if (doc.moduleType === 'murdoku') {
+      const moduleSettings = doc.settings as PuzzleModuleSettings;
+      const md = normalizeMurdokuSettings(
+        moduleSettings.murdokuSettings ?? getDefaultMurdokuSettings()
+      );
+      const docMurdoku = murdokuPuzzlesByDocumentId.get(doc.id) ?? [];
+      if (docMurdoku.length === 0) continue;
+
+      const startNumber = md.core.puzzlesStartingNumber;
+      const listIndividual = docMurdoku.length > 1;
+
+      if (!listIndividual) {
+        tocSources.push({
+          title: resolveMurdokuPuzzleTitle(docMurdoku[0], doc.name),
+          documentId: doc.id,
+          level: 1,
+          pageIndex: pages.length,
+        });
+      }
+
+      for (let i = 0; i < docMurdoku.length; i++) {
+        const puzzle = docMurdoku[i];
+        puzzle.puzzleIndexInDocument = i;
+        puzzle.puzzleNumber = startNumber + i;
+        const pageParts: MurdokuPagePart[] =
+          md.core.twoPagePuzzles ? ['characters', 'scene'] : ['single'];
+        let listed = false;
+        for (const pagePart of pageParts) {
+          const pageIndex = pages.length;
+          pages.push({
+            kind: 'murdoku',
+            ...baseMeta,
+            bookPageIndex: pageIndex,
+            pageNumber: null,
+            puzzle,
+            puzzleIndexInDocument: i,
+            murdokuSettings: md,
+            pagePart,
+          });
+          if (listIndividual && !listed) {
+            listed = true;
+            tocSources.push({
+              title:
+                resolveMurdokuPuzzleTitle(puzzle, `${doc.name} ${startNumber + i}`),
+              documentId: doc.id,
+              level: 1,
+              pageIndex,
+            });
+          }
+
+          if (md.bookCanvas.includePageBetweenPuzzleAndSolutions && pagePart === pageParts[pageParts.length - 1]) {
+            pages.push({
+              kind: 'blank',
+              ...baseMeta,
+              bookPageIndex: pages.length,
+              pageNumber: null,
+            });
+          }
+        }
+      }
+
+      if (includeSolutions) {
+        const chunkSize = md.bookCanvas.answersPerPage || 1;
+        for (let i = 0; i < docMurdoku.length; i += chunkSize) {
+          pendingMurdokuSolutions.push({
+            kind: 'murdoku-solution',
+            ...baseMeta,
+            puzzles: docMurdoku.slice(i, i + chunkSize),
+            murdokuSettings: md,
+          });
+        }
+      }
+      continue;
+    }
+
+    if (isGenericPuzzleModuleType(doc.moduleType)) {
+      const moduleType = doc.moduleType;
+      const moduleSettings = doc.settings as PuzzleModuleSettings;
+      const gp = normalizeGenericPuzzleSettings(
+        moduleSettings.genericPuzzleSettings ?? getDefaultGenericPuzzleSettings(moduleType),
+        moduleType
+      );
+      const docPuzzles = genericPuzzlesByDocumentId.get(doc.id) ?? [];
+      if (docPuzzles.length === 0) continue;
+
+      const gpForIndex = (idx: number) =>
+        mergeGenericPuzzlePageOverride(gp, genericPageOverrides.get(idx));
+      const startNumber = gp.core.puzzlesStartingNumber;
+      const listIndividual = docPuzzles.length > 1;
+
+      if (!listIndividual) {
+        tocSources.push({
+          title:
+            resolveGenericPuzzleTitle({
+              typography: gp.typography,
+              puzzleIndex: 0,
+              puzzlesStartingNumber: startNumber,
+              fallback: doc.name,
+            }) || doc.name,
+          documentId: doc.id,
+          level: 1,
+          pageIndex: pages.length,
+        });
+      }
+
+      docPuzzles.forEach((puzzle, i) => {
+        puzzle.puzzleIndexInDocument = i;
+        puzzle.puzzleNumber = startNumber + i;
+      });
+
+      const perPage = gp.core.puzzlesPerPage || 1;
+      for (let i = 0; i < docPuzzles.length; i += perPage) {
+        const pagePuzzles = docPuzzles.slice(i, i + perPage);
+        const pageIndex = pages.length;
+        pages.push({
+          kind: 'generic-puzzle',
+          ...baseMeta,
+          bookPageIndex: pageIndex,
+          pageNumber: null,
+          puzzleType: moduleType,
+          puzzles: pagePuzzles,
+          puzzleIndexInDocument: i,
+          genericSettings: gpForIndex(i),
+        });
+        if (listIndividual) {
+          for (let j = 0; j < pagePuzzles.length; j++) {
+            tocSources.push({
+              title:
+                resolveGenericPuzzleTitle({
+                  typography: gp.typography,
+                  puzzleIndex: i + j,
+                  puzzlesStartingNumber: startNumber,
+                  fallback: doc.name,
+                  difficulty:
+                    moduleType === 'sudoku'
+                      ? (pagePuzzles[j] as { difficulty?: string })?.difficulty
+                      : undefined,
+                  difficultyPlacement:
+                    moduleType === 'sudoku'
+                      ? gp.core.sudokuDifficultyPlacement
+                      : undefined,
+                }) || `${doc.name} ${startNumber + i + j}`,
+              documentId: doc.id,
+              level: 1,
+              pageIndex,
+            });
+          }
+        }
+      }
+
+      if (includeSolutions) {
+        if (moduleType === 'trivia') {
+          const answersPerPage = computeTriviaSolutionsPerPage({
+            answersPerColumn: gp.core.solutionsPerPage || 20,
+            solutionColumns: gp.core.triviaSolutionColumns || 3,
+          });
+          const solutionPages = packTriviaGamesForSolutionPages(
+            docPuzzles as import('./puzzles/types').TriviaPuzzle[],
+            answersPerPage
+          );
+          for (let pageIdx = 0; pageIdx < solutionPages.length; pageIdx++) {
+            const games = solutionPages[pageIdx];
+            pendingGenericSolutions.push({
+              kind: 'generic-puzzle-solution',
+              ...baseMeta,
+              puzzleType: moduleType,
+              puzzles: games,
+              genericSettings: gpForIndex(games[0]?.puzzleIndexInDocument ?? pageIdx),
+            });
+          }
+        } else {
+          const chunkSize = gp.core.solutionsPerPage || 1;
+          for (let i = 0; i < docPuzzles.length; i += chunkSize) {
+            pendingGenericSolutions.push({
+              kind: 'generic-puzzle-solution',
+              ...baseMeta,
+              puzzleType: moduleType,
+              puzzles: docPuzzles.slice(i, i + chunkSize),
+              genericSettings: gpForIndex(i),
+            });
+          }
+        }
       }
       continue;
     }
@@ -413,23 +907,27 @@ export function compileBook(
       const puzzle = docPuzzles[i];
       puzzle.puzzleIndexInDocument = i;
       puzzle.puzzleNumber = resolvePuzzleDisplayNumber(puzzle, ws, i);
-      const pageIndex = pages.length;
-      pages.push({
-        kind: 'puzzle',
-        ...baseMeta,
-        bookPageIndex: pageIndex,
-        pageNumber: null,
-        puzzle,
-        puzzleIndexInDocument: i,
-        wordSearchSettings: ws,
-      });
-      if (listIndividualPuzzles) {
-        tocSources.push({
-          title: resolvePuzzleTocTitle(puzzle, ws, titleWords),
-          documentId: doc.id,
-          level: 1,
-          pageIndex,
+      const pageParts: WordSearchPagePart[] = ws.core.twoPagePuzzles ? ['clues', 'grid'] : ['clues'];
+      for (const pagePart of pageParts) {
+        const pageIndex = pages.length;
+        pages.push({
+          kind: 'puzzle',
+          ...baseMeta,
+          bookPageIndex: pageIndex,
+          pageNumber: null,
+          puzzle,
+          puzzleIndexInDocument: i,
+          wordSearchSettings: ws,
+          pagePart,
         });
+        if (listIndividualPuzzles && pagePart === 'clues') {
+          tocSources.push({
+            title: resolvePuzzleTocTitle(puzzle, ws, titleWords),
+            documentId: doc.id,
+            level: 1,
+            pageIndex,
+          });
+        }
       }
 
       if (ws.bookCanvas.includePageBetweenPuzzleAndSolutions) {
@@ -456,8 +954,14 @@ export function compileBook(
   }
 
   // All solution pages from every document are appended at the end of the book.
+  const allPendingSolutions: AnyPendingSolutionPage[] = [
+    ...pendingSolutions,
+    ...pendingCrosswordSolutions,
+    ...pendingGenericSolutions,
+    ...pendingMurdokuSolutions,
+  ];
   let firstSolutionPageIndex: number | null = null;
-  for (const solutionPage of pendingSolutions) {
+  for (const solutionPage of allPendingSolutions) {
     if (firstSolutionPageIndex === null) {
       firstSolutionPageIndex = pages.length;
     }
@@ -465,16 +969,33 @@ export function compileBook(
       ...solutionPage,
       bookPageIndex: pages.length,
       pageNumber: null,
-    });
+    } as CompiledPage);
   }
 
-  if (includeSolutions && pendingSolutions.length > 0 && firstSolutionPageIndex !== null) {
+  if (includeSolutions && allPendingSolutions.length > 0 && firstSolutionPageIndex !== null) {
     tocSources.push({
-      title: resolveSolutionsTocTitle(pendingSolutions[0]),
+      title: resolveSolutionsTocTitle(allPendingSolutions[0]),
       documentId: TOC_SOLUTIONS_DOCUMENT_ID,
       level: 1,
       pageIndex: firstSolutionPageIndex,
     });
+  }
+
+  if (options.mixPuzzles) {
+    const mixed = reorderCompiledPagesForMixedPuzzles(pages, {
+      chapterTopics: options.chapterTopics,
+    });
+    const newIndexByOld = new Map<number, number>();
+    mixed.forEach((page, index) => {
+      newIndexByOld.set(page.bookPageIndex, index);
+    });
+    pages.length = 0;
+    pages.push(...mixed);
+    for (let i = tocSources.length - 1; i >= 0; i--) {
+      const next = newIndexByOld.get(tocSources[i]!.pageIndex);
+      if (next === undefined) tocSources.splice(i, 1);
+      else tocSources[i]!.pageIndex = next;
+    }
   }
 
   // Assign page numbers
@@ -490,9 +1011,7 @@ export function compileBook(
     documentId: src.documentId,
     level: src.level,
     bookPageIndex: src.pageIndex,
-    pageNumber: pageNumberSettings
-      ? resolveBookPageNumberText(src.pageIndex, pageNumberSettings)
-      : String(src.pageIndex + 1),
+    pageNumber: resolveTocEntryPageNumber(src.pageIndex, pageNumberSettings),
   }));
 
   const primaryTocSettings = getPrimaryTocSettings(documents);
@@ -637,16 +1156,66 @@ export function compileBook(
   };
 }
 
-/** Find the 0-based book page index for a document's first puzzle page (or text page). */
+/** Compiled solution pages for one document tab, in book order. */
+export function getCompiledSolutionPagesForDocument(
+  compiled: CompiledBook,
+  documentId: string
+): CompiledPage[] {
+  return compiled.pages.filter(
+    (page) =>
+      isCompiledSolutionKind(page.kind) && page.sourceDocumentId === documentId
+  );
+}
+
+/**
+ * 0-based book page index for a document's solution sheet.
+ * Accounts for front matter and every other document tab — solutions live at
+ * the end of the compiled book, not at local index 0.
+ */
+export function findBookPageIndexForSolution(
+  compiled: CompiledBook,
+  documentId: string,
+  solutionPageIndexInDocument: number
+): number | null {
+  const pages = getCompiledSolutionPagesForDocument(compiled, documentId);
+  if (pages.length === 0) return null;
+  const page =
+    pages[Math.max(0, Math.min(pages.length - 1, solutionPageIndexInDocument))];
+  return page ? page.bookPageIndex : null;
+}
+
+/** Find the 0-based book page index for a document puzzle/text page. */
 export function findBookPageIndexForDocument(
   compiled: CompiledBook,
   documentId: string,
-  puzzleIndexInDocument = 0
+  puzzleIndexInDocument = 0,
+  options?: { murdokuPagePart?: MurdokuPagePart }
 ): number | null {
   const page = compiled.pages.find((p) => {
     if (p.sourceDocumentId !== documentId) return false;
     if (p.kind === 'puzzle') {
+      if (options?.murdokuPagePart) return false;
       return p.puzzleIndexInDocument === puzzleIndexInDocument;
+    }
+    if (p.kind === 'crossword') {
+      return p.puzzleIndexInDocument === puzzleIndexInDocument;
+    }
+    if (p.kind === 'murdoku') {
+      const part = options?.murdokuPagePart;
+      if (part) {
+        return (
+          p.puzzleIndexInDocument === puzzleIndexInDocument && p.pagePart === part
+        );
+      }
+      return p.puzzleIndexInDocument === puzzleIndexInDocument && p.pagePart !== 'scene';
+    }
+    if (p.kind === 'generic-puzzle') {
+      // Multi-per-page chunks store the first puzzle index of the page.
+      const start = p.puzzleIndexInDocument ?? 0;
+      const count = Math.max(1, p.puzzles?.length ?? 1);
+      return (
+        puzzleIndexInDocument >= start && puzzleIndexInDocument < start + count
+      );
     }
     if (puzzleIndexInDocument === 0 && p.kind === 'text') return true;
     return false;
@@ -654,7 +1223,121 @@ export function findBookPageIndexForDocument(
   return page ? page.bookPageIndex : null;
 }
 
+/** Book page index to paint on the canvas, or undefined when this page is unnumbered. */
+export function visibleBookPageIndex(
+  compiled: CompiledBook | null | undefined,
+  bookPageIndex: number | null | undefined
+): number | undefined {
+  if (typeof bookPageIndex !== 'number') return undefined;
+  if (compiled && !shouldDrawBookPageNumber(bookPageIndex, compiled.pages)) {
+    return undefined;
+  }
+  return bookPageIndex;
+}
+
 export { formatTocLines };
+
+/** Group generated sudoku/maze puzzles by their document id. */
+export function groupGenericPuzzlesByDocument(
+  puzzles: GenericBatchPuzzle[],
+  documents: DocumentPage[]
+): Map<string, GenericBatchPuzzle[]> {
+  const map = new Map<string, GenericBatchPuzzle[]>();
+  for (const doc of documents) {
+    if (isGenericPuzzleModuleType(doc.moduleType)) map.set(doc.id, []);
+  }
+
+  for (const puzzle of puzzles) {
+    const docId = puzzle.pageId;
+    if (docId && map.has(docId)) {
+      map.get(docId)!.push(puzzle);
+      continue;
+    }
+    // Fall back to the first document whose module type matches the puzzle type.
+    const fallback = documents.find((d) => d.moduleType === puzzle.type);
+    if (fallback) {
+      if (!map.has(fallback.id)) map.set(fallback.id, []);
+      map.get(fallback.id)!.push(puzzle);
+    }
+  }
+  return map;
+}
+
+/** Group generated crossword puzzles by their crossword document id. */
+export function groupCrosswordPuzzlesByDocument(
+  puzzles: CrosswordPuzzle[],
+  documents: DocumentPage[]
+): Map<string, CrosswordPuzzle[]> {
+  const map = new Map<string, CrosswordPuzzle[]>();
+  for (const doc of documents) {
+    if (doc.moduleType === 'crossword') map.set(doc.id, []);
+  }
+
+  for (const puzzle of puzzles) {
+    const docId = puzzle.pageId;
+    if (docId && map.has(docId)) {
+      map.get(docId)!.push(puzzle);
+      continue;
+    }
+    const firstCw = documents.find((d) => d.moduleType === 'crossword');
+    if (firstCw) {
+      if (!map.has(firstCw.id)) map.set(firstCw.id, []);
+      map.get(firstCw.id)!.push(puzzle);
+    }
+  }
+
+  // Keep document order stable for pagination.
+  for (const [docId, list] of map) {
+    map.set(
+      docId,
+      [...list].sort(
+        (a, b) => (a.puzzleIndexInDocument ?? 0) - (b.puzzleIndexInDocument ?? 0)
+      )
+    );
+  }
+
+  // Ensure every crossword document in documents has generated puzzles if missing
+  for (const doc of documents) {
+    if (doc.moduleType === 'crossword' && (map.get(doc.id)?.length ?? 0) === 0) {
+      map.set(doc.id, buildCrosswordPuzzlesForDocumentPage(doc));
+    }
+  }
+  return map;
+}
+
+/** Group generated Murdoku puzzles by their Murdoku document id. */
+export function groupMurdokuPuzzlesByDocument(
+  puzzles: MurdokuPuzzle[],
+  documents: DocumentPage[]
+): Map<string, MurdokuPuzzle[]> {
+  const map = new Map<string, MurdokuPuzzle[]>();
+  for (const doc of documents) {
+    if (doc.moduleType === 'murdoku') map.set(doc.id, []);
+  }
+
+  for (const puzzle of puzzles) {
+    const docId = puzzle.pageId;
+    if (docId && map.has(docId)) {
+      map.get(docId)!.push(puzzle);
+      continue;
+    }
+    const first = documents.find((d) => d.moduleType === 'murdoku');
+    if (first) {
+      if (!map.has(first.id)) map.set(first.id, []);
+      map.get(first.id)!.push(puzzle);
+    }
+  }
+
+  for (const [docId, list] of map) {
+    map.set(
+      docId,
+      [...list].sort(
+        (a, b) => (a.puzzleIndexInDocument ?? 0) - (b.puzzleIndexInDocument ?? 0)
+      )
+    );
+  }
+  return map;
+}
 
 /** Group batch puzzles by document page id for the compiler. */
 export function groupPuzzlesByDocument(

@@ -33,7 +33,10 @@ export function CanvasPageWordListEditor({
   const { batchPuzzles, puzzleGenerationVersion } = useApp();
 
   const puzzle = batchPuzzles[pageIndex];
-  const wordsPerPuzzle = Math.max(1, draftWordListSettings.wordsPerPuzzle);
+  const wordsPerPuzzle = Math.max(
+    1,
+    draftWordListSettings.oneWordPerPuzzle ? 1 : draftWordListSettings.wordsPerPuzzle
+  );
   const [draft, setDraft] = useState('');
   const lastSyncKeyRef = useRef('');
 

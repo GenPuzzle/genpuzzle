@@ -16,8 +16,12 @@ import {
 } from '@/lib/project-file';
 import { exportBookAsPdf, exportBookAsPpt, canExportBook } from '@/lib/book-export-actions';
 import { useBookExportInput } from '@/hooks/useBookExportInput';
+import { useOptionalAppBusy } from '@/lib/app-busy-context';
+import { progressFromStatus, startSoftProgress } from '@/lib/busy-progress';
 import { UnsavedChangesDialog } from '@/components/UnsavedChangesDialog';
 import { HeaderExpandButton } from '@/components/HeaderExpandButton';
+import { NewProjectChoiceDialog } from '@/components/ai/NewProjectChoiceDialog';
+import { AiProjectWizard } from '@/components/ai/AiProjectWizard';
 import { toast } from 'sonner';
 import {
   FileDown,
@@ -38,12 +42,15 @@ interface AppFileMenuProps {
 
 export function AppFileMenu({ onShare, shareEnabled = false }: AppFileMenuProps) {
   const app = useApp();
+  const { showBusy, updateBusy, hideBusy } = useOptionalAppBusy();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [unsavedDialogOpen, setUnsavedDialogOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingPpt, setExportingPpt] = useState(false);
+  const [choiceOpen, setChoiceOpen] = useState(false);
+  const [aiWizardOpen, setAiWizardOpen] = useState(false);
 
   const exportInput = useBookExportInput();
 
@@ -52,19 +59,39 @@ export function AppFileMenu({ onShare, shareEnabled = false }: AppFileMenuProps)
       toast.error('Add a document before saving your project');
       return;
     }
-    const snapshot = app.buildProjectSnapshot();
-    downloadGpProject(snapshot);
-    app.markProjectSaved();
-    toast.success('Project saved');
-  }, [app]);
+    showBusy('Saving project…', 10);
+    const stopSoft = startSoftProgress((p) => updateBusy({ progress: p }), {
+      start: 10,
+      cap: 95,
+      stepMs: 40,
+      step: 12,
+    });
+    try {
+      const snapshot = app.buildProjectSnapshot();
+      downloadGpProject(snapshot);
+      app.markProjectSaved();
+      stopSoft();
+      toast.success('Project saved');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to save project');
+    } finally {
+      stopSoft();
+      // Brief beat so the bar is visible on fast saves.
+      window.setTimeout(() => hideBusy(), 180);
+    }
+  }, [app, showBusy, updateBusy, hideBusy]);
 
   const hasDocuments = app.documentPages.length > 0;
   const exportEnabled = canExportBook(exportInput);
 
-  const runNewProject = useCallback(() => {
+  const runManualNewProject = useCallback(() => {
     app.resetToNewProject();
     toast.success('New project created');
   }, [app]);
+
+  const openNewProjectChoice = useCallback(() => {
+    setChoiceOpen(true);
+  }, []);
 
   const requestNewProject = useCallback(() => {
     setMenuOpen(false);
@@ -73,8 +100,8 @@ export function AppFileMenu({ onShare, shareEnabled = false }: AppFileMenuProps)
       setUnsavedDialogOpen(true);
       return;
     }
-    runNewProject();
-  }, [app.isProjectDirty, app.documentPages.length, runNewProject]);
+    openNewProjectChoice();
+  }, [app.isProjectDirty, app.documentPages.length, openNewProjectChoice]);
 
   const requestOpenProject = useCallback(() => {
     setMenuOpen(false);
@@ -91,19 +118,31 @@ export function AppFileMenu({ onShare, shareEnabled = false }: AppFileMenuProps)
     event.target.value = '';
     if (!file) return;
 
+    showBusy(`Opening “${file.name}”…`, 8);
+    const stopSoft = startSoftProgress((p) => updateBusy({ progress: p }), {
+      start: 8,
+      cap: 88,
+      stepMs: 90,
+      step: 6,
+    });
     try {
       const project = await readGpProjectFromFile(file);
+      updateBusy({ label: 'Loading project…', progress: 92 });
       app.loadProjectSnapshot(project);
+      stopSoft();
       toast.success(`Opened "${project.projectName}"`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to open project');
+    } finally {
+      stopSoft();
+      hideBusy();
     }
   };
 
   const handleUnsavedSave = async () => {
     handleSaveProject();
     if (pendingAction === 'new') {
-      runNewProject();
+      openNewProjectChoice();
     } else if (pendingAction === 'open') {
       fileInputRef.current?.click();
     }
@@ -112,7 +151,7 @@ export function AppFileMenu({ onShare, shareEnabled = false }: AppFileMenuProps)
 
   const handleUnsavedDiscard = () => {
     if (pendingAction === 'new') {
-      runNewProject();
+      openNewProjectChoice();
     } else if (pendingAction === 'open') {
       fileInputRef.current?.click();
     }
@@ -122,12 +161,21 @@ export function AppFileMenu({ onShare, shareEnabled = false }: AppFileMenuProps)
   const handleExportPdf = async () => {
     setMenuOpen(false);
     setExportingPdf(true);
+    showBusy('Exporting PDF…', 4);
     try {
-      await exportBookAsPdf(exportInput, app.projectName);
+      await exportBookAsPdf(exportInput, app.projectName, (status) => {
+        const progress = progressFromStatus(status);
+        updateBusy({
+          label: status,
+          ...(progress !== undefined ? { progress } : {}),
+        });
+      });
+      updateBusy({ label: 'PDF ready', progress: 100 });
       toast.success('PDF downloaded');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'PDF export failed');
     } finally {
+      hideBusy();
       setExportingPdf(false);
     }
   };
@@ -135,14 +183,25 @@ export function AppFileMenu({ onShare, shareEnabled = false }: AppFileMenuProps)
   const handleExportPpt = async () => {
     setMenuOpen(false);
     setExportingPpt(true);
+    showBusy('Exporting PowerPoint…', 4);
     try {
-      await exportBookAsPpt(exportInput, (status) => toast.loading(status, { id: 'ppt-export' }), app.projectName);
-      toast.dismiss('ppt-export');
+      await exportBookAsPpt(
+        exportInput,
+        (status) => {
+          const progress = progressFromStatus(status);
+          updateBusy({
+            label: status,
+            ...(progress !== undefined ? { progress } : {}),
+          });
+        },
+        app.projectName
+      );
+      updateBusy({ label: 'PowerPoint ready', progress: 100 });
       toast.success('PowerPoint saved');
     } catch (error) {
-      toast.dismiss('ppt-export');
       toast.error(error instanceof Error ? error.message : 'PPT export failed');
     } finally {
+      hideBusy();
       setExportingPpt(false);
     }
   };
@@ -225,6 +284,21 @@ export function AppFileMenu({ onShare, shareEnabled = false }: AppFileMenuProps)
         onDiscard={handleUnsavedDiscard}
         title="Save your work?"
         description="You have unsaved changes. Save before starting a new project or opening another file?"
+      />
+
+      <NewProjectChoiceDialog
+        open={choiceOpen}
+        onOpenChange={setChoiceOpen}
+        onChooseManual={runManualNewProject}
+        onChooseAi={() => setAiWizardOpen(true)}
+      />
+
+      <AiProjectWizard
+        open={aiWizardOpen}
+        onClose={() => setAiWizardOpen(false)}
+        onComplete={() => {
+          /* already in editor */
+        }}
       />
     </>
   );

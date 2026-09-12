@@ -12,6 +12,9 @@ export function computeWordSearchGenerationFingerprint(
     lettersDown: core.lettersDown,
     numberOfPuzzles: core.numberOfPuzzles,
     wordsPerPuzzle: wordList.wordsPerPuzzle,
+    oneWordPerPuzzle: Boolean(wordList.oneWordPerPuzzle),
+    wordRepeatCount: wordList.wordRepeatCount ?? 5,
+    fillWithWordLettersOnly: Boolean(wordList.fillWithWordLettersOnly),
     allowRight: core.allowRight,
     allowLeft: core.allowLeft,
     allowDown: core.allowDown,
@@ -21,5 +24,11 @@ export function computeWordSearchGenerationFingerprint(
     allowDiagonalDownReverse: core.allowDiagonalDownReverse,
     allowDiagonalUpReverse: core.allowDiagonalUpReverse,
     aiLanguage: wordList.aiLanguage,
+    shapeWordSearchEnabled: Boolean(core.shapeWordSearchEnabled),
+    shapeMaskMode: core.shapeMaskMode ?? 'common',
+    shapeMaskImage: core.shapeMaskImage ? core.shapeMaskImage.length : 0,
+    shapeMaskImages: (core.shapeMaskImages ?? []).map((img) => (img ? img.length : 0)),
+    shapeMaskAlphaThreshold: core.shapeMaskAlphaThreshold ?? 40,
+    shapeMaskFit: core.shapeMaskFit ?? 'contain',
   });
 }

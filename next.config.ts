@@ -1,8 +1,24 @@
 import type { NextConfig } from "next";
 import path from "path";
+import os from "os";
 
 /** Keep Turbopack/build rooted in genpuzzle/ (parent folder also has a package-lock.json). */
 const projectRoot = path.resolve(__dirname);
+
+/** Current LAN IPv4 addresses so phones on Wi‑Fi can load /_next/* in dev. */
+function getLanDevOrigins(): string[] {
+  const origins = new Set<string>();
+  for (const nets of Object.values(os.networkInterfaces())) {
+    for (const net of nets ?? []) {
+      const family = String(net.family);
+      if ((family === "IPv4" || family === "4") && !net.internal && net.address) {
+        origins.add(net.address);
+        origins.add(`http://${net.address}:3000`);
+      }
+    }
+  }
+  return [...origins];
+}
 
 const nextConfig: NextConfig = {
   outputFileTracingRoot: projectRoot,
@@ -96,10 +112,13 @@ const nextConfig: NextConfig = {
     ];
   },
   allowedDevOrigins: [
+    "127.0.0.1",
+    "localhost",
+    "app.localhost",
     "http://127.0.0.1:3000",
     "http://localhost:3000",
     "http://app.localhost:3000",
-    "http://192.168.11.102:3000",
+    ...getLanDevOrigins(),
   ],
   images: {
     remotePatterns: [

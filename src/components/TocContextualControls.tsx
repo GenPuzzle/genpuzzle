@@ -8,12 +8,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Checkbox } from '@/components/ui/checkbox';
 import { SliderField } from '@/components/ui/slider-field';
 import { Button } from '@/components/ui/button';
+import { MiniColorInput } from '@/components/ui/color-input';
 import { FloatingPanelShell } from '@/components/FloatingPanelShell';
 import { TocFormIcon } from '@/components/TocFormIcon';
-import { PUBLISHING_FONTS } from '@/lib/publishing-fonts';
+import { PUBLISHING_FONTS, selectPublishingFont } from '@/lib/publishing-fonts';
 import type { DocumentPage, TextModuleSettings, PuzzleModuleSettings } from '@/lib/document-model';
 import type { WordSearchSettings } from '@/lib/puzzles/types';
 import {
+  formatTocTitleWithSubtitle,
   getDocumentsAfterToc,
   getTitlePagesAfterToc,
   isDocumentListedInToc,
@@ -31,6 +33,7 @@ import {
 import { tocEntryOverrideKey } from '@/lib/toc-layout';
 import { resolveTextPageTextColor } from '@/lib/text-page-settings';
 import { isSeparatorTitlePage } from '@/lib/insert-separator-page';
+import { cn } from '@/lib/utils';
 import './canvas-contextual-controls.css';
 
 type TocPanelTab = 'page' | 'content' | 'layout' | 'type' | 'advanced';
@@ -42,7 +45,24 @@ function resolveCandidateLabel(doc: DocumentPage): string {
   }
   if (doc.moduleType === 'table-of-contents') return doc.name;
   const settings = doc.settings as TextModuleSettings;
-  return settings.title?.trim() || doc.name;
+  const heading =
+    settings.blocks?.find((block) => block.kind === 'title')?.text?.trim() ||
+    settings.title?.trim() ||
+    doc.name;
+  const subtitle = settings.blocks?.find((block) => block.kind === 'subtitle')?.text?.trim();
+  return formatTocTitleWithSubtitle(heading, subtitle);
+}
+
+export interface TocContextualControlsProps {
+  pageName: string;
+  settings: TextModuleSettings;
+  globalSettings: WordSearchSettings;
+  documentPages?: DocumentPage[];
+  /** Current compiled TOC entries (for title / page-number editors) */
+  tocEntries?: ResolvedTocEntry[];
+  onSettingsChange: (updates: Partial<TextModuleSettings>) => void;
+  onClose: () => void;
+  variant?: 'floating' | 'sidebar';
 }
 
 export function TocContextualControls({
@@ -53,16 +73,8 @@ export function TocContextualControls({
   tocEntries = [],
   onSettingsChange,
   onClose,
-}: {
-  pageName: string;
-  settings: TextModuleSettings;
-  globalSettings: WordSearchSettings;
-  documentPages?: DocumentPage[];
-  /** Current compiled TOC entries (for title / page-number editors) */
-  tocEntries?: ResolvedTocEntry[];
-  onSettingsChange: (updates: Partial<TextModuleSettings>) => void;
-  onClose: () => void;
-}) {
+  variant = 'floating',
+}: TocContextualControlsProps) {
   const toc = normalizeTocSettings(settings.tocSettings);
   const defaultColor = resolveTextPageTextColor(settings, globalSettings);
   const [activeTab, setActiveTab] = useState<TocPanelTab>('layout');
@@ -182,25 +194,20 @@ export function TocContextualControls({
     updateToc({ chapterCount: count, chapters });
   };
 
-  const headingFont = toc.titleFontFamily || settings.fontFamily || 'Arial';
-  const entryFont = toc.entryFontFamily || settings.fontFamily || 'Arial';
+  const headingFont = selectPublishingFont(toc.titleFontFamily || settings.fontFamily);
+  const entryFont = selectPublishingFont(toc.entryFontFamily || settings.fontFamily);
+  const isSidebar = variant === 'sidebar';
 
-  return (
-    <FloatingPanelShell
-      title={`${pageName} — Table of Contents`}
-      onClose={onClose}
-      tabs={[
-        { id: 'page', label: 'Page' },
-        { id: 'content', label: 'Content' },
-        { id: 'layout', label: 'Layout' },
-        { id: 'type', label: 'Fonts' },
-        { id: 'advanced', label: 'Advanced' },
-      ]}
-      activeTabId={activeTab}
-      onTabSelect={(id) => setActiveTab(id as TocPanelTab)}
-      onTabClose={() => {}}
-    >
-      <div className="space-y-3 p-3 max-h-[70vh] overflow-y-auto">
+  const tocTabs = [
+    { id: 'page', label: 'Page' },
+    { id: 'content', label: 'Content' },
+    { id: 'layout', label: 'Layout' },
+    { id: 'type', label: 'Fonts' },
+    { id: 'advanced', label: 'Advanced' },
+  ];
+
+  const body = (
+    <div className={isSidebar ? 'space-y-3 p-1' : 'space-y-3 p-3 max-h-[70vh] overflow-y-auto'}>
         {activeTab === 'page' && (
           <div className="canvas-context-panel__section">
             <Label className="canvas-context-panel__section-label">Page</Label>
@@ -216,7 +223,7 @@ export function TocContextualControls({
               <div className="space-y-1">
                 <Label className="text-xs text-slate-500">TOC Mode</Label>
                 <Select
-                  value={settings.tocMode ?? 'auto'}
+                  value={settings.tocMode === 'manual' ? 'manual' : 'auto'}
                   onValueChange={(value) =>
                     onSettingsChange({ tocMode: value as 'auto' | 'manual' })
                   }
@@ -233,7 +240,11 @@ export function TocContextualControls({
               <div className="space-y-1">
                 <Label className="text-xs text-slate-500">Alignment</Label>
                 <Select
-                  value={settings.alignment}
+                  value={
+                    settings.alignment === 'left' || settings.alignment === 'right'
+                      ? settings.alignment
+                      : 'center'
+                  }
                   onValueChange={(value) =>
                     onSettingsChange({ alignment: value as 'left' | 'center' | 'right' })
                   }
@@ -264,7 +275,7 @@ export function TocContextualControls({
                 <div className="space-y-1">
                   <Label className="text-xs text-slate-500">Show in TOC</Label>
                   <Select
-                    value={toc.entryScope}
+                    value={toc.entryScope === 'chapters' ? 'chapters' : 'all'}
                     onValueChange={(value) => setEntryScope(value as TocEntryScope)}
                   >
                     <SelectTrigger className="h-8 text-xs">
@@ -527,8 +538,8 @@ export function TocContextualControls({
             <div className="canvas-context-panel__section">
               <Label className="canvas-context-panel__section-label">Table form</Label>
               <div className="canvas-context-panel__card space-y-2">
-                <p className="text-[10px] text-muted-foreground">
-                  Three common book table-of-contents styles.
+                <p className="text-[11px] text-slate-500">
+                  Classic uses dotted leaders. Flush aligns numbers to the right. Nested indents sub-entries.
                 </p>
                 <div className="grid grid-cols-3 gap-1.5">
                   {TOC_TABLE_FORMS.map((form) => {
@@ -559,13 +570,21 @@ export function TocContextualControls({
                     );
                   })}
                 </div>
-                <label className="flex items-center gap-2 text-xs cursor-pointer pt-1">
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-900/40">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-slate-800 dark:text-slate-100">
+                      Page numbers
+                    </p>
+                    <p className="text-[10px] leading-snug text-slate-500">
+                      Print the book page beside each chapter and entry
+                    </p>
+                  </div>
                   <Checkbox
                     checked={toc.showPageNumbers}
                     onCheckedChange={(c) => updateToc({ showPageNumbers: c === true })}
+                    aria-label="Show page numbers"
                   />
-                  Show page numbers
-                </label>
+                </div>
               </div>
             </div>
 
@@ -601,7 +620,7 @@ export function TocContextualControls({
                     label="Column Gap"
                     value={toc.columnGapPx}
                     onValueChange={(v) => updateToc({ columnGapPx: v })}
-                    min={8}
+                    min={0}
                     max={48}
                     step={1}
                     format="px"
@@ -617,7 +636,7 @@ export function TocContextualControls({
                   label="Number of TOC pages"
                   value={toc.targetPageCount}
                   onValueChange={(v) => updateToc({ targetPageCount: v, pageCountMode: 'fixed' })}
-                  min={1}
+                  min={0}
                   max={8}
                   step={1}
                 />
@@ -724,7 +743,7 @@ export function TocContextualControls({
                 label="Heading Font Size"
                 value={toc.titleFontSize ?? settings.titleFontSize ?? Math.round(settings.fontSize * 1.2)}
                 onValueChange={(v) => updateToc({ titleFontSize: v })}
-                min={12}
+                min={0}
                 max={48}
                 step={1}
               />
@@ -732,29 +751,21 @@ export function TocContextualControls({
                 label="Entry Font Size"
                 value={toc.entryFontSize ?? settings.fontSize}
                 onValueChange={(v) => updateToc({ entryFontSize: v })}
-                min={10}
+                min={0}
                 max={36}
                 step={1}
               />
               <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-xs text-slate-500">Heading Color</Label>
-                  <input
-                    type="color"
-                    value={toc.titleTextColor ?? defaultColor}
-                    onChange={(e) => updateToc({ titleTextColor: e.target.value })}
-                    className="h-8 w-full cursor-pointer rounded border border-slate-200"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs text-slate-500">Entry Color</Label>
-                  <input
-                    type="color"
-                    value={toc.entryTextColor ?? defaultColor}
-                    onChange={(e) => updateToc({ entryTextColor: e.target.value })}
-                    className="h-8 w-full cursor-pointer rounded border border-slate-200"
-                  />
-                </div>
+                <MiniColorInput
+                  label="Heading Color"
+                  value={toc.titleTextColor ?? defaultColor}
+                  onChange={(v) => updateToc({ titleTextColor: v })}
+                />
+                <MiniColorInput
+                  label="Entry Color"
+                  value={toc.entryTextColor ?? defaultColor}
+                  onChange={(v) => updateToc({ entryTextColor: v })}
+                />
               </div>
             </div>
           </div>
@@ -825,7 +836,53 @@ export function TocContextualControls({
             </div>
           </div>
         )}
+    </div>
+  );
+
+  if (isSidebar) {
+    return (
+      <div
+        className="canvas-context-panel canvas-context-panel--sidebar"
+        role="region"
+        aria-label="Table of contents controls"
+      >
+        <div className="canvas-context-panel__header canvas-context-panel__header--sidebar">
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
+              Document · This tab
+            </p>
+            <span className="canvas-context-panel__title">Table of Contents</span>
+          </div>
+        </div>
+        <div className="sidebar-edit-tabs" role="tablist" aria-label="Table of contents settings">
+          {tocTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={cn('sidebar-edit-tab', activeTab === tab.id && 'sidebar-edit-tab--active')}
+              onClick={() => setActiveTab(tab.id as TocPanelTab)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="canvas-context-panel__body">{body}</div>
       </div>
+    );
+  }
+
+  return (
+    <FloatingPanelShell
+      title={`${pageName} — Table of Contents`}
+      onClose={onClose}
+      tabs={tocTabs}
+      activeTabId={activeTab}
+      onTabSelect={(id) => setActiveTab(id as TocPanelTab)}
+      onTabClose={() => {}}
+    >
+      {body}
     </FloatingPanelShell>
   );
 }

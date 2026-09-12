@@ -63,6 +63,22 @@ export function resolveBookPageNumberText(
   return String(value);
 }
 
+/**
+ * Page number shown in a table of contents. Always returns a value so
+ * “Show page numbers” is never an empty column — even when footer numbering
+ * is off or the entry sits before start-at-page.
+ */
+export function resolveTocEntryPageNumber(
+  bookPageIndex: number,
+  settings?: PageNumberSettings | null
+): string {
+  if (settings) {
+    const printed = resolveBookPageNumberText(bookPageIndex, { ...settings, enabled: true });
+    if (printed) return printed;
+  }
+  return String(Math.max(1, Math.round(bookPageIndex) + 1));
+}
+
 /** 0-based book page index for a puzzle at `puzzleIndex` (accounts for blank separator pages). */
 export function computePuzzleBookPageIndex(
   puzzleIndex: number,

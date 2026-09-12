@@ -1,18 +1,21 @@
-import type { TextModuleSettings, TextPageBlock } from './document-model';
+import type { TextModuleSettings, TextPageBlock, DocumentModuleType } from './document-model';
 import type { WordSearchSettings } from './puzzles/types';
 import { addHeaderShapeToSlide } from './header-assembly-ppt-draw';
 import { cssPxToPoints, getPageMarginInches } from './puzzle-layout';
 import { resolveTextPageBlocks, resolveOwnershipNameLineType, ownershipNameLineIsVisible } from './text-page-blocks';
 import {
   getFrameCornerRadiusPx,
-  getOwnershipNameLineRect,
+  getOwnershipCanvasLayout,
   getTextPageBlockRectPt,
   getTextPageContentAreaPt,
   ptToIn,
   resolveTextPageFrameShapeId,
 } from './text-page-export-layout';
 import { renderImageBlockToDataUrl } from './text-page-image-export';
-import { measureTextBlockLayoutFromDom, measureOwnershipBlockLayoutFromDom } from './text-page-dom-layout';
+import {
+  measureOwnershipBlockLayoutFromDom,
+  measureTextBlockLayoutFromDom,
+} from './text-page-dom-layout';
 import { toPptColorHex } from './text-page-export-color';
 import {
   layoutRichTextLines,
@@ -24,6 +27,7 @@ import {
   resolveTextPageFrameSettings,
   resolveTextPageTextColor,
 } from './text-page-settings';
+import { buildLegacyCenteredTextLayout, wrapPreWrapLinesPt } from './text-page-legacy-layout';
 import {
   FlattenedBackgroundPptCache,
   applyFlattenedBackgroundToSlide,
@@ -36,9 +40,46 @@ import {
   buildTocExportLayout,
   isTocModuleSettings,
   parseTocEntriesFromContent,
-  tocLeaderDashPattern,
 } from './toc-export-draw';
+import { measureTextWidthPt } from './header-assembly/fit-title';
 import { normalizeTocSettings } from './toc-settings';
+
+const PPT_ZERO_MARGIN = [0, 0, 0, 0] as const;
+
+function pptFontSize(sizePt: number, min = 1): number {
+  if (!Number.isFinite(sizePt) || sizePt <= 0) return min;
+  return Math.max(min, Math.round(sizePt * 100) / 100);
+}
+
+/**
+ * CSS `line-height` as PowerPoint "Exactly" (points).
+ * `lineSpacingMultiple` is 120% of the font's built-in spacing — not CSS 1.2 —
+ * and overflows short boxes so PowerPoint shrinks the glyphs.
+ */
+function pptExactLineSpacing(lineHeightPt: number): number {
+  return pptFontSize(lineHeightPt, 0.5);
+}
+
+function pptCanvasTextOpts(opts: {
+  wrap?: boolean;
+  valign?: 'top' | 'middle';
+  charSpacingPt?: number;
+  lineHeightPt: number;
+}): Record<string, unknown> {
+  return {
+    valign: opts.valign ?? 'top',
+    margin: [...PPT_ZERO_MARGIN],
+    wrap: opts.wrap ?? false,
+    fit: 'none',
+    paraSpaceBefore: 0,
+    paraSpaceAfter: 0,
+    lineSpacing: pptExactLineSpacing(opts.lineHeightPt),
+    isTextBox: true,
+    ...(opts.charSpacingPt && Number.isFinite(opts.charSpacingPt) && opts.charSpacingPt !== 0
+      ? { charSpacing: opts.charSpacingPt }
+      : {}),
+  };
+}
 
 function hex6(hex: string | undefined, fallback = '000000'): string {
   if (!hex) return fallback;
@@ -127,6 +168,94 @@ function alignOffsetX(
   return 0;
 }
 
+function addOwnershipBlockToSlide(
+  slide: {
+    addText: (text: unknown, opts: Record<string, unknown>) => void;
+    addShape: (shape: string, opts: Record<string, unknown>) => void;
+  },
+  block: TextPageBlock,
+  rect: ReturnType<typeof getTextPageBlockRectPt>,
+  fallbackColor: string
+) {
+  const layout = getOwnershipCanvasLayout(block, rect);
+  const pptAlign =
+    block.alignment === 'left' ? 'left' : block.alignment === 'right' ? 'right' : 'center';
+  const label = block.text || '';
+  const nameLineType = resolveOwnershipNameLineType(block);
+  const measured = measureOwnershipBlockLayoutFromDom(
+    block,
+    rect.innerWidth,
+    rect.innerHeight,
+    fallbackColor,
+    nameLineType
+  );
+  const wrapped = label
+    ? wrapPreWrapLinesPt(
+        label,
+        rect.innerWidth,
+        layout.fontSizePt,
+        block.fontFamily || 'Arial',
+        !!block.bold
+      )
+    : [];
+  const lineCount = Math.max(1, measured?.textLines.length || wrapped.length || 1);
+  const firstLineTop =
+    measured?.textLines[0] != null
+      ? rect.innerTopFromPageTop + measured.textLines[0].lineTopPt
+      : layout.textTopPt;
+  const maxLabelBottom = layout.nameLine.lineTopFromPageTop;
+  const labelHeightPt = Math.max(
+    1,
+    Math.min(layout.labelBoxHeightPt * lineCount, Math.max(1, maxLabelBottom - firstLineTop))
+  );
+  const letterSpacingPt = cssPxToPoints(block.letterSpacingPx ?? 0);
+
+  if (label) {
+    slide.addText(wrapped.length > 0 ? wrapped.join('\n') : label, {
+      x: ptToIn(rect.innerLeft),
+      y: ptToIn(firstLineTop),
+      w: safeIn(ptToIn(rect.innerWidth)),
+      h: safeIn(ptToIn(labelHeightPt + 0.75)),
+      fontSize: pptFontSize(layout.fontSizePt),
+      fontFace: block.fontFamily || 'Arial',
+      color: toPptColorHex(block.textColor ?? fallbackColor, '1F2937'),
+      bold: !!block.bold,
+      italic: !!block.italic,
+      underline: block.underline ? { style: 'sng' as const } : undefined,
+      align: pptAlign,
+      ...pptCanvasTextOpts({
+        wrap: false,
+        valign: 'top',
+        lineHeightPt: layout.lineHeightPt,
+        charSpacingPt: letterSpacingPt,
+      }),
+      ...(block.rotationDeg ? { rotate: block.rotationDeg } : {}),
+    });
+  }
+
+  if (ownershipNameLineIsVisible(nameLineType)) {
+    const lineFromTop =
+      measured != null
+        ? rect.innerTopFromPageTop + measured.nameLineBottomPt
+        : layout.nameLine.lineBottomFromPageTop;
+    slide.addShape('line', {
+      x: ptToIn(rect.innerLeft),
+      y: ptToIn(lineFromTop),
+      w: safeIn(ptToIn(rect.innerWidth)),
+      h: 0,
+      line: {
+        color: toPptColorHex(block.frameBorderColor ?? block.textColor, '1F2937'),
+        width: cssPxToPoints(1),
+        ...(nameLineType === 'dashed'
+          ? { dashType: 'dash' }
+          : nameLineType === 'dotted'
+            ? { dashType: 'sysDot' }
+            : {}),
+      },
+    });
+  }
+}
+
 async function addTextBlockToSlide(
   slide: {
     addText: (text: unknown, opts: Record<string, unknown>) => void;
@@ -146,65 +275,8 @@ async function addTextBlockToSlide(
   };
 
   if (block.kind === 'ownership') {
-    const nameLineType = resolveOwnershipNameLineType(block);
-    const ownershipLayout = measureOwnershipBlockLayoutFromDom(
-      block,
-      rect.innerWidth,
-      rect.innerHeight,
-      fallbackColor,
-      nameLineType
-    );
-
-    if (ownershipLayout) {
-      for (const line of ownershipLayout.textLines) {
-        for (const run of line.runs) {
-          if (!run.text || run.text === '\n') continue;
-          const runWidthPt = measureRunWidthPt(run, spacing);
-          slide.addText(run.text, {
-            x: ptToIn(rect.innerLeft + run.xPt),
-            y: ptToIn(rect.innerTopFromPageTop + line.lineTopPt),
-            w: safeIn(ptToIn(Math.max(runWidthPt, 0.05))),
-            h: safeIn(ptToIn(line.lineHeightPt)),
-            fontSize: Math.round(run.fontSize),
-            fontFace: run.fontFamily || 'Arial',
-            color: toPptColorHex(run.color, '1F2937'),
-            bold: run.bold,
-            italic: run.italic,
-            underline: run.underline ? { style: 'sng' as const } : undefined,
-            align: 'left',
-            valign: 'top',
-            margin: 0,
-            wrap: false,
-            isTextBox: true,
-            rotate: block.rotationDeg ?? 0,
-          });
-        }
-      }
-
-      if (ownershipNameLineIsVisible(nameLineType)) {
-        const nameLine = getOwnershipNameLineRect(
-          rect,
-          block,
-          ownershipLayout.nameLineBottomPt
-        );
-        slide.addShape('line', {
-          x: ptToIn(rect.innerLeft),
-          y: ptToIn(nameLine.lineBottomFromPageTop),
-          w: safeIn(ptToIn(rect.innerWidth)),
-          h: 0,
-          line: {
-            color: toPptColorHex(block.frameBorderColor ?? block.textColor, '1F2937'),
-            width: 1,
-            ...(nameLineType === 'dashed'
-              ? { dashType: 'dash' }
-              : nameLineType === 'dotted'
-                ? { dashType: 'sysDot' }
-                : {}),
-          },
-        });
-      }
-      return;
-    }
+    addOwnershipBlockToSlide(slide, block, rect, fallbackColor);
+    return;
   }
 
   const domLines = measureTextBlockLayoutFromDom(block, rect.innerWidth, fallbackColor);
@@ -218,7 +290,7 @@ async function addTextBlockToSlide(
           y: ptToIn(rect.innerTopFromPageTop + line.lineTopPt),
           w: safeIn(ptToIn(Math.max(runWidthPt, 0.05))),
           h: safeIn(ptToIn(line.lineHeightPt)),
-          fontSize: Math.round(run.fontSize),
+          fontSize: pptFontSize(run.fontSize),
           fontFace: run.fontFamily || 'Arial',
           color: toPptColorHex(run.color, '1F2937'),
           bold: run.bold,
@@ -226,9 +298,13 @@ async function addTextBlockToSlide(
           underline: run.underline ? { style: 'sng' as const } : undefined,
           align: 'left',
           valign: 'top',
-          margin: 0,
-          wrap: false,
-          isTextBox: true,
+            margin: [...PPT_ZERO_MARGIN],
+            wrap: false,
+            fit: 'none',
+            paraSpaceBefore: 0,
+            paraSpaceAfter: 0,
+            lineSpacing: pptExactLineSpacing(line.lineHeightPt),
+            isTextBox: true,
           rotate: block.rotationDeg ?? 0,
         });
       }
@@ -254,7 +330,7 @@ async function addTextBlockToSlide(
           y: ptToIn(cursorTopPt),
           w: safeIn(ptToIn(Math.max(runWidthPt, 0.05))),
           h: safeIn(ptToIn(line.lineHeightPt)),
-          fontSize: Math.round(run.fontSize),
+          fontSize: pptFontSize(run.fontSize),
           fontFace: run.fontFamily || 'Arial',
           color: toPptColorHex(run.color, '1F2937'),
           bold: run.bold,
@@ -262,9 +338,13 @@ async function addTextBlockToSlide(
           underline: run.underline ? { style: 'sng' as const } : undefined,
           align: 'left',
           valign: 'top',
-          margin: 0,
-          wrap: false,
-          isTextBox: true,
+            margin: [...PPT_ZERO_MARGIN],
+            wrap: false,
+            fit: 'none',
+            paraSpaceBefore: 0,
+            paraSpaceAfter: 0,
+            lineSpacing: pptExactLineSpacing(line.lineHeightPt),
+            isTextBox: true,
           rotate: block.rotationDeg ?? 0,
         });
       }
@@ -302,11 +382,11 @@ async function addImageBlockToSlide(
     );
   }
 
-  const dataUrl = await renderImageBlockToDataUrl(
-    block,
-    rect.innerWidth,
-    rect.innerHeight
-  );
+  const svgSrc =
+    block.imageSrc && block.imageSrc.startsWith('data:image/svg+xml') ? block.imageSrc : null;
+  const dataUrl =
+    svgSrc ??
+    (await renderImageBlockToDataUrl(block, rect.innerWidth, rect.innerHeight));
   if (!dataUrl) return;
 
   slide.addImage({
@@ -341,21 +421,28 @@ async function addBlockToSlide(
   }
 
   if (block.frameEnabled) {
+    const borderPx = block.frameBorderThicknessPx ?? 2;
+    const strokePt = cssPxToPoints(borderPx);
+    const half = strokePt / 2;
     addHeaderShapeToSlide(
       slide,
       resolveTextPageFrameShapeId(block),
-      ptToIn(rect.left),
-      ptToIn(rect.topFromPageTop),
-      safeIn(ptToIn(rect.width)),
-      safeIn(ptToIn(rect.height)),
+      ptToIn(rect.left + half),
+      ptToIn(rect.topFromPageTop + half),
+      safeIn(ptToIn(Math.max(1, rect.width - strokePt))),
+      safeIn(ptToIn(Math.max(1, rect.height - strokePt))),
       block.frameFillColor ?? '#ffffff',
       block.frameBorderColor ?? '#1f2937',
-      block.frameBorderThicknessPx ?? 2,
+      borderPx,
       {
-        borderRadiusPx: getFrameCornerRadiusPx(
-          block,
-          rect.width * (96 / 72),
-          rect.height * (96 / 72)
+        borderRadiusPx: Math.max(
+          0,
+          getFrameCornerRadiusPx(
+            block,
+            rect.width * (96 / 72),
+            rect.height * (96 / 72)
+          ) -
+            borderPx / 2
         ),
       }
     );
@@ -374,8 +461,8 @@ function addTocModuleToSlide(
   slide: SlideLike,
   settings: TextModuleSettings,
   layoutSettings: WordSearchSettings,
-  pageWidthPt: number,
-  pageHeightPt: number,
+  _pageWidthPt: number,
+  _pageHeightPt: number,
   entries: ResolvedTocEntry[],
   pageTitle: string
 ): void {
@@ -395,106 +482,117 @@ function addTocModuleToSlide(
       layout.titleXPt
   );
 
+  const titleFontSize = pptFontSize(layout.titleFontSizePt);
+  const titleLineH = layout.titleFontSizePt * 1.2;
   slide.addText(layout.titleText, {
     x: ptToIn(layout.titleXPt),
     y: ptToIn(layout.titleYFromTopPt),
     w: safeIn(ptToIn(contentWidthPt)),
-    h: safeIn(ptToIn(layout.titleFontSizePt * 1.25)),
-    fontSize: Math.max(8, Math.round(layout.titleFontSizePt)),
+    h: safeIn(ptToIn(titleLineH + 0.75)),
+    fontSize: titleFontSize,
     fontFace: layout.titleFontFamily,
     color: titleColor,
     bold: layout.titleBold,
     align: layout.titleAlign,
-    valign: 'top',
-    margin: 0,
-    isTextBox: true,
+    ...pptCanvasTextOpts({
+      wrap: false,
+      valign: 'top',
+      lineHeightPt: titleLineH,
+    }),
   });
+
+  const entryFontSize = pptFontSize(layout.entryFontSizePt);
+  const rowH = layout.rowHeightPt;
+  const charSpacing =
+    layout.entryLetterSpacingPt > 0 ? layout.entryLetterSpacingPt : undefined;
 
   for (const column of layout.columns) {
     for (const row of column.rows) {
       const rowLeft = column.xPt + row.indentPt;
       const rowWidth = Math.max(20, column.widthPt - row.indentPt);
       const pageNum = toc.showPageNumbers ? row.pageNumber : '';
+      const simplePagePadPt = row.simple ? cssPxToPoints(8) : 0;
       const yIn = ptToIn(row.yFromTopPt);
-      const hIn = safeIn(ptToIn(layout.entryFontSizePt * 1.25));
-      const fontSize = Math.max(7, Math.round(layout.entryFontSizePt));
+      const hIn = safeIn(ptToIn(rowH + 0.5));
 
-      if (row.simple || !pageNum) {
-        const parts: Array<{ text: string; options?: Record<string, unknown> }> = [
-          { text: row.title },
-        ];
-        if (pageNum) {
-          parts.push({ text: `  ${pageNum}` });
-        }
-        slide.addText(parts, {
-          x: ptToIn(rowLeft),
-          y: yIn,
-          w: safeIn(ptToIn(rowWidth)),
-          h: hIn,
-          fontSize,
-          fontFace: layout.entryFontFamily,
-          color: entryColor,
-          bold: layout.entryBold,
-          align: 'left',
-          valign: 'top',
-          margin: 0,
-          isTextBox: true,
-        });
-        continue;
-      }
-
-      // Title (left) + page number (right); leader via underline on a spacer text box.
-      const pageBoxW = Math.min(rowWidth * 0.2, 36);
-      const titleBoxW = Math.max(20, rowWidth - pageBoxW - layout.entryGapPt);
+      const pageNumWidthPt = pageNum
+        ? measureTextWidthPt(pageNum, layout.entryFontSizePt, layout.entryFontFamily, layout.entryBold)
+        : 0;
+      const titleWidthPt = measureTextWidthPt(
+        row.title,
+        layout.entryFontSizePt,
+        layout.entryFontFamily,
+        layout.entryBold
+      );
+      const pageBoxW = Math.max(pageNumWidthPt, 8);
+      const titlePageGap = layout.entryGapPt + simplePagePadPt;
+      const titleBoxW = Math.max(
+        12,
+        pageNum ? rowWidth - pageBoxW - titlePageGap : rowWidth
+      );
 
       slide.addText(row.title, {
         x: ptToIn(rowLeft),
         y: yIn,
         w: safeIn(ptToIn(titleBoxW)),
         h: hIn,
-        fontSize,
+        fontSize: entryFontSize,
         fontFace: layout.entryFontFamily,
         color: entryColor,
         bold: layout.entryBold,
         align: 'left',
-        valign: 'top',
-        margin: 0,
-        isTextBox: true,
+        ...pptCanvasTextOpts({
+          wrap: false,
+          valign: 'middle',
+          lineHeightPt: layout.entryLineHeightPt,
+          charSpacingPt: charSpacing,
+        }),
       });
 
-      if (row.showLeader) {
-        const dash = tocLeaderDashPattern(row.leaderStyle);
-        const leaderY = row.yFromTopPt + layout.entryFontSizePt * 0.85;
-        // Approximate leader with a thin line shape.
-        slide.addShape('line', {
-          x: ptToIn(rowLeft + Math.min(titleBoxW * 0.55, titleBoxW - 8)),
-          y: ptToIn(leaderY),
-          w: safeIn(ptToIn(Math.max(8, pageBoxW + titleBoxW * 0.35))),
-          h: 0,
-          line: {
-            color: entryColor,
-            width: 0.75,
-            transparency: 55,
-            dashType: row.leaderStyle === 'dashes' ? 'dash' : 'sysDot',
-          },
+      if (pageNum) {
+        if (row.showLeader) {
+          const leaderStart = rowLeft + Math.min(titleWidthPt, titleBoxW) + layout.entryGapPt;
+          const leaderEnd = column.xPt + column.widthPt - pageBoxW - layout.entryGapPt;
+          const leaderW = leaderEnd - leaderStart;
+          if (leaderW > 4) {
+            slide.addShape('line', {
+              x: ptToIn(leaderStart),
+              y: ptToIn(row.yFromTopPt + layout.rowPadPt + layout.entryLineHeightPt * 0.72),
+              w: safeIn(ptToIn(leaderW)),
+              h: 0,
+              line: {
+                color: entryColor,
+                width: cssPxToPoints(1),
+                transparency: 55,
+                dashType:
+                  row.leaderStyle === 'dashes'
+                    ? 'dash'
+                    : row.leaderStyle === 'dots'
+                      ? 'sysDot'
+                      : undefined,
+              },
+            });
+          }
+        }
+
+        slide.addText(pageNum, {
+          x: ptToIn(column.xPt + column.widthPt - pageBoxW),
+          y: yIn,
+          w: safeIn(ptToIn(pageBoxW)),
+          h: hIn,
+          fontSize: entryFontSize,
+          fontFace: layout.entryFontFamily,
+          color: entryColor,
+          bold: layout.entryBold,
+          align: 'right',
+          ...pptCanvasTextOpts({
+            wrap: false,
+            valign: 'middle',
+            lineHeightPt: layout.entryLineHeightPt,
+            charSpacingPt: charSpacing,
+          }),
         });
-        void dash;
       }
-
-      slide.addText(pageNum, {
-        x: ptToIn(column.xPt + column.widthPt - pageBoxW),
-        y: yIn,
-        w: safeIn(ptToIn(pageBoxW)),
-        h: hIn,
-        fontSize,
-        fontFace: layout.entryFontFamily,
-        color: entryColor,
-        bold: layout.entryBold,
-        align: 'right',
-        valign: 'top',
-        margin: 0,
-        isTextBox: true,
-      });
     }
   }
 }
@@ -507,7 +605,8 @@ export async function addTextModuleSlide(
   backgroundCache: FlattenedBackgroundPptCache,
   pageTitle = 'Text Page',
   resolvedToc?: ResolvedTocEntry[],
-  suppressPageNumber = false
+  suppressPageNumber = false,
+  moduleType?: DocumentModuleType | string
 ): Promise<void> {
   const slide = prs.addSlide();
   const pageWidthPt = (layoutSettings.bookCanvas.customWidth || 8.5) * 72;
@@ -552,7 +651,7 @@ export async function addTextModuleSlide(
       pageTitle
     );
   } else {
-    const blocks = resolveTextPageBlocks(settings, pageTitle, layoutSettings);
+    const blocks = resolveTextPageBlocks(settings, pageTitle, layoutSettings, moduleType);
 
     if (blocks.length > 0) {
       for (const block of blocks) {
@@ -567,62 +666,36 @@ export async function addTextModuleSlide(
         );
       }
     } else if (!Array.isArray(settings.blocks)) {
-      // Explicit empty blocks (title/separator pages) stay blank — match canvas.
-      const marginIn = ptToIn(marginPt);
-      const contentWIn = ptToIn(pageWidthPt - marginPt * 2);
-      const titleSize = settings.fontSize;
-      const bodySize = settings.fontSize;
-      const titleLine = (settings.title || '').trim();
-      const bodyText = (settings.content || '').trim();
-      const alignment = settings.alignment || 'center';
-      const textColor = hex6(resolveTextPageTextColor(settings, layoutSettings), '1F2937');
-      const fontFace = settings.fontFamily || 'Arial';
-      const pptAlign = alignment === 'left' ? 'left' : alignment === 'right' ? 'right' : 'center';
-      const titleLines = titleLine ? [titleLine] : [];
-      const bodyLines = bodyText ? bodyText.split('\n') : [];
-      const lineHeightIn = ptToIn(bodySize * 1.35);
-      const titleLineHeightIn = ptToIn(titleSize * 1.2);
-      const gapAfterTitleIn =
-        titleLines.length > 0 && bodyLines.length > 0 ? lineHeightIn * 0.5 : 0;
-      const totalHeightIn =
-        titleLines.length * titleLineHeightIn +
-        gapAfterTitleIn +
-        bodyLines.length * lineHeightIn;
-      let cursorYIn = Math.max(marginIn, (pageH - totalHeightIn) / 2);
-
-      for (const line of titleLines) {
-        slide.addText(line, {
-          x: marginIn,
-          y: cursorYIn,
-          w: contentWIn,
-          h: titleLineHeightIn,
-          fontSize: Math.round(titleSize),
-          fontFace,
+      const layout = buildLegacyCenteredTextLayout(
+        settings,
+        layoutSettings,
+        pageWidthPt,
+        pageHeightPt,
+        pageTitle
+      );
+      const pptAlign =
+        layout.alignment === 'left' ? 'left' : layout.alignment === 'right' ? 'right' : 'center';
+      const textColor = hex6(layout.color, '1F2937');
+      for (const line of layout.lines) {
+        slide.addText(line.text, {
+          x: ptToIn(layout.boxLeftPt),
+          y: ptToIn(line.topPt),
+          w: safeIn(ptToIn(layout.boxWidthPt)),
+          h: safeIn(ptToIn(line.lineHeightPt)),
+          fontSize: pptFontSize(line.fontSizePt),
+          fontFace: layout.fontFamily,
           color: textColor,
-          bold: true,
+          bold: line.bold,
           align: pptAlign,
-          valign: 'top',
-          margin: 0,
-          isTextBox: true,
+          valign: 'middle',
+            margin: [...PPT_ZERO_MARGIN],
+            wrap: false,
+            fit: 'none',
+            paraSpaceBefore: 0,
+            paraSpaceAfter: 0,
+            lineSpacing: pptExactLineSpacing(line.lineHeightPt),
+            isTextBox: true,
         });
-        cursorYIn += titleLineHeightIn;
-      }
-      if (gapAfterTitleIn > 0) cursorYIn += gapAfterTitleIn;
-      for (const line of bodyLines) {
-        slide.addText(line, {
-          x: marginIn,
-          y: cursorYIn,
-          w: contentWIn,
-          h: lineHeightIn,
-          fontSize: Math.round(bodySize),
-          fontFace,
-          color: textColor,
-          align: pptAlign,
-          valign: 'top',
-          margin: 0,
-          isTextBox: true,
-        });
-        cursorYIn += lineHeightIn;
       }
     }
   }

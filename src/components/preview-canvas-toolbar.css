@@ -51,6 +51,75 @@
   min-width: 0;
 }
 
+.preview-all-pages-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  min-height: 2.25rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 0.55rem;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.preview-all-pages-close:hover {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+
+.preview-all-pages-close:active {
+  background: #fee2e2;
+}
+
+.preview-all-pages-close__label {
+  line-height: 1;
+}
+
+@media (max-width: 479px) {
+  .preview-all-pages-close__label {
+    display: none;
+  }
+
+  .preview-all-pages-close {
+    width: 2.5rem;
+    min-width: 2.5rem;
+    padding: 0;
+  }
+}
+
+.preview-top-toolbar--all-pages .preview-top-toolbar__primary {
+  width: 100%;
+}
+
+@media (min-width: 1024px) {
+  .preview-top-toolbar--all-pages {
+    justify-content: space-between;
+  }
+
+  .preview-top-toolbar--all-pages .preview-top-toolbar__primary {
+    flex: 1;
+  }
+
+  /* Primary close is for mobile/tablet; desktop uses the right-side close */
+  .preview-top-toolbar--all-pages .preview-top-toolbar__primary .preview-all-pages-close {
+    display: none;
+  }
+}
+
+@media (max-width: 1023px) {
+  .preview-top-toolbar--all-pages .preview-top-toolbar__guides--desktop {
+    display: none;
+  }
+}
+
 .preview-top-toolbar__controls {
   display: none;
   flex-wrap: wrap;
@@ -119,18 +188,140 @@
   color: #334155;
 }
 
+.preview-puzzle-solution-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  flex-wrap: wrap;
+}
+
+.preview-puzzle-solution-controls .custom-checkbox-container {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.preview-both-pages {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1.5rem;
+}
+
+.preview-both-pages__pane {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  width: var(--preview-page-width, 612px);
+  flex: 0 0 auto;
+}
+
+.preview-both-pages__label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+@media (max-width: 1100px) {
+  .preview-both-pages {
+    flex-direction: column;
+    align-items: center;
+  }
+}
+
 /* Stacked controls for tablet / narrow desktop */
 .preview-compact-toolbar {
   display: block;
   border-bottom: 1px solid #e2e8f0;
   background: #fff;
-  padding: 0.75rem;
+  padding: 0.5rem 0.625rem;
   flex-shrink: 0;
 }
 
 @media (min-width: 1024px) {
   .preview-compact-toolbar {
     display: none;
+  }
+}
+
+.preview-compact-toolbar .preview-puzzle-solution-controls {
+  width: 100%;
+}
+
+.preview-compact-toolbar .preview-puzzle-solution-controls .preview-segmented {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.preview-both-pages-scale {
+  width: max-content;
+}
+
+/* Phone: one denser control strip */
+@media (max-width: 767px) {
+  .preview-top-toolbar {
+    padding: 0.4rem 0.5rem 0.4rem 3.25rem; /* room for hamburger */
+    gap: 0.35rem;
+  }
+
+  .preview-top-toolbar__title {
+    display: none;
+  }
+
+  .preview-top-toolbar__primary {
+    justify-content: flex-end;
+  }
+
+  .preview-compact-toolbar {
+    padding: 0.45rem 0.5rem;
+  }
+
+  .preview-compact-toolbar__grid {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .preview-compact-toolbar__grid > div {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .preview-compact-toolbar__label {
+    display: none;
+  }
+
+  .preview-compact-toolbar__zoom {
+    margin-top: 0.4rem;
+    padding-top: 0.4rem;
+    width: 100%;
+  }
+
+  .preview-segmented__btn {
+    min-height: 2.25rem;
+    padding: 0.35rem 0.55rem;
+    font-size: 12px;
+  }
+
+  .preview-zoom-btn {
+    width: 2.5rem;
+    height: 2.5rem;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+  }
+
+  .preview-viewport {
+    padding: 0.5rem;
+  }
+
+  .preview-pagination-bar {
+    padding: 0.4rem 3.5rem 0.45rem 0.5rem;
+    gap: 0.25rem;
   }
 }
 
@@ -208,6 +399,25 @@
 .preview-viewport--all-pages {
   padding: 1.5rem 1rem;
   align-items: stretch;
+}
+
+.preview-viewport--hand-tool {
+  /* Use the move cursor (four-direction arrows) to indicate panning mode */
+  cursor: move;
+  touch-action: none;
+}
+
+.preview-viewport--hand-tool--dragging {
+  cursor: move;
+}
+
+/* When space is pressed, ensure the move cursor appears immediately */
+.gp-space-pan-active .preview-viewport {
+  cursor: move !important;
+}
+
+.gp-space-pan-active .preview-viewport--hand-tool--dragging {
+  cursor: move !important;
 }
 
 @media (min-width: 768px) {

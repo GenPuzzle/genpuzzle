@@ -169,6 +169,17 @@ export function hasWordListEdits(session: CanvasEditSession): boolean {
   return JSON.stringify(session.draftTitleWords) !== JSON.stringify(session.snapshot.titleWords);
 }
 
+export function hasWordListModeEdits(session: CanvasEditSession): boolean {
+  const draft = session.draft.wordList;
+  const snapshot = session.snapshot.settings.wordList;
+  return (
+    Boolean(draft.oneWordPerPuzzle) !== Boolean(snapshot.oneWordPerPuzzle) ||
+    (draft.wordRepeatCount ?? 5) !== (snapshot.wordRepeatCount ?? 5) ||
+    Boolean(draft.fillWithWordLettersOnly) !== Boolean(snapshot.fillWithWordLettersOnly) ||
+    draft.wordsPerPuzzle !== snapshot.wordsPerPuzzle
+  );
+}
+
 /** True when draft settings differ from snapshot, ignoring word-list manual-mode side effects. */
 export function hasSettingsEditsBeyondWordContent(session: CanvasEditSession): boolean {
   const normalizedDraft: WordSearchSettings = {
@@ -361,14 +372,39 @@ export function hasWordDirectionEdits(session: CanvasEditSession): boolean {
   return WORD_DIRECTION_KEYS.some((key) => draft[key] !== snapshot[key]);
 }
 
+export function hasShapeMaskEdits(session: CanvasEditSession): boolean {
+  const draft = session.draft.core;
+  const snapshot = session.snapshot.settings.core;
+  const draftImages = draft.shapeMaskImages ?? [];
+  const snapshotImages = snapshot.shapeMaskImages ?? [];
+  return (
+    Boolean(draft.shapeWordSearchEnabled) !== Boolean(snapshot.shapeWordSearchEnabled) ||
+    (draft.shapeMaskMode ?? 'common') !== (snapshot.shapeMaskMode ?? 'common') ||
+    (draft.shapeMaskImage ?? '') !== (snapshot.shapeMaskImage ?? '') ||
+    draftImages.length !== snapshotImages.length ||
+    draftImages.some((img, i) => (img ?? '') !== (snapshotImages[i] ?? '')) ||
+    (draft.shapeMaskAlphaThreshold ?? 40) !== (snapshot.shapeMaskAlphaThreshold ?? 40) ||
+    (draft.shapeMaskFit ?? 'contain') !== (snapshot.shapeMaskFit ?? 'contain')
+  );
+}
+
 export function shouldRegeneratePuzzleOnPageCommit(session: CanvasEditSession): boolean {
   return (
-    hasGridSizeEdits(session) || hasWordListEdits(session) || hasWordDirectionEdits(session)
+    hasGridSizeEdits(session) ||
+    hasWordListEdits(session) ||
+    hasWordListModeEdits(session) ||
+    hasWordDirectionEdits(session) ||
+    hasShapeMaskEdits(session)
   );
 }
 
 export function shouldRegeneratePuzzlesOnAllCommit(session: CanvasEditSession): boolean {
-  return hasGridSizeEdits(session) || hasWordDirectionEdits(session);
+  return (
+    hasGridSizeEdits(session) ||
+    hasWordDirectionEdits(session) ||
+    hasWordListModeEdits(session) ||
+    hasShapeMaskEdits(session)
+  );
 }
 
 export function syncEditSessionBaseline(

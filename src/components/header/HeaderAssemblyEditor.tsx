@@ -17,6 +17,7 @@ import { HeaderTargetPicker } from '@/components/header/HeaderTargetPicker';
 import type { HeaderTextParts } from '@/lib/header-assembly/resolve-parts';
 import { Label } from '@/components/ui/label';
 import { SliderField } from '@/components/ui/slider-field';
+import { MiniColorInput } from '@/components/ui/color-input';
 
 const PREVIEW_PARTS: HeaderTextParts = {
   numberText: '1',
@@ -28,28 +29,11 @@ const PREVIEW_PARTS: HeaderTextParts = {
 interface HeaderAssemblyEditorProps {
   value: HeaderAssemblySettings;
   onChange: (updates: Partial<HeaderAssemblySettings>) => void;
-}
-
-function MiniColorInput({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <Label className="text-xs text-gray-500 shrink-0">{label}</Label>
-      <input
-        type="color"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-7 w-10 cursor-pointer rounded border border-gray-200"
-      />
-    </div>
-  );
+  /** When set, text colors appear next to Fill/Border in Title / Subtitle style forms. */
+  titleTextColor?: string;
+  subtitleTextColor?: string;
+  onTitleTextColorChange?: (color: string) => void;
+  onSubtitleTextColorChange?: (color: string) => void;
 }
 
 const TARGET_LABELS: Record<HeaderEditorTarget, string> = {
@@ -58,7 +42,14 @@ const TARGET_LABELS: Record<HeaderEditorTarget, string> = {
   subtitle: 'Subtitle bar',
 };
 
-export function HeaderAssemblyEditor({ value, onChange }: HeaderAssemblyEditorProps) {
+export function HeaderAssemblyEditor({
+  value,
+  onChange,
+  titleTextColor,
+  subtitleTextColor,
+  onTitleTextColorChange,
+  onSubtitleTextColorChange,
+}: HeaderAssemblyEditorProps) {
   const settings = normalizeHeaderAssemblySettings(value);
   const target = settings.editorTarget;
 
@@ -134,15 +125,16 @@ export function HeaderAssemblyEditor({ value, onChange }: HeaderAssemblyEditorPr
           <div className="grid grid-cols-2 gap-2">
             <MiniColorInput label="Text" value={settings.number.textColor} onChange={(v) => updateNumber({ textColor: v })} />
           </div>
-          <SliderField label="Border Thickness" value={settings.number.borderThicknessPx} onValueChange={(v) => updateNumber({ borderThicknessPx: v })} min={0} max={8} step={1} format="px" />
+          <SliderField label="Border Thickness" value={settings.number.borderThicknessPx} onValueChange={(v) => updateNumber({ borderThicknessPx: v })} min={0} max={8} step={1} format="px" control="popover" />
           {activeShapeId === 'polygon' && (
             <SliderField
               label="Polygon Sides"
               value={settings.number.polygonSides}
               onValueChange={(v) => updateNumber({ polygonSides: v })}
-              min={3}
+              min={0}
               max={12}
               step={1}
+              control="input"
             />
           )}
         </div>
@@ -155,7 +147,16 @@ export function HeaderAssemblyEditor({ value, onChange }: HeaderAssemblyEditorPr
             <MiniColorInput label="Fill" value={settings.title.fillColor} onChange={(v) => updateTitle({ fillColor: v })} />
             <MiniColorInput label="Border" value={settings.title.borderColor} onChange={(v) => updateTitle({ borderColor: v })} />
           </div>
-          <SliderField label="Border Thickness" value={settings.title.borderThicknessPx} onValueChange={(v) => updateTitle({ borderThicknessPx: v })} min={0} max={8} step={1} format="px" />
+          {onTitleTextColorChange && (
+            <div className="grid grid-cols-2 gap-2">
+              <MiniColorInput
+                label="Text"
+                value={titleTextColor || '#1f2937'}
+                onChange={onTitleTextColorChange}
+              />
+            </div>
+          )}
+          <SliderField label="Border Thickness" value={settings.title.borderThicknessPx} onValueChange={(v) => updateTitle({ borderThicknessPx: v })} min={0} max={8} step={1} format="px" control="popover" />
           {activeShapeId === 'rounded-rect' && (
             <SliderField
               label="Rounded Corners"
@@ -165,6 +166,7 @@ export function HeaderAssemblyEditor({ value, onChange }: HeaderAssemblyEditorPr
               max={40}
               step={1}
               format="px"
+              control="popover"
             />
           )}
         </div>
@@ -177,7 +179,16 @@ export function HeaderAssemblyEditor({ value, onChange }: HeaderAssemblyEditorPr
             <MiniColorInput label="Fill" value={settings.subtitle.fillColor} onChange={(v) => updateSubtitle({ fillColor: v })} />
             <MiniColorInput label="Border" value={settings.subtitle.borderColor} onChange={(v) => updateSubtitle({ borderColor: v })} />
           </div>
-          <SliderField label="Border Thickness" value={settings.subtitle.borderThicknessPx} onValueChange={(v) => updateSubtitle({ borderThicknessPx: v })} min={0} max={8} step={1} format="px" />
+          {onSubtitleTextColorChange && (
+            <div className="grid grid-cols-2 gap-2">
+              <MiniColorInput
+                label="Text"
+                value={subtitleTextColor || '#6b7280'}
+                onChange={onSubtitleTextColorChange}
+              />
+            </div>
+          )}
+          <SliderField label="Border Thickness" value={settings.subtitle.borderThicknessPx} onValueChange={(v) => updateSubtitle({ borderThicknessPx: v })} min={0} max={8} step={1} format="px" control="popover" />
           {activeShapeId === 'rounded-rect' && (
             <SliderField
               label="Rounded Corners"
@@ -187,6 +198,7 @@ export function HeaderAssemblyEditor({ value, onChange }: HeaderAssemblyEditorPr
               max={40}
               step={1}
               format="px"
+              control="popover"
             />
           )}
           <SliderField
@@ -196,7 +208,8 @@ export function HeaderAssemblyEditor({ value, onChange }: HeaderAssemblyEditorPr
             min={0}
             max={100}
             step={5}
-            format="%"
+            format="percent"
+            control="popover"
           />
         </div>
       )}

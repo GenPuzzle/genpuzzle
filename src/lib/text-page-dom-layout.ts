@@ -286,7 +286,9 @@ export function measureOwnershipBlockLayoutFromDom(
     position: 'fixed',
     left: '-20000px',
     top: '0',
-    visibility: 'hidden',
+    // visibility:hidden can yield empty getClientRects() in some browsers.
+    visibility: 'visible',
+    opacity: '0',
     pointerEvents: 'none',
     display: 'flex',
     flexDirection: 'column',
@@ -299,6 +301,7 @@ export function measureOwnershipBlockLayoutFromDom(
     padding: '0',
     border: 'none',
     overflow: 'visible',
+    zIndex: '-1',
   });
 
   const textEl = document.createElement('div');
@@ -352,6 +355,7 @@ export function measureOwnershipBlockLayoutFromDom(
   }
 
   document.body.appendChild(body);
+  void body.offsetHeight;
 
   try {
     const bodyRect = body.getBoundingClientRect();

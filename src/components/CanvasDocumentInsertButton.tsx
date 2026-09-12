@@ -1,13 +1,16 @@
 'use client';
 
 import React from 'react';
-import { Plus } from 'lucide-react';
+import { FilePlus2, Plus, Sparkles } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -26,6 +29,7 @@ interface CanvasDocumentInsertButtonProps {
     position: 'before' | 'after',
     referenceId: string
   ) => void;
+  onUseAi?: (position: 'before' | 'after', referenceId: string) => void;
   className?: string;
   variant?: 'canvas' | 'tab';
   /** Override the default aria/title label */
@@ -36,6 +40,7 @@ export function CanvasDocumentInsertButton({
   side,
   referenceId,
   onInsert,
+  onUseAi,
   className,
   variant = 'canvas',
   title,
@@ -67,27 +72,46 @@ export function CanvasDocumentInsertButton({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align={variant === 'tab' ? 'start' : side === 'before' ? 'end' : 'start'}
-        className="w-52"
+        className="w-56"
       >
-        <DropdownMenuLabel className="text-xs text-muted-foreground">Front Matter</DropdownMenuLabel>
-        {INSERTABLE_FRONT_MATTER_MODULES.map((module) => (
-          <DropdownMenuItem
-            key={module.type}
-            onClick={() => onInsert(module.type, side, referenceId)}
-          >
-            {module.name}
-          </DropdownMenuItem>
-        ))}
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-xs text-muted-foreground">Puzzle Sections</DropdownMenuLabel>
-        {PUZZLE_MODULES.map((module) => (
-          <DropdownMenuItem
-            key={module.type}
-            onClick={() => onInsert(module.type, side, referenceId)}
-          >
-            {module.name}
-          </DropdownMenuItem>
-        ))}
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <FilePlus2 className="h-4 w-4" />
+            Create manually
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-52">
+            <DropdownMenuLabel className="text-xs text-muted-foreground">
+              Front Matter
+            </DropdownMenuLabel>
+            {INSERTABLE_FRONT_MATTER_MODULES.map((module) => (
+              <DropdownMenuItem
+                key={module.type}
+                onClick={() => onInsert(module.type, side, referenceId)}
+              >
+                {module.name}
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-xs text-muted-foreground">
+              Puzzle Sections
+            </DropdownMenuLabel>
+            {PUZZLE_MODULES.map((module) => (
+              <DropdownMenuItem
+                key={module.type}
+                onClick={() => onInsert(module.type, side, referenceId)}
+              >
+                {module.name}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuItem
+          onClick={() => onUseAi?.(side, referenceId)}
+          disabled={!onUseAi}
+        >
+          <Sparkles className="h-4 w-4 text-violet-600" />
+          Use AI
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

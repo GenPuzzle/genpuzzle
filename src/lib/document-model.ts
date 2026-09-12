@@ -11,6 +11,8 @@ import {
   getDefaultWordSearchSettings,
 } from './puzzles/types';
 import { getDefaultCrosswordSettings } from './crossword-settings';
+import { getDefaultGenericPuzzleSettings } from './generic-puzzle-settings';
+import { getDefaultMurdokuSettings } from './murdoku-settings';
 import { DEFAULT_TOC_SETTINGS } from './toc-settings';
 
 export type DocumentModuleCategory = 'front-matter' | 'puzzle';
@@ -27,7 +29,9 @@ export type DocumentModuleType =
   | 'crossword'
   | 'maze'
   | 'cryptogram'
-  | 'word-scramble';
+  | 'word-scramble'
+  | 'trivia'
+  | 'murdoku';
 
 /** Kinds shown in the + add-document menus (includes virtual empty/chapter inserts). */
 export type InsertableDocumentKind =
@@ -37,7 +41,14 @@ export type InsertableDocumentKind =
 
 export type PuzzleModuleType = Extract<
   DocumentModuleType,
-  'word-search' | 'sudoku' | 'crossword' | 'maze' | 'cryptogram' | 'word-scramble'
+  | 'word-search'
+  | 'sudoku'
+  | 'crossword'
+  | 'maze'
+  | 'cryptogram'
+  | 'word-scramble'
+  | 'trivia'
+  | 'murdoku'
 >;
 
 export interface BaseModuleSettings {
@@ -132,6 +143,8 @@ export interface TextModuleSettings extends BaseModuleSettings {
   textColor?: string;
   /** Title size in pt; falls back to fontSize * 1.2 when unset */
   titleFontSize?: number;
+  /** Fit fonts so text stays inside the safe margins / page-number zone. */
+  autoBalanceFont?: boolean;
   /** Use per-page frame instead of global book frame settings */
   useCustomFrame?: boolean;
   pageFrameSettings?: Partial<PageFrameSettings>;
@@ -161,6 +174,8 @@ export interface TextModuleSettings extends BaseModuleSettings {
   isSeparatorPage?: boolean;
   /** Chapter divider title page (TOC chapters / batch chapter insert) */
   isChapterPage?: boolean;
+  /** 0-based thematic chapter for mixed-per-chapter books. */
+  chapterIndex?: number;
   /** Active chapter layout preset id (shared style system) */
   chapterLayoutId?: string;
   /** Preserved chapter image when showImage is temporarily off */
@@ -175,6 +190,11 @@ export interface PuzzleModuleSettings extends BaseModuleSettings {
   colorSettings: ColorSettings;
   wordSearchSettings?: WordSearchSettings;
   crosswordSettings?: import('./crossword-settings').CrosswordSettings;
+  murdokuSettings?: import('./murdoku-settings').MurdokuSettings;
+  /** Per-document settings for the generic modules (sudoku, maze, cryptogram, word scramble). */
+  genericPuzzleSettings?: import('./generic-puzzle-settings').GenericPuzzleSettings;
+  /** 0-based chapter this puzzle document belongs to (after divide-into-chapters). */
+  chapterIndex?: number;
 }
 
 export type ModuleSettings = TextModuleSettings | PuzzleModuleSettings;
@@ -217,6 +237,8 @@ export const PUZZLE_MODULES: Array<{ type: DocumentModuleType; name: string }> =
   { type: 'maze', name: 'Mazes' },
   { type: 'cryptogram', name: 'Cryptograms' },
   { type: 'word-scramble', name: 'Word Scramble' },
+  { type: 'trivia', name: 'Trivia' },
+  { type: 'murdoku', name: 'Murdoku' },
 ];
 
 export const ALL_DOCUMENT_MODULES: Array<{
@@ -245,7 +267,9 @@ export function isPuzzleModuleType(type: DocumentModuleType): type is PuzzleModu
     type === 'crossword' ||
     type === 'maze' ||
     type === 'cryptogram' ||
-    type === 'word-scramble'
+    type === 'word-scramble' ||
+    type === 'trivia' ||
+    type === 'murdoku'
   );
 }
 
@@ -257,16 +281,17 @@ export function getDefaultTextModuleSettings(type: DocumentModuleType): TextModu
   const label = FRONT_MATTER_MODULES.find((item) => item.type === type)?.name ?? 'Text Page';
   return {
     id: `${type}-settings`,
-    title: label,
+    title: type === 'title-page' ? 'Book Title' : label,
     description: '',
     content: '',
     fontFamily: 'Arial',
     fontSize: 18,
+    titleFontSize: type === 'title-page' ? 40 : undefined,
     alignment: type === 'table-of-contents' ? 'left' : 'center',
     useCustomFrame: false,
     useCustomBackground: false,
-    // Title pages start empty so users add only the boxes they need.
-    blocks: type === 'title-page' ? [] : undefined,
+    // Title pages omit `blocks` so the default stacked layout is applied on first open.
+    // Empty Page / chapter / separator pages set `blocks: []` after create.
     textColor: type === 'title-page' ? '#000000' : undefined,
     tocMode: type === 'table-of-contents' ? 'auto' : undefined,
     tocSettings: type === 'table-of-contents' ? { ...DEFAULT_TOC_SETTINGS } : undefined,
@@ -304,6 +329,8 @@ export function getDefaultPuzzleModuleSettings(type: PuzzleModuleType): PuzzleMo
         subtitleColor: '#6b7280',
         boxColor: '#1f2937',
         puzzleColor: '#1f2937',
+        puzzleLetterStrokeColor: '#000000',
+        puzzleLetterStrokeThickness: 0,
         wordListTitleColor: '#374151',
         wordListColor: '#4b5563',
       },
@@ -316,6 +343,8 @@ export function getDefaultPuzzleModuleSettings(type: PuzzleModuleType): PuzzleMo
         solutionStrokeThickness: 12,
         solutionStrokePadding: 2,
         solutionFrameColor: '#22c55e',
+        solutionHighlightStrokeColor: '#000000',
+        solutionHighlightStrokeThickness: 0,
         solutionFrameStyle: 'rounded',
         solutionFrameRadius: 6,
         solutionHighlightAlpha: 30,
@@ -328,6 +357,15 @@ export function getDefaultPuzzleModuleSettings(type: PuzzleModuleType): PuzzleMo
     },
     wordSearchSettings: type === 'word-search' ? getDefaultWordSearchSettings() : undefined,
     crosswordSettings: type === 'crossword' ? getDefaultCrosswordSettings() : undefined,
+    murdokuSettings: type === 'murdoku' ? getDefaultMurdokuSettings() : undefined,
+    genericPuzzleSettings:
+      type === 'sudoku' ||
+      type === 'maze' ||
+      type === 'cryptogram' ||
+      type === 'word-scramble' ||
+      type === 'trivia'
+        ? getDefaultGenericPuzzleSettings(type)
+        : undefined,
   };
 }
 

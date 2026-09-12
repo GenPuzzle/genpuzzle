@@ -19,7 +19,7 @@ export function getFallbackStandardFont(fontFamily: string, bold: boolean = fals
     return bold ? StandardFonts.TimesRomanBold : StandardFonts.TimesRoman;
   }
 
-  if (/arial black|oswald|fredoka|montserrat/.test(family)) {
+  if (/arial black|oswald|fredoka|montserrat|grow year|sunday magic/.test(family)) {
     return StandardFonts.HelveticaBold;
   }
 

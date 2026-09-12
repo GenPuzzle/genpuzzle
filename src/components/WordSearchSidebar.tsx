@@ -6,13 +6,16 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
+import { ColorInput } from '@/components/ui/color-input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { SliderField } from '@/components/ui/slider-field';
+import { IntegerInput } from '@/components/ui/integer-input';
+import { SettingsTextInput, SettingsTextarea } from '@/components/ui/settings-text-input';
 import { AlertCircle, CheckCircle, Save, Trash2, Upload, Zap, ChevronLeft, ChevronRight, RefreshCw, ArrowRight, ArrowLeft, ArrowDown, ArrowUp, ArrowDownRight, ArrowUpRight, ArrowUpLeft, ArrowDownLeft } from 'lucide-react';
 import { useApp } from '@/lib/app-context';
-import { TextModuleSettings, isTextModuleSettings } from '@/lib/document-model';
-import { PUBLISHING_FONTS } from '@/lib/publishing-fonts';
+import { TextModuleSettings, isTextModuleSettings, isPuzzleModuleType } from '@/lib/document-model';
+import { PUBLISHING_FONTS, selectPublishingFont } from '@/lib/publishing-fonts';
 import { cn } from '@/lib/utils';
 import { useWordGeneration, queuePrompt, onPasteData, onPasteFunFacts, isExtensionAvailable } from '@/lib/genpuzzle-extension-integration';
 import { resolvePageFrameSettings, applyPageFrameSettingsPatch } from '@/lib/page-frame-settings';
@@ -27,18 +30,75 @@ import { TRIM_SIZE_PRESETS, type TrimSizePresetId } from '@/lib/trim-size-layout
 import type { PageNumberSettings } from '@/lib/puzzles/types';
 import { useDebouncedCallback } from '@/hooks/useDebouncedCallback';
 import { usePersistedState } from '@/hooks/usePersistedState';
-import { SETTINGS_TAB_STORAGE_KEY, SETTINGS_PANEL_STORAGE_KEY } from '@/lib/settings-persistence';
+import { useOptionalAppBusy } from '@/lib/app-busy-context';
+import { SETTINGS_TAB_STORAGE_KEY, SETTINGS_PANEL_STORAGE_KEY, SETTINGS_SIDEBAR_WIDTH_KEY } from '@/lib/settings-persistence';
 import { computeWordSearchGenerationFingerprint } from '@/lib/generation-fingerprint';
 import { getEditedBatchIndicesForDocument } from '@/lib/canvas-edit-session';
 import { CanvasApplyToAllConfirmDialog } from '@/components/CanvasApplyToAllConfirmDialog';
 import { ChapterPagesBatchPanel } from '@/components/ChapterPagesBatchPanel';
+import { DivideListsIntoChaptersControl } from '@/components/DivideListsIntoChaptersControl';
+
+import {
+  computeWordSearchAutoFit,
+  computeTextPageAutoFit,
+  fitValuesUnchanged,
+  pageFitApplyKey,
+} from '@/lib/auto-page-fit';
+import { CanvasContextualControls } from '@/components/CanvasContextualControls';
+import { CrosswordContextualControls } from '@/components/CrosswordContextualControls';
+import { GenericPuzzleContextualControls } from '@/components/GenericPuzzleContextualControls';
+import { TocContextualControls } from '@/components/TocContextualControls';
+import { TextPageContextualControls } from '@/components/TextPageContextualControls';
+import { useCanvasEditPanel } from '@/lib/canvas-edit-panel-context';
+import {
+  CrosswordPuzzleSettingsPanel,
+  CrosswordWordsSettingsPanel,
+  CrosswordTitlesSettingsPanel,
+} from '@/components/CrosswordDocumentPanels';
+import {
+  TriviaPuzzleSettingsPanel,
+  TriviaWordsSettingsPanel,
+} from '@/components/TriviaDocumentPanels';
+import {
+  GenericPuzzleSettingsPanel,
+  GenericPuzzleTitlesPanel,
+} from '@/components/GenericPuzzleDocumentPanels';
+import {
+  MurdokuPuzzleSettingsPanel,
+  MurdokuCharactersSettingsPanel,
+  MurdokuElementsSettingsPanel,
+  MurdokuTitlesSettingsPanel,
+} from '@/components/MurdokuDocumentPanels';
+import {
+  normalizeCrosswordSettings,
+  parseCrosswordLines,
+  getDefaultCrosswordSettings,
+} from '@/lib/crossword-settings';
 import type { GeneratePuzzleOptions } from '@/lib/app-context';
+import {
+  documentLooksAlreadyChapterSplit,
+  resolveActiveSplitRequest,
+} from '@/lib/split-puzzle-document-by-chapters';
+import {
+  readImageFileAsDataUrl,
+  readImageFilesAsDataUrls,
+} from '@/lib/puzzles/word-search-shape-mask';
+import { toast } from 'sonner';
+import { AiProjectWizard } from '@/components/ai/AiProjectWizard';
+import { isAiPuzzleType } from '@/lib/ai/types';
+import { normalizeGeneratedWordList } from '@/lib/word-list-parse';
 
 const LAYOUT_TABS = ['book', 'colors', 'pages'] as const;
 const DOCUMENT_TABS = ['puzzle', 'words', 'design'] as const;
+const MURDOKU_DOCUMENT_TABS = ['puzzle', 'words', 'elements', 'design'] as const;
 
 function normalizeSettingsPanel(value: string): 'layout' | 'document' {
-  if (value === 'document' || (DOCUMENT_TABS as readonly string[]).includes(value) || value === 'page') {
+  if (
+    value === 'document' ||
+    (DOCUMENT_TABS as readonly string[]).includes(value) ||
+    value === 'elements' ||
+    value === 'page'
+  ) {
     return 'document';
   }
   return 'layout';
@@ -47,16 +107,20 @@ function normalizeSettingsPanel(value: string): 'layout' | 'document' {
 function normalizeSettingsTab(
   value: string,
   panel: 'layout' | 'document',
-  isWordSearch: boolean
+  hasPuzzleDocumentTabs: boolean,
+  isMurdoku = false
 ): string {
   if (panel === 'layout') {
     return (LAYOUT_TABS as readonly string[]).includes(value) ? value : 'book';
   }
-  if (!isWordSearch) return 'page';
+  if (!hasPuzzleDocumentTabs) return 'page';
   if (value === 'book' || value === 'colors' || value === 'pages' || value === 'page') {
     return 'puzzle';
   }
-  return (DOCUMENT_TABS as readonly string[]).includes(value) ? value : 'puzzle';
+  const allowed = isMurdoku ? MURDOKU_DOCUMENT_TABS : DOCUMENT_TABS;
+  if ((allowed as readonly string[]).includes(value)) return value;
+  if (value === 'elements') return 'words';
+  return 'puzzle';
 }
 
 const LANGUAGES = ['English', 'Spanish', 'French', 'German', 'Italian', 'Portuguese', 'Arabic'];
@@ -120,9 +184,7 @@ const DecimalInput = ({
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const next = e.target.value;
-    setLocalValue(next);
-    debouncedCommit(next);
+    setLocalValue(e.target.value);
   };
 
   const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
@@ -145,124 +207,6 @@ const DecimalInput = ({
     />
   );
 };
-
-/** Integer input — defers min/max clamping until blur so values like "10" can be typed. */
-const IntegerInput = ({
-  value,
-  onChange,
-  min,
-  max,
-  className,
-}: {
-  value: number;
-  onChange: (val: number) => void;
-  min?: number;
-  max?: number;
-  className?: string;
-}) => {
-  const [localValue, setLocalValue] = React.useState(String(value ?? ''));
-  const isFocused = React.useRef(false);
-
-  const commitValue = React.useCallback(
-    (raw: string) => {
-      const trimmed = raw.trim();
-      const fallback = min ?? 0;
-      if (trimmed === '') {
-        const next = fallback;
-        setLocalValue(String(next));
-        onChange(next);
-        return;
-      }
-      let num = parseInt(trimmed, 10);
-      if (Number.isNaN(num)) {
-        num = fallback;
-      }
-      if (min !== undefined && num < min) num = min;
-      if (max !== undefined && num > max) num = max;
-      setLocalValue(String(num));
-      onChange(num);
-    },
-    [min, max, onChange]
-  );
-
-  const debouncedCommit = useDebouncedCallback(commitValue, 300);
-
-  React.useEffect(() => {
-    if (!isFocused.current) {
-      setLocalValue(String(value ?? ''));
-    }
-  }, [value]);
-
-  React.useEffect(() => () => debouncedCommit.flush(), [debouncedCommit]);
-
-  return (
-    <Input
-      type="text"
-      inputMode="numeric"
-      value={localValue}
-      className={className}
-      onFocus={() => {
-        isFocused.current = true;
-      }}
-      onChange={(e) => {
-        const next = e.target.value;
-        if (next === '' || /^\d+$/.test(next)) {
-          setLocalValue(next);
-          debouncedCommit(next);
-        }
-      }}
-      onBlur={(e) => {
-        isFocused.current = false;
-        debouncedCommit.cancel();
-        commitValue(e.target.value);
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          isFocused.current = false;
-          debouncedCommit.cancel();
-          commitValue((e.target as HTMLInputElement).value);
-          (e.target as HTMLInputElement).blur();
-        }
-      }}
-    />
-  );
-};
-
-function ColorInput({
-  label,
-  value,
-  onChange,
-  disabled = false,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className={cn('flex items-center gap-3 p-3 rounded-lg dark:from-slate-700 dark:to-slate-600 dark:border-slate-600 transition-all duration-200 border', disabled && 'opacity-50 pointer-events-none')} style={{ background: `linear-gradient(to right, #F0F5F6, #F0F5F6)` }}>
-      <div className="flex-1">
-        <Label className={cn('text-sm font-medium', disabled ? 'text-gray-400 dark:text-gray-500' : 'text-gray-700 dark:text-gray-200')}>{label}</Label>
-        <div className="flex items-center gap-2 mt-1">
-          <Input
-            type="color"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            className="w-14 h-10 p-1 cursor-pointer border-2 border-blue-300 dark:border-slate-500 rounded-lg hover:shadow-lg transition-shadow duration-200"
-            disabled={disabled}
-          />
-          <Input
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            className="flex-1 font-mono text-sm border-gray-300 dark:border-slate-600 focus:border-blue-400 focus:ring-blue-400/20 hover:border-blue-300 transition-colors duration-200"
-            placeholder="#000000"
-            disabled={disabled}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function BackgroundImageControl({
   label,
@@ -437,6 +381,17 @@ function List({ className }: { className?: string }) {
     </svg>
   );
 }
+function Cubes({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 3 20 7.5v9L12 21 4 16.5v-9L12 3Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M12 12 20 7.5M12 12v9M12 12 4 7.5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <g className="icon-accent">
+        <circle cx="12" cy="12" r="1.6" fill="#0EA5E9" />
+      </g>
+    </svg>
+  );
+}
 function Palette({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -531,27 +486,75 @@ export function WordSearchSidebar() {
     pageOverrides,
     pagePuzzleGridScales,
     setPuzzleGridScale,
-    titleToAnswerGap,
-    setTitleToAnswerGap,
-    solutionToSolutionGap,
-    setSolutionToSolutionGap,
-    pageMargin,
-    setPageMargin,
+    clearAllPagePuzzleGridScales,
     bookSettings,
     activeDocumentPage,
+    documentPages,
     updateActiveTextModuleSettings,
+    applyTextSettingsToDocumentPages,
     applyTrimSizeLayoutChange,
+    crosswordSettings,
+    currentPuzzle,
+    crosswordBatchPuzzles,
+    pageCrosswordOverrides,
+    genericPuzzleSettings,
+    genericBatchPuzzles,
+    pageGenericOverrides,
+    murdokuSettings,
+    murdokuBatchPuzzles,
+    projectName,
   } = useApp();
 
+  const { showBusy, hideBusy } = useOptionalAppBusy();
+  const {
+    panelProps: canvasEditPanelProps,
+    crosswordPanelProps,
+    genericPuzzlePanelProps,
+    selectedTextBlockId,
+    textPageEditTarget,
+    tocEntries,
+    selectTextBlock,
+    changeTextPageEditTarget,
+    hideTextBlockChrome,
+  } = useCanvasEditPanel();
+  const canvasEditOpen =
+    !!canvasEditPanelProps || !!crosswordPanelProps || !!genericPuzzlePanelProps;
+
+
   const moduleIsWordSearch = activeDocumentPage?.moduleType === 'word-search';
+  const moduleIsCrossword = activeDocumentPage?.moduleType === 'crossword';
+  const moduleIsMurdoku = activeDocumentPage?.moduleType === 'murdoku';
+  const moduleIsTrivia = activeDocumentPage?.moduleType === 'trivia';
+  const moduleIsGeneric =
+    activeDocumentPage?.moduleType === 'sudoku' ||
+    activeDocumentPage?.moduleType === 'maze' ||
+    activeDocumentPage?.moduleType === 'cryptogram' ||
+    activeDocumentPage?.moduleType === 'word-scramble' ||
+    activeDocumentPage?.moduleType === 'trivia';
+  const genericModuleType =
+    activeDocumentPage?.moduleType === 'maze'
+      ? ('maze' as const)
+      : activeDocumentPage?.moduleType === 'cryptogram'
+        ? ('cryptogram' as const)
+        : activeDocumentPage?.moduleType === 'word-scramble'
+          ? ('word-scramble' as const)
+          : activeDocumentPage?.moduleType === 'trivia'
+            ? ('trivia' as const)
+            : ('sudoku' as const);
+  const moduleHasPuzzleDocumentTabs = Boolean(
+    activeDocumentPage && isPuzzleModuleType(activeDocumentPage.moduleType)
+  );
   const activeTextSettings =
-    activeDocumentPage && !moduleIsWordSearch && isTextModuleSettings(activeDocumentPage.settings)
+    activeDocumentPage &&
+    !moduleHasPuzzleDocumentTabs &&
+    isTextModuleSettings(activeDocumentPage.settings)
       ? (activeDocumentPage.settings as TextModuleSettings)
       : null;
 
   // Local state for AI word generation loading
   const [isGeneratingWordsFromExtension, setIsGeneratingWordsFromExtension] = React.useState(false);
   const [isGeneratingPuzzles, setIsGeneratingPuzzles] = React.useState(false);
+  const [aiGenerateOpen, setAiGenerateOpen] = React.useState(false);
   const [generateConfirmOpen, setGenerateConfirmOpen] = React.useState(false);
   const [preserveEditedPagesOnGenerate, setPreserveEditedPagesOnGenerate] = React.useState(true);
 
@@ -568,26 +571,138 @@ export function WordSearchSidebar() {
     'book',
     { debounceMs: 300 }
   );
+  const [sidebarWidth, setSidebarWidth] = usePersistedState<number>(
+    SETTINGS_SIDEBAR_WIDTH_KEY,
+    440,
+    { debounceMs: 200 }
+  );
+  const [isDesktopLayout, setIsDesktopLayout] = React.useState(true);
+  const sidebarResizeRef = React.useRef<{ startX: number; startWidth: number } | null>(null);
+  const [isSidebarResizing, setIsSidebarResizing] = React.useState(false);
+  const SIDEBAR_MIN_WIDTH = 340;
+  const SIDEBAR_MAX_WIDTH = 720;
+  const clampedSidebarWidth = Math.min(
+    SIDEBAR_MAX_WIDTH,
+    Math.max(SIDEBAR_MIN_WIDTH, Number.isFinite(sidebarWidth) ? sidebarWidth : 440)
+  );
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const sync = () => {
+      const desktop = mq.matches;
+      setIsDesktopLayout(desktop);
+      if (!desktop) setCollapsed(false);
+    };
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+
+  const handleSidebarResizePointerDown = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (collapsed) return;
+      event.preventDefault();
+      sidebarResizeRef.current = {
+        startX: event.clientX,
+        startWidth: clampedSidebarWidth,
+      };
+      setIsSidebarResizing(true);
+      event.currentTarget.setPointerCapture(event.pointerId);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    },
+    [collapsed, clampedSidebarWidth]
+  );
+
+  const handleSidebarResizePointerMove = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const drag = sidebarResizeRef.current;
+      if (!drag) return;
+      const next = drag.startWidth + (event.clientX - drag.startX);
+      setSidebarWidth(Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, next)));
+    },
+    [setSidebarWidth]
+  );
+
+  const handleSidebarResizePointerUp = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!sidebarResizeRef.current) return;
+      sidebarResizeRef.current = null;
+      setIsSidebarResizing(false);
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        // ignore
+      }
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    },
+    []
+  );
 
   React.useEffect(() => {
     const panel = normalizeSettingsPanel(settingsPanel);
-    const tab = normalizeSettingsTab(activeTab, panel, moduleIsWordSearch);
+    const tab = normalizeSettingsTab(activeTab, panel, moduleHasPuzzleDocumentTabs, moduleIsMurdoku);
     if (panel !== settingsPanel) setSettingsPanel(panel);
     if (tab !== activeTab) setActiveTab(tab);
     // One-time normalize of persisted legacy tab ids + when switching doc types
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [moduleIsWordSearch]);
+  }, [moduleHasPuzzleDocumentTabs, moduleIsMurdoku]);
+
+  // When canvas Edit controls open, focus Document · This tab so the panel has room.
+  React.useEffect(() => {
+    if (!canvasEditOpen || (!moduleIsWordSearch && !moduleIsCrossword && !moduleHasPuzzleDocumentTabs))
+      return;
+    setSettingsPanel('document');
+    setCollapsed(false);
+  }, [
+    canvasEditOpen,
+    moduleIsWordSearch,
+    moduleIsCrossword,
+    moduleHasPuzzleDocumentTabs,
+    setSettingsPanel,
+  ]);
+
+  const isTocPage = activeDocumentPage?.moduleType === 'table-of-contents' && !!activeTextSettings;
+  const isTitlePage = activeDocumentPage?.moduleType === 'title-page' && !!activeTextSettings;
+  const isFrontMatterEditor = isTocPage || isTitlePage;
+  const lastFrontMatterDocIdRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!isFrontMatterEditor) {
+      lastFrontMatterDocIdRef.current = null;
+      return;
+    }
+    const id = activeDocumentPageId;
+    if (!id || id === lastFrontMatterDocIdRef.current) return;
+    lastFrontMatterDocIdRef.current = id;
+    setSettingsPanel('document');
+    setActiveTab('page');
+    setCollapsed(false);
+  }, [isFrontMatterEditor, activeDocumentPageId, setSettingsPanel, setActiveTab]);
+
+  const closeCanvasEditIfOpen = React.useCallback(() => {
+    canvasEditPanelProps?.onCancel();
+    crosswordPanelProps?.onClose();
+    genericPuzzlePanelProps?.onClose();
+  }, [canvasEditPanelProps, crosswordPanelProps, genericPuzzlePanelProps]);
 
   // Chrome Extension Integration for AI Word Generation
   const { generateWords: generateWordsFromExtension, isLoading: isGeneratingWords, data: generatedWordsData, error: generationError } = useWordGeneration();
 
   const handlePanelChange = (panel: 'layout' | 'document') => {
+    // Switching to Layout dismisses canvas Edit controls.
+    if (panel === 'layout') {
+      closeCanvasEditIfOpen();
+    }
     setSettingsPanel(panel);
-    setActiveTab(normalizeSettingsTab(activeTab, panel, moduleIsWordSearch));
+    setActiveTab(normalizeSettingsTab(activeTab, panel, moduleHasPuzzleDocumentTabs, moduleIsMurdoku));
     setCollapsed(false);
   };
 
   const handleTabChange = (value: string) => {
+    // Opening Puzzle Settings / Word list / Titles / Layout tabs closes Edit controls.
+    closeCanvasEditIfOpen();
     setActiveTab(value);
     setSettingsPanel(normalizeSettingsPanel(value));
     setCollapsed(false);
@@ -602,6 +717,15 @@ export function WordSearchSidebar() {
   };
 
   const handleTriggerPointerDown = (e: React.PointerEvent, value: string) => {
+    // Any rail icon click while Edit controls are open dismisses them and shows that panel.
+    if (canvasEditOpen) {
+      closeCanvasEditIfOpen();
+      setCollapsed(false);
+      if (activeTab === value) {
+        e.preventDefault();
+      }
+      return;
+    }
     // pointerdown fires before Radix's onValueChange; use it to detect clicks on the
     // currently-active tab and toggle collapse without letting Radix re-select.
     if (activeTab === value) {
@@ -622,8 +746,9 @@ export function WordSearchSidebar() {
       });
       
       if (allWords.length > 0) {
-        console.log('[WordSearchSidebar] Updated word list with', allWords.length, 'words');
-        setTitleWords({ ...titleWords, words: allWords });
+        const words = normalizeGeneratedWordList(allWords);
+        console.log('[WordSearchSidebar] Updated word list with', words.length, 'words');
+        setTitleWords({ ...titleWords, words });
       }
     }
   }, [generatedWordsData, titleWords, setTitleWords]);
@@ -649,9 +774,12 @@ export function WordSearchSidebar() {
 
   const updateCore = React.useCallback(
     (updates: Partial<typeof core>) => {
-      updateWordSearchSettings({ core: { ...core, ...updates } });
+      // Delta-only update; mergeWordSearchSettingsUpdate merges into the latest core.
+      updateWordSearchSettings({
+        core: updates as unknown as typeof core,
+      });
     },
-    [core, updateWordSearchSettings]
+    [updateWordSearchSettings]
   );
 
   const updateTypography = React.useCallback(
@@ -668,9 +796,80 @@ export function WordSearchSidebar() {
     [wordList, updateWordSearchSettings]
   );
 
+  const wordSearchAutoFitKey = [
+    pageFitApplyKey(wordSearchSettings),
+    core.lettersAcross,
+    core.lettersDown,
+    wordList.wordsPerPuzzle,
+    wordList.wordListColumns,
+    wordList.hideWordList,
+    typography.titleStartAt,
+    typography.spaceBetweenTitleAndPuzzle,
+  ].join('|');
+
+  const applyWordSearchAutoFit = React.useCallback(() => {
+    const fit = computeWordSearchAutoFit(wordSearchSettings, puzzleGridScale, {
+      fitGrid: false,
+      fitFont: core.autoBalanceFont === true,
+    });
+    if (Object.keys(fit).length === 0) return;
+    const current: Record<string, number | undefined> = {
+      puzzleGridScale,
+      puzzleTitleFontSize: typography.puzzleTitleFontSize,
+      answerTitleFontSize: typography.answerTitleFontSize,
+      puzzleGridFontSize: typography.puzzleGridFontSize,
+      answerGridFontSize: typography.answerGridFontSize,
+      wordListFontSize: wordList.wordListFontSize,
+    };
+    if (fitValuesUnchanged(current, fit)) return;
+    const typePatch: Record<string, number> = {};
+    if (fit.puzzleTitleFontSize != null) typePatch.puzzleTitleFontSize = fit.puzzleTitleFontSize;
+    if (fit.answerTitleFontSize != null) typePatch.answerTitleFontSize = fit.answerTitleFontSize;
+    if (fit.puzzleGridFontSize != null) typePatch.puzzleGridFontSize = fit.puzzleGridFontSize;
+    if (fit.answerGridFontSize != null) typePatch.answerGridFontSize = fit.answerGridFontSize;
+    updateWordSearchSettings({
+      ...(Object.keys(typePatch).length ? { typography: { ...typography, ...typePatch } } : {}),
+      ...(fit.wordListFontSize != null
+        ? { wordList: { ...wordList, wordListFontSize: fit.wordListFontSize } }
+        : {}),
+    });
+  }, [
+    wordSearchSettings,
+    puzzleGridScale,
+    core.autoBalanceFont,
+    typography,
+    wordList,
+    updateWordSearchSettings,
+  ]);
+
+  const textPageAutoFitKey = [
+    pageFitApplyKey(wordSearchSettings),
+    activeDocumentPage?.id ?? '',
+  ].join('|');
+
+  const applyTextPageAutoFit = React.useCallback(() => {
+    if (!activeTextSettings || activeTextSettings.autoBalanceFont !== true) return;
+    const fit = computeTextPageAutoFit(wordSearchSettings);
+    if (
+      fitValuesUnchanged(
+        {
+          fontSize: activeTextSettings.fontSize,
+          titleFontSize: activeTextSettings.titleFontSize,
+        },
+        fit
+      )
+    ) {
+      return;
+    }
+    updateActiveTextModuleSettings({
+      fontSize: fit.fontSize,
+      titleFontSize: fit.titleFontSize,
+    });
+  }, [activeTextSettings, wordSearchSettings, updateActiveTextModuleSettings]);
+
   const customTitleLines = React.useMemo(() => {
     if (typography.selectTitleOption !== 'custom') return 0;
-    return typography.titleText
+    return (typography.titleText || '')
       .split('\n')
       .map((line) => line.trim())
       .filter((line) => line.length > 0).length;
@@ -698,13 +897,8 @@ export function WordSearchSidebar() {
   React.useEffect(() => {
     if (defaultsInitialized.current) return;
 
-    const trimDefaults = bookCanvas.trimSizePreset === '8_5X11IN' && bookCanvas.useCustomTrim === false;
     const titleDefaults = typography.selectTitleOption === 'custom';
     const numberingDefaults = typography.puzzleNumberingStyle === 'prefix';
-
-    if (!trimDefaults) {
-      updateBookCanvas({ trimSizePreset: '8_5X11IN', customWidth: 8.5, customHeight: 11, useCustomTrim: false });
-    }
 
     if (!titleDefaults) {
       updateTypography({ selectTitleOption: 'custom' });
@@ -715,17 +909,21 @@ export function WordSearchSidebar() {
     }
 
     defaultsInitialized.current = true;
-  }, [bookCanvas.trimSizePreset, bookCanvas.useCustomTrim, typography.selectTitleOption, typography.puzzleNumberingStyle, updateBookCanvas, updateTypography]);
+  }, [typography.selectTitleOption, typography.puzzleNumberingStyle, updateTypography]);
 
-  // If the AI-generated theme changes, update the titleText only when the
-  // current mode is already `custom`. This preserves explicit user choices
-  // for `one-custom-title` and `none`.
+  // When AI themes change (e.g. user edits Themes or AI fills them), mirror into
+  // per-puzzle custom titles. Do NOT depend on titleText — that made typing
+  // impossible because every keystroke was reset back to aiTheme.
+  const prevAiThemeForTitlesRef = React.useRef(wordList.aiTheme);
   React.useEffect(() => {
-    if (!wordList.aiTheme) return;
-    if (typography.selectTitleOption === 'custom' && typography.titleText !== wordList.aiTheme) {
-      updateTypography({ titleText: wordList.aiTheme });
+    const nextTheme = wordList.aiTheme ?? '';
+    if (prevAiThemeForTitlesRef.current === nextTheme) return;
+    prevAiThemeForTitlesRef.current = nextTheme;
+    if (!nextTheme) return;
+    if (typography.selectTitleOption === 'custom') {
+      updateTypography({ titleText: nextTheme });
     }
-  }, [wordList.aiTheme, typography.selectTitleOption, typography.titleText, updateTypography]);
+  }, [wordList.aiTheme, typography.selectTitleOption, updateTypography]);
 
   const updatePuzzlePageColors = (updates: Partial<typeof colors.puzzlePage>) => {
     updateColors({
@@ -771,10 +969,12 @@ export function WordSearchSidebar() {
       updateWordListSettings({ selectWordListOption: 'manual' });
       
       // Step 2: Convert vertical format back to word array
-      const words = formattedText
-        .split('\n')
-        .map(w => w.trim())
-        .filter(w => w.length > 0);
+      const words = normalizeGeneratedWordList(
+        formattedText
+          .split('\n')
+          .map(w => w.trim())
+          .filter(w => w.length > 0)
+      );
       
       if (words.length > 0) {
         console.log('[WordSearchSidebar] Injecting', words.length, 'words into word list');
@@ -994,12 +1194,12 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
     // Rule Matrix: If insufficient themes, set error and ABORT immediately (do not modify other state)
     if (enteredThemesCount < requiredPuzzles) {
       const missingCount = requiredPuzzles - enteredThemesCount;
-      console.error('[WordSearchSidebar] ❌ VALIDATION FAILED: Insufficient themes');
+      console.error('[WordSearchSidebar] âŒ VALIDATION FAILED: Insufficient themes');
       setThemeError('Need ' + missingCount + ' more themes');
-      return; // STRICT ABORT — do not proceed further
+      return; // STRICT ABORT â€” do not proceed further
     }
 
-    // Passed validation — clear any previous error
+    // Passed validation â€” clear any previous error
     setThemeError('');
 
     // Guard against double-calls from rapid clicks or React re-renders
@@ -1093,18 +1293,19 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
 
       // Build strict, anti-hallucination prompt with explicit rules
       // Ensure all variables are stringified and checked for "undefined"
-      const dynamicPrompt = `Generate ${String(numberOfPuzzles)} word lists for the themes below. Each list must contain exactly ${String(wordsPerPuzzle)} words. Write one fun fact per theme (90–95 characters each).
+      const dynamicPrompt = `Generate ${String(numberOfPuzzles)} word lists for the themes below. Each list must contain exactly ${String(wordsPerPuzzle)} words. Write one fun fact per theme (90â€“95 characters each).
 
-    Word Constraints: Max ${String(maxLength)} letters, ${String(charCase)}. Unique, non-duplicated words. No numbers allowed in the word lists (words must not contain digits).
+    Word Constraints: Max ${String(maxLength)} letters (do not count spaces), ${String(charCase)}. Unique, non-duplicated words. No numbers allowed in the word lists (words must not contain digits).
     Target Audience: ${String(ageLevel)}.
     Language: ${String(language)}.
-    Multi-word Rule: Make sure to add space between words when we have 2 words based.
+    Spelling: Every entry must be a real, correctly spelled word or common phrase in ${String(language)}. Never invent misspellings or made-up compounds.
+    Multi-word Rule: If an entry is two or more words, you MUST put a space between them. Write "Sea Animals" not "Seaanimals" or "SeaAnimals". Same for Ice Cream, Fire Truck, New York, etc.
 
     ### ALPHABETICAL SORTING (REQUIRED):
     - Sort every word list A to Z before you output it.
-    - Use standard alphabetical order (A, B, C … Z). For multi-word entries, sort by the first word.
-    - Do NOT leave words in random or theme-logic order — the final list must read alphabetically from first word to last.
-    - Keep the 1., 2., 3. numbering in the output, but the words themselves must follow A–Z order (word #1 is the first alphabetically, word #2 is the second, and so on).
+    - Use standard alphabetical order (A, B, C â€¦ Z). For multi-word entries, sort by the first word.
+    - Do NOT leave words in random or theme-logic order â€” the final list must read alphabetically from first word to last.
+    - Keep the 1., 2., 3. numbering in the output, but the words themselves must follow Aâ€“Z order (word #1 is the first alphabetically, word #2 is the second, and so on).
 
     ### THEMES TO GENERATE:
     ${finalTheme}
@@ -1113,8 +1314,8 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
     1. Do NOT reuse, copy, or repeat any words or titles shown in previously submitted themes or example format section below.
     2. Every single puzzle must have a completely unique, new title and a brand new list of words based strictly on the themes listed in "THEMES TO GENERATE" section above.
     3. Output ONLY the raw puzzle data. No chat, no markdown formatting like ** or bolding, and no part numbers.
-    4. No numbers allowed in the words lists — words must contain only alphabetic characters (remove any entries that include digits).
-    5. Every word list MUST be sorted alphabetically (A–Z) before output. Double-check the order before submitting.
+    4. No numbers allowed in the word lists. Entries may contain letters and spaces only (remove any entries that include digits). Spaces between words are required for multi-word phrases.
+    5. Every word list MUST be sorted alphabetically (Aâ€“Z) before output. Double-check the order before submitting.
 
     Follow these constraints:
 
@@ -1122,26 +1323,26 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
 
     Contextual Uniqueness: For each theme listed in THEMES TO GENERATE above, select ${String(wordsPerPuzzle)} words that represent that theme AND have never been used in any other puzzle.
 
-    Verification: Before outputting the final list, verify the new words against the 'Used Words List'. If a conflict is found, generate a fresh word that fits the theme. Then re-sort the list A–Z.
+    Verification: Before outputting the final list, verify the new words against the 'Used Words List'. If a conflict is found, generate a fresh word that fits the theme. Then re-sort the list Aâ€“Z.
 
     Output: Provide the alphabetically sorted list of words for the current theme, and update the internal 'Used Words List' for future puzzles.
 
     ### EXCLUSIVE OUTPUT FORMAT (Follow this structure exactly):
     -Theme 1 Title
 
-    1.word, 2.word, 3.word, 4.word, 5.word, ...  (words in A–Z order)
+    1.word, 2.word, 3.word, 4.word, 5.word, ...  (words in Aâ€“Z order)
 
     -Fun fact: write fun fact here
 
     -Theme 2 Title
 
-    1.word, 2.word, 3.word, 4.word, 5.word, ...  (words in A–Z order)
+    1.word, 2.word, 3.word, 4.word, 5.word, ...  (words in Aâ€“Z order)
 
     -Fun fact: write fun fact here
 
     -Theme 3 Title
 
-    1.word, 2.word, 3.word, 4.word, 5.word, ...  (words in A–Z order)
+    1.word, 2.word, 3.word, 4.word, 5.word, ...  (words in Aâ€“Z order)
 
     -Fun fact: write fun fact here`
     ;
@@ -1202,8 +1403,9 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
             }
             
             if (allWords.length > 0) {
-              console.log('[WordSearchSidebar] Updated word list with', allWords.length, 'words');
-              setTitleWords({ ...titleWords, words: allWords });
+              const words = normalizeGeneratedWordList(allWords);
+              console.log('[WordSearchSidebar] Updated word list with', words.length, 'words');
+              setTitleWords({ ...titleWords, words });
             }
           }
           
@@ -1239,13 +1441,79 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
     }
   };
 
-  const requiredWords = core.numberOfPuzzles * wordList.wordsPerPuzzle;
+  const requiredWords =
+    core.numberOfPuzzles *
+    (wordList.oneWordPerPuzzle ? 1 : wordList.wordsPerPuzzle);
   const wordCount = titleWords.words.length;
-  const activeDocumentPuzzleCount = core.numberOfPuzzles || 1;
-  const activeDocumentHasPuzzles = batchPuzzles.some(
-    (puzzle) => puzzle.pageId === activeDocumentPageId
+  const cwSettings = normalizeCrosswordSettings(
+    crosswordSettings ?? getDefaultCrosswordSettings()
   );
-  const hasWordList = wordCount > 0;
+  const crosswordAnswerCount = Math.max(
+    parseCrosswordLines(cwSettings.core.answersText).length,
+    titleWords.words.filter(Boolean).length
+  );
+  const activeDocumentPuzzleCount = moduleIsCrossword
+    ? cwSettings.core.numberOfPuzzles || 1
+    : moduleIsMurdoku
+      ? murdokuSettings?.core?.numberOfPuzzles || 1
+      : moduleIsTrivia
+      ? Math.max(
+          1,
+          Math.ceil(
+            (genericPuzzleSettings?.core?.numberOfPuzzles || 1) /
+              Math.max(1, genericPuzzleSettings?.core?.questionsPerPage || 3)
+          )
+        )
+      : moduleIsGeneric
+        ? genericPuzzleSettings?.core?.numberOfPuzzles || 1
+        : core.numberOfPuzzles || 1;
+  const activeDocumentHasPuzzles = moduleIsCrossword
+    ? crosswordBatchPuzzles.some((puzzle) => puzzle.pageId === activeDocumentPageId) ||
+      currentPuzzle?.type === 'crossword'
+    : moduleIsMurdoku
+      ? murdokuBatchPuzzles.some((puzzle) => puzzle.pageId === activeDocumentPageId) ||
+        currentPuzzle?.type === 'murdoku'
+      : moduleIsGeneric
+      ? genericBatchPuzzles.some(
+          (puzzle) =>
+            puzzle.pageId === activeDocumentPageId &&
+            puzzle.type === activeDocumentPage?.moduleType
+        )
+      : batchPuzzles.some((puzzle) => puzzle.pageId === activeDocumentPageId);
+  // Sudoku/maze need no word list — generation is always available.
+  // Trivia requires questions / suggestions / answers on the Words tab.
+  const triviaRequiredQuestions =
+    genericPuzzleSettings?.core?.numberOfPuzzles || 1;
+  const triviaRequiredSuggestions =
+    triviaRequiredQuestions *
+    (genericPuzzleSettings?.core?.suggestionsPerQuestion || 4);
+  const triviaQuestionCount = (genericPuzzleSettings?.core?.questionsText || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean).length;
+  const triviaSuggestionCount = (genericPuzzleSettings?.core?.suggestionsText || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean).length;
+  const triviaAnswerCount = (genericPuzzleSettings?.core?.answersText || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean).length;
+  const triviaMissingSuggestions = Math.max(
+    0,
+    triviaRequiredSuggestions - triviaSuggestionCount
+  );
+  const hasWordList = moduleIsCrossword
+    ? crosswordAnswerCount > 0
+    : moduleIsMurdoku
+      ? true
+      : moduleIsTrivia
+      ? triviaQuestionCount >= triviaRequiredQuestions &&
+        triviaMissingSuggestions === 0 &&
+        triviaAnswerCount >= triviaRequiredQuestions
+      : moduleIsGeneric
+        ? true
+        : wordCount > 0;
   const generationFingerprint = useMemo(
     () => computeWordSearchGenerationFingerprint(wordSearchSettings, titleWords),
     [wordSearchSettings, titleWords]
@@ -1283,27 +1551,40 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
     syncedFingerprint !== undefined &&
     syncedFingerprint !== generationFingerprint;
 
-  // First generate: need a word list. Update: only after grid size / word list / directions change.
-  const isGenerateLocked = activeDocumentHasPuzzles
-    ? !needsRegeneration
-    : !hasWordList;
-
-  const shouldPulseGenerate =
-    !isGenerateLocked &&
-    !isGeneratingPuzzles &&
-    ((!activeDocumentHasPuzzles && hasWordList) || needsRegeneration);
+  // First generate: need a word/answer list. Word-search update locks until settings change.
+  const isGenerateLocked = moduleIsCrossword
+    ? !hasWordList
+    : moduleIsMurdoku
+      ? false
+      : moduleIsTrivia
+      ? !hasWordList
+      : moduleIsGeneric
+        ? false
+        : activeDocumentHasPuzzles
+          ? !needsRegeneration
+          : !hasWordList;
 
   const generatePuzzlesLabel = activeDocumentHasPuzzles
-    ? `Update the ${activeDocumentPuzzleCount} ${activeDocumentPuzzleCount === 1 ? 'puzzle' : 'puzzles'}`
-    : `Generate the ${activeDocumentPuzzleCount} ${activeDocumentPuzzleCount === 1 ? 'puzzle' : 'puzzles'}`;
+    ? `Update ${activeDocumentPuzzleCount}`
+    : `Generate ${activeDocumentPuzzleCount}`;
 
   const generateButtonTitle = isGeneratingPuzzles
     ? 'Generating…'
     : isGenerateLocked
       ? activeDocumentHasPuzzles
-        ? 'Change grid size, word list, or directions to enable update'
-        : 'Add a word list to enable puzzle generation'
-      : generatePuzzlesLabel;
+        ? moduleIsCrossword
+          ? 'Add or change answers/clues, then generate again'
+          : moduleIsTrivia
+            ? 'Add or change questions, suggestions, or answers, then generate again'
+            : 'Change grid size, word list, or directions to enable update'
+        : moduleIsCrossword
+          ? 'Add answers (one per line) to enable puzzle generation'
+          : moduleIsTrivia
+            ? 'Add questions, suggestions, and answers to enable generation'
+            : 'Add a word list to enable puzzle generation'
+      : activeDocumentHasPuzzles
+        ? `Update ${activeDocumentPuzzleCount} ${activeDocumentPuzzleCount === 1 ? 'puzzle' : 'puzzles'}`
+        : `Generate ${activeDocumentPuzzleCount} ${activeDocumentPuzzleCount === 1 ? 'puzzle' : 'puzzles'}`;
 
   const editedPageIndicesInDocument = useMemo(
     () =>
@@ -1325,43 +1606,114 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
     ]
   );
 
+  // Crossword equivalent: overrides are keyed by document-local puzzle index.
+  const editedCrosswordPageIndices = useMemo(
+    () => Array.from(pageCrosswordOverrides.keys()).sort((a, b) => a - b),
+    [pageCrosswordOverrides]
+  );
+
+  const editedGenericPageIndices = useMemo(
+    () => Array.from(pageGenericOverrides.keys()).sort((a, b) => a - b),
+    [pageGenericOverrides]
+  );
+
+  const editedIndicesForActiveModule = moduleIsCrossword
+    ? editedCrosswordPageIndices
+    : moduleIsGeneric
+      ? editedGenericPageIndices
+      : editedPageIndicesInDocument;
+
   const runGeneratePuzzles = async (options?: GeneratePuzzleOptions) => {
+    const split = options?.splitIntoChapters;
+    const label = split
+      ? `Creating ${split.chapterCount} chapters and generating puzzles…`
+      : activeDocumentHasPuzzles
+        ? `Updating ${activeDocumentPuzzleCount} puzzle${activeDocumentPuzzleCount === 1 ? '' : 's'}…`
+        : `Generating ${activeDocumentPuzzleCount} puzzle${activeDocumentPuzzleCount === 1 ? '' : 's'}…`;
     setIsGeneratingPuzzles(true);
+    showBusy(label);
     await new Promise((resolve) => setTimeout(resolve, 400));
     try {
-      generatePuzzle(options);
+      await generatePuzzle(options);
     } finally {
       setIsGeneratingPuzzles(false);
+      // Keep overlay briefly so canvas can settle after generation.
+      window.setTimeout(() => hideBusy(), 350);
     }
+  };
+
+  const resolveSplitIntoChapters = (): GeneratePuzzleOptions['splitIntoChapters'] => {
+    if (!moduleIsWordSearch && !moduleIsCrossword) return undefined;
+    const numberOfPuzzles = moduleIsCrossword
+      ? crosswordSettings.core.numberOfPuzzles
+      : wordSearchSettings.core.numberOfPuzzles;
+    const puzzlesStartingNumber = moduleIsCrossword
+      ? crosswordSettings.core.puzzlesStartingNumber
+      : wordSearchSettings.core.puzzlesStartingNumber;
+    return (
+      resolveActiveSplitRequest({
+        documents: documentPages,
+        numberOfPuzzles,
+        puzzlesStartingNumber,
+        alreadySplit: documentLooksAlreadyChapterSplit(activeDocumentPage),
+      }) ?? undefined
+    );
   };
 
   const handleGeneratePuzzles = async () => {
     if (isGenerateLocked || isGeneratingPuzzles) return;
-    if (activeDocumentHasPuzzles && editedPageIndicesInDocument.length > 0) {
-      setPreserveEditedPagesOnGenerate(true);
+    const splitIntoChapters = resolveSplitIntoChapters();
+    if (splitIntoChapters) {
+      await runGeneratePuzzles({ clearPageCustomizations: true, splitIntoChapters });
+      return;
+    }
+    if (
+      (moduleIsWordSearch || moduleIsCrossword || moduleIsGeneric || moduleIsMurdoku) &&
+      activeDocumentHasPuzzles &&
+      editedIndicesForActiveModule.length > 0
+    ) {
+      // Default: regenerate every puzzle. User can opt to keep edited pages.
+      setPreserveEditedPagesOnGenerate(false);
       setGenerateConfirmOpen(true);
       return;
     }
-    await runGeneratePuzzles();
+    // Full update: rebuild all puzzles and drop per-page styling overrides.
+    await runGeneratePuzzles(
+      moduleIsWordSearch || moduleIsCrossword || moduleIsGeneric || moduleIsMurdoku
+        ? { clearPageCustomizations: true }
+        : undefined
+    );
   };
 
   const handleGenerateConfirm = async () => {
     setGenerateConfirmOpen(false);
     const options: GeneratePuzzleOptions = preserveEditedPagesOnGenerate
-      ? { preserveEditedPageIndices: editedPageIndicesInDocument }
+      ? moduleIsCrossword || moduleIsGeneric
+        ? // Crossword/sudoku/maze page edits are pure styling overrides —
+          // regenerating grids keeps them if we do not clear customizations.
+          {}
+        : { preserveEditedPageIndices: editedPageIndicesInDocument }
       : { clearPageCustomizations: true };
     await runGeneratePuzzles(options);
   };
 
   return (
-    <div className={`word-search-sidebar relative transition-all duration-300 h-full bg-gradient-to-b from-slate-50 to-white dark:from-slate-950 dark:to-slate-900 border-r border-gray-200 dark:border-slate-800 flex flex-col shadow-lg overflow-visible max-lg:w-full ${
-      collapsed ? 'w-28' : 'w-96'
-    }`}>
-      {/* Edge-centre minimal collapse arrow — explicit inline SVG to avoid style overrides */}
+    <div
+      className={cn(
+        'word-search-sidebar relative h-full bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 flex flex-col overflow-visible max-lg:w-full',
+        collapsed
+          ? 'w-28 transition-all duration-300'
+          : isSidebarResizing
+            ? ''
+            : 'transition-[width] duration-75'
+      )}
+      style={collapsed || !isDesktopLayout ? undefined : { width: clampedSidebarWidth }}
+    >
+      {/* Edge-centre minimal collapse arrow — desktop only */}
       <button
         aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         onClick={() => setCollapsed((c) => !c)}
-        className="absolute top-1/2 -right-2 z-50 flex items-center justify-center p-0 m-0 rounded-sm opacity-20 transition duration-100 hover:opacity-80 hover:scale-110"
+        className="absolute top-1/2 -right-2 z-50 hidden lg:flex items-center justify-center p-0 m-0 rounded-sm opacity-20 transition duration-100 hover:opacity-80 hover:scale-110"
         style={{
           transform: 'translateY(-50%)',
           width: 20,
@@ -1386,110 +1738,227 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
           }}
         />
       </button>
+      {!collapsed ? (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize settings panel"
+          title="Drag to resize panel"
+          onPointerDown={handleSidebarResizePointerDown}
+          onPointerMove={handleSidebarResizePointerMove}
+          onPointerUp={handleSidebarResizePointerUp}
+          onPointerCancel={handleSidebarResizePointerUp}
+          className="group/resize absolute inset-y-0 -right-1.5 z-40 hidden w-4 cursor-col-resize touch-none lg:block"
+        >
+          <span
+            className={cn(
+              'pointer-events-none absolute inset-y-12 right-[6px] w-1 rounded-full transition-colors',
+              isSidebarResizing
+                ? 'bg-sky-500'
+                : 'bg-slate-300/70 group-hover/resize:bg-sky-400 dark:bg-slate-500/70'
+            )}
+          />
+        </div>
+      ) : null}
       <style>{`
-        /* Modern tab styling — scoped to sidebar only */
+        /* Professional rail tabs — overrides global .modern-tabs-trigger */
         .word-search-sidebar [role="tablist"] {
           display: flex;
           flex-direction: column;
+          align-items: center;
           justify-content: flex-start;
-          gap: 2rem;
-          padding: 8px;
-          background: transparent;
-          border-right: 2px solid rgba(226, 232, 240, 0.8);
+          gap: 1rem;
+          width: 5.25rem;
+          padding: 14px 10px 14px 12px;
+          background: #f8fafc;
+          border-right: 1px solid #e2e8f0;
         }
-        
-        .word-search-sidebar button[role="tab"] {
-          flex: 0;
-          width: 4.25rem;
-          min-height: 4.25rem;
-          height: auto;
-          min-width: auto;
-          padding: 0.5rem 0;
-          border-radius: 0; /* square corners */
-          font-weight: 500;
-          transition: all 200ms ease-out;
-          border: 2px solid transparent;
-          background: white;
+
+        .word-search-sidebar .sidebar-rail-group {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          width: 100%;
+          gap: 0.4rem;
+        }
+
+        .word-search-sidebar .sidebar-rail-heading {
+          width: 100%;
+          padding: 0 2px;
+          text-align: center;
+          background: transparent !important;
+          border: none !important;
+          box-shadow: none !important;
+          cursor: pointer;
+          transform: none !important;
+        }
+
+        .word-search-sidebar .sidebar-rail-heading__title {
+          margin: 0;
+          font-size: 9px;
+          font-weight: 700;
+          letter-spacing: 0.07em;
+          text-transform: uppercase;
           color: #64748b;
-          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+          line-height: 1.2;
+        }
+
+        .word-search-sidebar .sidebar-rail-heading__sub {
+          display: none;
+        }
+
+        .word-search-sidebar .sidebar-radio-input {
+          position: relative;
           display: inline-flex;
+          flex-direction: column;
+          align-items: stretch;
+          width: 100%;
+          border-radius: 0.85rem;
+          background: #ffffff;
+          color: #0f172a;
+          border: 1px solid #d1d5db;
+          box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+          overflow: hidden;
+        }
+
+        .word-search-sidebar .sidebar-radio-input .sidebar-radio-options {
+          display: flex;
+          flex-direction: column;
+          width: 100%;
+          padding: 4px;
+          gap: 2px;
+        }
+
+        .word-search-sidebar .sidebar-radio-input button[role="tab"].modern-tabs-trigger,
+        .word-search-sidebar .sidebar-radio-input button[role="tab"] {
+          position: relative;
+          z-index: 1;
+          flex: 0 0 auto !important;
+          width: 100% !important;
+          height: 4.25rem !important;
+          min-height: 4.25rem !important;
+          min-width: 0 !important;
+          padding: 0.7rem 0.35rem !important;
+          border-radius: 0.65rem !important;
+          font-weight: 600 !important;
+          font-size: inherit !important;
+          border: 1px solid transparent !important;
+          background: transparent !important;
+          color: #334155 !important;
+          box-shadow: none !important;
+          text-shadow: none !important;
+          display: inline-flex !important;
           align-items: center;
           justify-content: center;
           flex-direction: column;
-        }
-        
-        .word-search-sidebar button[role="tab"]:hover {
-          background: var(--gp-grey-100);
-          color: var(--gp-blue);
-          box-shadow: 0 4px 12px rgba(26, 90, 140, 0.12);
-          transform: translateY(-1px);
-        }
-        
-        .word-search-sidebar button[role="tab"][data-state="active"] {
-          background: var(--gp-white);
-          color: var(--gp-blue);
-          border-color: var(--gp-grey-200);
-          box-shadow: 0 4px 12px rgba(26, 90, 140, 0.15);
+          gap: 0.3rem;
+          transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;
+          transform: none !important;
         }
 
-        /* Icon and accent animations */
-        .word-search-sidebar button[role="tab"] svg { transition: transform 260ms cubic-bezier(.2,.9,.2,1), opacity 180ms ease; transform-origin: center center; display: block; margin: 0 auto; }
-        .word-search-sidebar button[role="tab"]:hover svg { transform: scale(1.03); }
-        .word-search-sidebar button[role="tab"][data-state="active"] svg { transform: scale(1.08); }
+        .word-search-sidebar .sidebar-radio-input button[role="tab"].modern-tabs-trigger:hover,
+        .word-search-sidebar .sidebar-radio-input button[role="tab"]:hover {
+          background: #f1f5f9 !important;
+          color: #1a5a8c !important;
+          border-color: transparent !important;
+          box-shadow: none !important;
+          transform: none !important;
+        }
 
-        .word-search-sidebar button[role="tab"] svg .icon-accent { opacity: 0; transform-origin: center; transition: opacity 240ms ease, transform 320ms cubic-bezier(.2,.9,.2,1); }
-        .word-search-sidebar button[role="tab"][data-state="active"] svg .icon-accent { opacity: 1; transform: scale(1.06); animation: gp-pulse 1.6s ease-in-out infinite; }
+        .word-search-sidebar .sidebar-radio-input button[role="tab"].modern-tabs-trigger[data-state="active"],
+        .word-search-sidebar .sidebar-radio-input button[role="tab"][data-state="active"] {
+          background: #e8eef3 !important;
+          color: #1a5a8c !important;
+          border-color: #d0dae4 !important;
+          box-shadow: none !important;
+          text-shadow: none !important;
+          transform: none !important;
+          font-weight: 600 !important;
+        }
 
-        @keyframes gp-pulse {
-          0% { transform: scale(1); }
-          50% { transform: scale(1.08); }
-          100% { transform: scale(1); }
+        .word-search-sidebar .sidebar-radio-input button[role="tab"][data-state="active"]::before {
+          display: none;
+        }
+
+        .word-search-sidebar .sidebar-radio-input button[role="tab"] .tab-subtitle {
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.01em;
+          line-height: 1.15;
+          max-width: 100%;
+          color: #475569;
+          opacity: 1;
+        }
+
+        .word-search-sidebar .sidebar-radio-input button[role="tab"]:hover .tab-subtitle,
+        .word-search-sidebar .sidebar-radio-input button[role="tab"][data-state="active"] .tab-subtitle {
+          color: #1a5a8c;
+        }
+
+        .word-search-sidebar .sidebar-radio-input button[role="tab"] svg {
+          display: block;
+          margin: 0 auto;
+          width: 1.55rem !important;
+          height: 1.55rem !important;
+          stroke-width: 2;
+          color: #475569;
+          stroke: currentColor;
+          fill: none;
+          transition: color 0.15s ease;
+          transform: none !important;
+        }
+
+        .word-search-sidebar .sidebar-radio-input button[role="tab"]:hover svg,
+        .word-search-sidebar .sidebar-radio-input button[role="tab"][data-state="active"] svg {
+          color: #1a5a8c !important;
+          stroke: #1a5a8c !important;
+          transform: none !important;
+        }
+
+        .word-search-sidebar .sidebar-radio-input button[role="tab"] svg .icon-accent {
+          display: none;
         }
 
         .word-search-sidebar [role="tabpanel"] {
           background: transparent;
-          animation: slideDown 300ms ease-out;
-        }
-        
-        @keyframes slideDown {
-          from {
-            opacity: 0;
-            transform: translateY(-10px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
         }
 
         .word-search-sidebar .sidebar-generate-wrap {
           display: flex;
           flex-direction: column;
           align-items: center;
-          gap: 0.3rem;
+          gap: 0.4rem;
           flex-shrink: 0;
-          width: 3.5rem;
+          width: 100%;
+          margin-top: 0.15rem;
+          background: transparent;
+          border: none;
+          box-shadow: none;
+          overflow: visible;
+          padding: 0;
         }
 
         .word-search-sidebar .sidebar-generate-btn {
           flex: 0;
-          width: 3.5rem;
-          min-height: 3.5rem;
-          height: auto;
+          width: 100%;
+          height: 4.25rem;
+          min-height: 4.25rem;
           min-width: auto;
-          padding: 0.4rem 0;
-          border-radius: 0.5rem;
-          font-weight: 500;
-          transition: all 200ms ease-out;
-          border: 2px solid var(--gp-blue, #1a5a8c);
-          background: var(--gp-blue, #1a5a8c);
+          padding: 0.7rem 0.35rem;
+          border-radius: 0.85rem;
+          font-weight: 600;
+          border: 1px solid #144a75;
+          background: #1a5a8c;
           color: #ffffff;
-          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+          box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
           display: inline-flex;
           align-items: center;
           justify-content: center;
           flex-direction: column;
+          gap: 0;
           cursor: pointer;
+          transition: background-color 0.15s ease;
+          transform: none;
         }
 
         .word-search-sidebar .sidebar-generate-btn svg {
@@ -1497,19 +1966,21 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
           margin: 0 auto;
           color: #ffffff;
           stroke: #ffffff;
-          transition: transform 260ms cubic-bezier(.2,.9,.2,1), opacity 180ms ease;
-          transform-origin: center center;
-        }
-
-        .word-search-sidebar .sidebar-generate-btn:hover:not(:disabled) svg {
-          transform: scale(1.03);
+          width: 1.55rem;
+          height: 1.55rem;
+          transform: none;
         }
 
         .word-search-sidebar .sidebar-generate-btn:hover:not(:disabled) {
-          background: var(--gp-blue-dark, #144a75);
-          border-color: var(--gp-blue-dark, #144a75);
-          box-shadow: 0 4px 12px rgba(26, 90, 140, 0.25);
-          transform: translateY(-1px);
+          background: #144a75;
+          box-shadow: none;
+          transform: none;
+        }
+
+        .word-search-sidebar .sidebar-generate-btn:hover:not(:disabled) svg {
+          color: #ffffff;
+          stroke: #ffffff;
+          transform: none;
         }
 
         .word-search-sidebar .sidebar-generate-btn:disabled {
@@ -1520,30 +1991,32 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
         }
 
         .word-search-sidebar .sidebar-generate-btn--pulse {
-          animation: sidebar-generate-pulse 1.4s ease-in-out infinite;
-        }
-
-        @keyframes sidebar-generate-pulse {
-          0%, 100% {
-            transform: scale(1);
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-          }
-          50% {
-            transform: scale(1.1);
-            box-shadow: 0 6px 16px rgba(26, 90, 140, 0.35);
-          }
+          animation: none;
         }
 
         .word-search-sidebar .sidebar-generate-caption {
           margin: 0;
-          padding: 0;
-          font-size: 13px;
-          font-weight: 600;
-          line-height: 1.35;
+          padding: 0 0.15rem;
+          font-size: 12px;
+          font-weight: 700;
+          line-height: 1.25;
           letter-spacing: 0;
           text-align: center;
-          color: #64748b;
-          max-width: 4rem;
+          color: #1a5a8c;
+          max-width: 100%;
+        }
+
+        .word-search-sidebar .sidebar-generate-btn--ai {
+          border-color: #6d28d9;
+          background: #7c3aed;
+        }
+
+        .word-search-sidebar .sidebar-generate-btn--ai:hover:not(:disabled) {
+          background: #6d28d9;
+        }
+
+        .word-search-sidebar .sidebar-generate-caption--ai {
+          color: #6d28d9;
         }
 
         .word-search-sidebar .direction-toggle {
@@ -1556,11 +2029,11 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
           min-width: 0 !important;
           padding: 0 !important;
           border-radius: 0.5rem;
-          border: 2px solid #e2e8f0;
+          border: 1px solid #e2e8f0;
           background: #ffffff !important;
           color: #0f172a !important;
-          box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
-          transition: all 200ms ease-out;
+          box-shadow: none;
+          transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
           cursor: pointer;
         }
 
@@ -1570,224 +2043,292 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
         }
 
         .word-search-sidebar .direction-toggle--active {
-          border-color: var(--gp-blue, #1a5a8c) !important;
-          background: linear-gradient(
-            180deg,
-            var(--gp-blue-light, #2276b4) 0%,
-            var(--gp-blue, #1a5a8c) 100%
-          ) !important;
-          color: #ffffff !important;
-          box-shadow:
-            0 0 0 2px rgba(34, 118, 180, 0.2),
-            0 0 16px rgba(34, 118, 180, 0.55),
-            0 2px 6px rgba(26, 90, 140, 0.35);
+          border-color: #d0dae4 !important;
+          background: #e8eef3 !important;
+          color: #1a5a8c !important;
+          box-shadow: none;
         }
 
         .word-search-sidebar .direction-toggle--active:hover {
-          box-shadow:
-            0 0 0 2px rgba(34, 118, 180, 0.3),
-            0 0 20px rgba(34, 118, 180, 0.65),
-            0 2px 8px rgba(26, 90, 140, 0.4);
+          box-shadow: none;
+          background: #dce6ee !important;
         }
 
         .word-search-sidebar .direction-toggle svg {
-          width: 1.25rem;
-          height: 1.25rem;
-          stroke-width: 2.25;
+          width: 1.15rem;
+          height: 1.15rem;
+          stroke-width: 2;
         }
 
         .word-search-sidebar .direction-toggle--active svg {
-          color: #ffffff;
-          stroke: #ffffff;
-          filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.35));
+          color: #1a5a8c;
+          stroke: #1a5a8c;
+          filter: none;
         }
 
         .word-search-sidebar .direction-toggle:not(.direction-toggle--active) svg {
-          color: #0f172a;
-          stroke: #0f172a;
+          color: #334155;
+          stroke: #334155;
+        }
+
+        @media (max-width: 1023px) {
+          .word-search-sidebar [role="tabpanel"] {
+            height: auto !important;
+            max-height: none !important;
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            margin: 0.5rem !important;
+            padding: 0.85rem !important;
+          }
+
+          .word-search-sidebar [role="tablist"] {
+            width: 4.75rem;
+            padding: 10px 8px 10px 10px;
+          }
         }
       `}</style>
 
       <Tabs value={activeTab} orientation="vertical" className="w-full flex-1 flex min-h-0" onValueChange={handleTabChange}>
-        <TabsList className="flex h-auto flex-col w-[6.5rem] gap-2 bg-transparent shrink-0 px-1">
-          {/* ── Panel A: book-wide layout ── */}
-          <div className="w-full space-y-1.5 pb-2 border-b border-gray-200 dark:border-slate-700">
+        <TabsList className="flex h-full min-h-0 flex-col w-[5.25rem] gap-4 bg-transparent shrink-0 px-0 py-0">
+          {/* Panel A: book-wide layout */}
+          <div className="sidebar-rail-group">
             <button
               type="button"
               onClick={() => handlePanelChange('layout')}
-              className={cn(
-                'w-full rounded-lg px-1.5 py-1.5 text-left transition-colors',
-                settingsPanel === 'layout'
-                  ? 'bg-sky-50 dark:bg-sky-950/40 ring-1 ring-sky-300/60 dark:ring-sky-700/50'
-                  : 'hover:bg-gray-50 dark:hover:bg-slate-800/60'
-              )}
-              title="Page layout for all document tabs"
+              className="sidebar-rail-heading"
+              title="Book-wide layout settings"
             >
-              <p className="text-[10px] font-bold uppercase tracking-wide text-sky-700 dark:text-sky-300 leading-tight">
-                Layout
-              </p>
-              <p className="text-[9px] text-muted-foreground leading-tight mt-0.5">
-                All tabs
-              </p>
+              <p className="sidebar-rail-heading__title">Layout</p>
             </button>
-            <div
-              className={cn(
-                'flex flex-col gap-1.5 transition-opacity',
-                settingsPanel !== 'layout' && 'opacity-40'
-              )}
-            >
-              <TabsTrigger
-                value="book"
-                title="Trim size & page layout"
-                className="transition-all duration-200 w-full"
-                onPointerDown={(e) => {
-                  setSettingsPanel('layout');
-                  handleTriggerPointerDown(e, 'book');
-                }}
-              >
-                <Book className="w-5 h-5" />
-              </TabsTrigger>
-              <TabsTrigger
-                value="colors"
-                title="Colors, background, frame, header & page numbers"
-                className="transition-all duration-200 w-full"
-                onPointerDown={(e) => {
-                  setSettingsPanel('layout');
-                  handleTriggerPointerDown(e, 'colors');
-                }}
-              >
-                <Palette className="w-5 h-5" />
-              </TabsTrigger>
-              <TabsTrigger
-                value="pages"
-                title="Chapter pages for all puzzle documents"
-                className="transition-all duration-200 w-full"
-                onPointerDown={(e) => {
-                  setSettingsPanel('layout');
-                  handleTriggerPointerDown(e, 'pages');
-                }}
-              >
-                <Sparkles className="w-5 h-5" />
-              </TabsTrigger>
-            </div>
+            <article className="sidebar-radio-input">
+              <div className="sidebar-radio-options">
+                <TabsTrigger
+                  value="book"
+                  label="Trim"
+                  title="Trim size & margins"
+                  className="w-full"
+                  onPointerDown={(e) => {
+                    setSettingsPanel('layout');
+                    handleTriggerPointerDown(e, 'book');
+                  }}
+                >
+                  <Book />
+          </TabsTrigger>
+                <TabsTrigger
+                  value="colors"
+                  label="Style"
+                  title="Colors, frame & page numbers"
+                  className="w-full"
+                  onPointerDown={(e) => {
+                    setSettingsPanel('layout');
+                    handleTriggerPointerDown(e, 'colors');
+                  }}
+                >
+                  <Palette />
+          </TabsTrigger>
+                <TabsTrigger
+                  value="pages"
+                  label="Chapters"
+                  title="Chapter pages"
+                  className="w-full"
+                  onPointerDown={(e) => {
+                    setSettingsPanel('layout');
+                    handleTriggerPointerDown(e, 'pages');
+                  }}
+                >
+                  <Sparkles />
+          </TabsTrigger>
+              </div>
+            </article>
           </div>
 
-          {/* ── Panel B: current document ── */}
-          <div className="w-full space-y-1.5 pt-1">
+          {/* Panel B: current document */}
+          <div className="sidebar-rail-group">
             <button
               type="button"
               onClick={() => handlePanelChange('document')}
-              className={cn(
-                'w-full rounded-lg px-1.5 py-1.5 text-left transition-colors',
-                settingsPanel === 'document'
-                  ? 'bg-sky-50 dark:bg-sky-950/40 ring-1 ring-sky-300/60 dark:ring-sky-700/50'
-                  : 'hover:bg-gray-50 dark:hover:bg-slate-800/60'
-              )}
-              title="Settings for the current document tab"
+              className="sidebar-rail-heading"
+              title="Settings for this document"
             >
-              <p className="text-[10px] font-bold uppercase tracking-wide text-sky-700 dark:text-sky-300 leading-tight">
-                Document
-              </p>
-              <p className="text-[9px] text-muted-foreground leading-tight mt-0.5">
-                This tab
-              </p>
+              <p className="sidebar-rail-heading__title">Document</p>
             </button>
-            <div
-              className={cn(
-                'flex flex-col gap-1.5 transition-opacity',
-                settingsPanel !== 'document' && 'opacity-40'
-              )}
-            >
-              {moduleIsWordSearch ? (
-                <>
-              <TabsTrigger
-                value="puzzle"
-                title="Puzzle settings"
-                className="transition-all duration-200 w-full"
-                onPointerDown={(e) => {
-                  setSettingsPanel('document');
-                  handleTriggerPointerDown(e, 'puzzle');
-                }}
-              >
-                <Grid3X3 className="w-5 h-5" />
-              </TabsTrigger>
-              <TabsTrigger
-                value="words"
-                title="Word list"
-                className="transition-all duration-200 w-full"
-                onPointerDown={(e) => {
-                  setSettingsPanel('document');
-                  handleTriggerPointerDown(e, 'words');
-                }}
-              >
-                <List className="w-5 h-5" />
-              </TabsTrigger>
-              <TabsTrigger
-                value="design"
-                title="Puzzle titles"
-                className="transition-all duration-200 w-full"
-                onPointerDown={(e) => {
-                  setSettingsPanel('document');
-                  handleTriggerPointerDown(e, 'design');
-                }}
-              >
-                <Type className="w-5 h-5" />
-              </TabsTrigger>
-                </>
-              ) : (
-              <TabsTrigger
-                value="page"
-                title="This page settings"
-                className="transition-all duration-200 w-full"
-                onPointerDown={(e) => {
-                  setSettingsPanel('document');
-                  handleTriggerPointerDown(e, 'page');
-                }}
-              >
-                <Type className="w-5 h-5" />
-              </TabsTrigger>
-              )}
-            </div>
+            <article className="sidebar-radio-input">
+              <div className="sidebar-radio-options">
+                {moduleHasPuzzleDocumentTabs ? (
+                  <>
+                <TabsTrigger
+                  value="puzzle"
+                  label="Puzzle"
+                  title="Puzzle settings"
+                  className="w-full"
+                  onPointerDown={(e) => {
+                    setSettingsPanel('document');
+                    handleTriggerPointerDown(e, 'puzzle');
+                  }}
+                >
+                  <Grid3X3 />
+          </TabsTrigger>
+                <TabsTrigger
+                  value="words"
+                  label={moduleIsMurdoku ? 'Characters' : 'Words'}
+                  title={
+                    moduleIsCrossword
+                      ? 'Clues & answers'
+                      : moduleIsMurdoku
+                        ? 'Characters'
+                        : moduleIsTrivia
+                        ? 'Questions & answers'
+                        : 'Word list'
+                  }
+                  className="w-full"
+                  onPointerDown={(e) => {
+                    setSettingsPanel('document');
+                    handleTriggerPointerDown(e, 'words');
+                  }}
+                >
+                  <List />
+          </TabsTrigger>
+                {moduleIsMurdoku ? (
+                <TabsTrigger
+                  value="elements"
+                  label="Elements"
+                  title="Elements"
+                  className="w-full"
+                  onPointerDown={(e) => {
+                    setSettingsPanel('document');
+                    handleTriggerPointerDown(e, 'elements');
+                  }}
+                >
+                  <Cubes />
+                </TabsTrigger>
+                ) : null}
+                <TabsTrigger
+                  value="design"
+                  label="Titles"
+                  title="Puzzle titles"
+                  className="w-full"
+                  onPointerDown={(e) => {
+                    setSettingsPanel('document');
+                    handleTriggerPointerDown(e, 'design');
+                  }}
+                >
+                  <Type />
+                </TabsTrigger>
+                  </>
+                ) : (
+                <TabsTrigger
+                  value="page"
+                  label="Page"
+                  title="Page settings"
+                  className="w-full"
+                  onPointerDown={(e) => {
+                    setSettingsPanel('document');
+                    handleTriggerPointerDown(e, 'page');
+                  }}
+                >
+                  <Type />
+                </TabsTrigger>
+                )}
+              </div>
+            </article>
           </div>
 
-          {moduleIsWordSearch && (
-          <div className="sidebar-generate-wrap mt-2">
+          {(moduleIsWordSearch || moduleIsCrossword || moduleIsGeneric || moduleIsMurdoku) && (
+          <div className="sidebar-generate-wrap">
             <button
               type="button"
-              className={cn(
-                'sidebar-generate-btn',
-                shouldPulseGenerate && 'sidebar-generate-btn--pulse'
-              )}
+              className="sidebar-generate-btn"
               onClick={handleGeneratePuzzles}
               disabled={isGenerateLocked || isGeneratingPuzzles}
               title={generateButtonTitle}
               aria-label={generateButtonTitle}
             >
               {activeDocumentHasPuzzles ? (
-                <RefreshCw className={cn('w-5 h-5', isGeneratingPuzzles && 'animate-spin')} />
+                <RefreshCw className={cn(isGeneratingPuzzles && 'animate-spin')} />
               ) : (
-                <Zap className="w-5 h-5" />
+                <Zap />
               )}
             </button>
             <p className="sidebar-generate-caption">{generatePuzzlesLabel}</p>
+            {isAiPuzzleType(activeDocumentPage?.moduleType) ? (
+              <>
+                <button
+                  type="button"
+                  className="sidebar-generate-btn sidebar-generate-btn--ai"
+                  onClick={() => setAiGenerateOpen(true)}
+                  disabled={isGeneratingPuzzles}
+                  title="Generate with AI"
+                  aria-label="Generate with AI"
+                >
+                  <Sparkles />
+                </button>
+                <p className="sidebar-generate-caption sidebar-generate-caption--ai">
+                  Generate with AI
+                </p>
+              </>
+            ) : null}
           </div>
           )}
         </TabsList>
 
+        {canvasEditOpen && canvasEditPanelProps && moduleIsWordSearch && !collapsed ? (
+          <div
+            className="flex-1 min-h-0 m-2 overflow-hidden rounded-lg border border-sky-200 bg-gradient-to-b from-white to-gray-50 shadow-sm dark:border-sky-800 dark:from-slate-800 dark:to-slate-850"
+            style={{ height: 'calc(100vh - 100px)' }}
+          >
+            <CanvasContextualControls {...canvasEditPanelProps} variant="sidebar" />
+          </div>
+        ) : null}
+
+        {canvasEditOpen && crosswordPanelProps && moduleIsCrossword && !collapsed ? (
+          <div
+            className="flex-1 min-h-0 m-2 overflow-hidden rounded-lg border border-sky-200 bg-gradient-to-b from-white to-gray-50 shadow-sm dark:border-sky-800 dark:from-slate-800 dark:to-slate-850"
+            style={{ height: 'calc(100vh - 100px)' }}
+          >
+            <CrosswordContextualControls {...crosswordPanelProps} variant="sidebar" />
+          </div>
+        ) : null}
+
+        {canvasEditOpen &&
+        genericPuzzlePanelProps &&
+        !moduleIsWordSearch &&
+        !moduleIsCrossword &&
+        !moduleIsMurdoku &&
+        !collapsed ? (
+          <div
+            className="flex-1 min-h-0 m-2 overflow-hidden rounded-lg border border-sky-200 bg-gradient-to-b from-white to-gray-50 shadow-sm dark:border-sky-800 dark:from-slate-800 dark:to-slate-850"
+            style={{ height: 'calc(100vh - 100px)' }}
+          >
+            <GenericPuzzleContextualControls {...genericPuzzlePanelProps} variant="sidebar" />
+          </div>
+        ) : null}
+
         {/* ==================== PUZZLE SETTINGS ==================== */}
-        <TabsContent value="puzzle" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', collapsed && 'hidden')}>
+        <TabsContent value="puzzle" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')}>
+          {moduleIsCrossword ? (
+            <CrosswordPuzzleSettingsPanel onSave={handleSave} />
+          ) : moduleIsMurdoku ? (
+            <MurdokuPuzzleSettingsPanel onSave={handleSave} />
+          ) : moduleIsTrivia ? (
+            <TriviaPuzzleSettingsPanel onSave={handleSave} />
+          ) : moduleIsGeneric ? (
+            <GenericPuzzleSettingsPanel moduleType={genericModuleType} onSave={handleSave} />
+          ) : moduleIsWordSearch ? (
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
-                  Document · This tab
+                  Document Â· This tab
                 </p>
-                <h3 className="font-semibold text-gray-900 dark:text-white">Puzzle Settings</h3>
+              <h3 className="font-semibold text-gray-900 dark:text-white">Puzzle Settings</h3>
               </div>
               <Button variant="outline" size="sm" onClick={handleSave} className="transition-all duration-200 border-gray-300 dark:border-slate-600">
                 <Save className="w-4 h-4 mr-2" />Save
               </Button>
             </div>
+
 
             {/* Quantity */}
             <div className="space-y-3">
@@ -1798,7 +2339,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   <IntegerInput
                     value={core.numberOfPuzzles}
                     onChange={(value) => updateCore({ numberOfPuzzles: value })}
-                    min={1}
+                    min={0}
                     max={1000}
                   />
                 </div>
@@ -1807,10 +2348,22 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   <IntegerInput
                     value={core.puzzlesStartingNumber}
                     onChange={(value) => updateCore({ puzzlesStartingNumber: value })}
-                    min={1}
+                    min={0}
                   />
                 </div>
               </div>
+              <CheckboxItem
+                label="Two-page puzzles"
+                checked={Boolean(core.twoPagePuzzles)}
+                onCheckedChange={(v) => updateCore({ twoPagePuzzles: v === true })}
+              />
+              <p className="text-xs text-gray-500 -mt-1">
+                First page: title, puzzle number, fun fact, and clues. Second page: grid only.
+              </p>
+              <DivideListsIntoChaptersControl
+                numberOfPuzzles={core.numberOfPuzzles}
+                puzzlesStartingNumber={core.puzzlesStartingNumber}
+              />
             </div>
 
             {/* Grid Size */}
@@ -1823,45 +2376,367 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                 <SliderField
                   label="Letters Across"
                   value={core.lettersAcross}
-                  onValueChange={(v) => updateCore({ lettersAcross: v })}
-                  min={8}
-                  max={30}
+                  onValueChange={(v) => updateCore({ lettersAcross: Math.min(100, v) })}
+                  min={0}
+                  max={100}
                   step={1}
+                  control="input"
                 />
                 <SliderField
                   label="Letters Down"
                   value={core.lettersDown}
-                  onValueChange={(v) => updateCore({ lettersDown: v })}
-                  min={8}
-                  max={30}
+                  onValueChange={(v) => updateCore({ lettersDown: Math.min(100, v) })}
+                  min={0}
+                  max={100}
                   step={1}
+                  control="input"
                 />
               </div>
-              {/* Puzzle Grid Scale Controls */}
-              <div className="border-t pt-3">
-                <Label className="text-xs text-gray-500 mb-2 block">Puzzle Grid Scale</Label>
-                <div className="flex items-center gap-1 border border-gray-200 rounded-md">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setPuzzleGridScale(Math.max(puzzleGridScale - 10, 50))}
-                    title="Shrink Grid"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><circle cx="11" cy="11" r="8"></circle><line x1="21" x2="16.65" y1="21" y2="16.65"></line><line x1="8" x2="14" y1="11" y2="11"></line></svg>
-                  </Button>
-                  <span className="px-2 text-sm font-medium min-w-[70px] text-center" title="Puzzle Grid Scale">
-                    Grid: {puzzleGridScale}%
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setPuzzleGridScale(Math.min(puzzleGridScale + 10, 200))}
-                    title="Enlarge Grid"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><circle cx="11" cy="11" r="8"></circle><line x1="21" x2="16.65" y1="21" y2="16.65"></line><line x1="11" x2="11" y1="8" y2="14"></line><line x1="8" x2="14" y1="11" y2="11"></line></svg>
-                  </Button>
-                </div>
+              <div className="border-t pt-3 space-y-2">
+                <SliderField
+                  label="Puzzle Grid Scale"
+                  value={puzzleGridScale}
+                  onValueChange={setPuzzleGridScale}
+                  min={0}
+                  max={200}
+                  step={5}
+                  format="percent"
+                  control="popover"
+                />
               </div>
+            </div>
+
+            {/* Shape Word Search */}
+            <div className="space-y-3">
+              <CheckboxItem
+                label="Shape Word Search"
+                checked={Boolean(core.shapeWordSearchEnabled)}
+                onCheckedChange={(v) =>
+                  updateCore({
+                    shapeWordSearchEnabled: v,
+                    shapeMaskMode: core.shapeMaskMode ?? 'common',
+                    ...(v ? { noBoxAroundPuzzle: true } : {}),
+                  })
+                }
+              />
+              <p className="text-xs text-muted-foreground -mt-1">
+                Letters follow a PNG silhouette (e.g. dog outline).
+              </p>
+              {core.shapeWordSearchEnabled && (
+                <div className="p-3 bg-white dark:bg-slate-700/50 rounded-lg border border-gray-200 dark:border-slate-700 space-y-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold text-gray-700 dark:text-gray-200">
+                      Shape images
+                    </Label>
+                    <Select
+                      value={core.shapeMaskMode ?? 'common'}
+                      onValueChange={(v) =>
+                        updateCore({
+                          shapeMaskMode: v as 'common' | 'per-puzzle',
+                          noBoxAroundPuzzle: true,
+                        })
+                      }
+                    >
+                      <SelectTrigger className="h-8">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="common">One common image for all puzzles</SelectItem>
+                        <SelectItem value="per-puzzle">Image shape for each puzzle</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {(core.shapeMaskMode ?? 'common') === 'common' ? (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs font-semibold text-gray-700 dark:text-gray-200">
+                          Common shape PNG
+                        </Label>
+                        {core.shapeMaskImage && (
+                  <Button
+                            type="button"
+                    variant="ghost"
+                    size="sm"
+                            onClick={() => updateCore({ shapeMaskImage: undefined })}
+                            className="h-8 px-2 text-[var(--gp-grey-800)] hover:text-[var(--gp-black)] hover:bg-[var(--gp-grey-100)] transition-colors"
+                  >
+                            <Trash2 className="w-3.5 h-3.5 mr-1" />
+                            Remove
+                  </Button>
+                        )}
+                      </div>
+                      {!core.shapeMaskImage ? (
+                        <div>
+                          <input
+                            type="file"
+                            id="shape-mask-upload-common"
+                            accept="image/png,image/jpeg,image/jpg,.png,.jpg,.jpeg,.webp"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              e.target.value = '';
+                              if (!file) return;
+                              try {
+                                const dataUrl = await readImageFileAsDataUrl(file);
+                                updateCore({
+                                  shapeMaskImage: dataUrl,
+                                  shapeMaskMode: 'common',
+                                  shapeWordSearchEnabled: true,
+                                  noBoxAroundPuzzle: true,
+                                });
+                              } catch (error) {
+                                toast.error(
+                                  error instanceof Error
+                                    ? error.message
+                                    : 'Could not read the shape image'
+                                );
+                              }
+                            }}
+                          />
+                  <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() =>
+                              document.getElementById('shape-mask-upload-common')?.click()
+                            }
+                            className="w-full h-16 border-dashed border-2 border-gray-300 dark:border-slate-600 hover:border-blue-400 hover:bg-blue-50/10 transition-all flex flex-col items-center justify-center gap-1 text-gray-500 hover:text-blue-500"
+                          >
+                            <Upload className="w-5 h-5" />
+                            <span className="text-xs font-medium">Upload silhouette PNG</span>
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-3">
+                          <div className="w-14 h-14 rounded border border-gray-200 dark:border-slate-600 bg-[length:8px_8px] bg-[linear-gradient(45deg,#e5e7eb_25%,transparent_25%,transparent_75%,#e5e7eb_75%,#e5e7eb),linear-gradient(45deg,#e5e7eb_25%,#fff_25%,#fff_75%,#e5e7eb_75%,#e5e7eb)] bg-[position:0_0,4px_4px] overflow-hidden flex items-center justify-center">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={core.shapeMaskImage}
+                              alt="Shape mask"
+                              className="max-w-full max-h-full object-contain"
+                            />
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            Same shape is used for every puzzle. Regenerate after changing it.
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between gap-2">
+                        <Label className="text-xs font-semibold text-gray-700 dark:text-gray-200">
+                          Per-puzzle shapes ({(core.shapeMaskImages ?? []).filter(Boolean).length}/
+                          {core.numberOfPuzzles})
+                        </Label>
+                        {(core.shapeMaskImages ?? []).some(Boolean) && (
+                          <Button
+                            type="button"
+                    variant="ghost"
+                    size="sm"
+                            onClick={() => updateCore({ shapeMaskImages: [] })}
+                            className="h-8 px-2 text-[var(--gp-grey-800)] hover:text-[var(--gp-black)] hover:bg-[var(--gp-grey-100)] transition-colors"
+                  >
+                            <Trash2 className="w-3.5 h-3.5 mr-1" />
+                            Clear all
+                  </Button>
+                        )}
+                </div>
+                      <input
+                        type="file"
+                        id="shape-mask-upload-batch"
+                        accept="image/png,image/jpeg,image/jpg,.png,.jpg,.jpeg,.webp"
+                        multiple
+                        className="hidden"
+                        onChange={async (e) => {
+                          const files = e.target.files;
+                          e.target.value = '';
+                          if (!files || files.length === 0) return;
+                          try {
+                            const urls = await readImageFilesAsDataUrls(files);
+                            if (urls.length === 0) {
+                              toast.error('No readable image files selected');
+                              return;
+                            }
+                            const next = Array.from(
+                              { length: core.numberOfPuzzles },
+                              (_, i) => urls[i] || core.shapeMaskImages?.[i] || ''
+                            );
+                            // If more files than puzzles, still keep first N; if uploading onto empty book, assign in order.
+                            for (let i = 0; i < Math.min(urls.length, core.numberOfPuzzles); i++) {
+                              next[i] = urls[i];
+                            }
+                            updateCore({
+                              shapeMaskImages: next,
+                              shapeMaskMode: 'per-puzzle',
+                              shapeWordSearchEnabled: true,
+                              noBoxAroundPuzzle: true,
+                            });
+                            toast.success(
+                              `Loaded ${Math.min(urls.length, core.numberOfPuzzles)} shape image${
+                                Math.min(urls.length, core.numberOfPuzzles) === 1 ? '' : 's'
+                              }`
+                            );
+                          } catch (error) {
+                            toast.error(
+                              error instanceof Error
+                                ? error.message
+                                : 'Could not read the shape images'
+                            );
+                          }
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() =>
+                          document.getElementById('shape-mask-upload-batch')?.click()
+                        }
+                        className="w-full h-14 border-dashed border-2 border-gray-300 dark:border-slate-600 hover:border-blue-400 hover:bg-blue-50/10 transition-all flex flex-col items-center justify-center gap-1 text-gray-500 hover:text-blue-500"
+                      >
+                        <Upload className="w-5 h-5" />
+                        <span className="text-xs font-medium">
+                          Upload batch images ({core.numberOfPuzzles} puzzles)
+                        </span>
+                      </Button>
+                      <p className="text-[11px] text-muted-foreground">
+                        Select multiple PNGs at once. They fill puzzle slots in order (1…{core.numberOfPuzzles}).
+                      </p>
+                      <div className="grid grid-cols-3 gap-2">
+                        {Array.from({ length: core.numberOfPuzzles }, (_, index) => {
+                          const image = core.shapeMaskImages?.[index];
+                          const inputId = `shape-mask-slot-${index}`;
+                          return (
+                            <div
+                              key={inputId}
+                              className="rounded border border-gray-200 dark:border-slate-600 p-1.5 space-y-1 bg-gray-50 dark:bg-slate-800/60"
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="text-[10px] font-medium text-muted-foreground">
+                                  #{core.puzzlesStartingNumber + index}
+                                </span>
+                                {image ? (
+                                  <button
+                                    type="button"
+                                    className="text-[10px] text-muted-foreground hover:text-foreground"
+                                    onClick={() => {
+                                      const next = [...(core.shapeMaskImages ?? [])];
+                                      next[index] = '';
+                                      updateCore({ shapeMaskImages: next });
+                                    }}
+                                  >
+                                    Remove
+                                  </button>
+                                ) : null}
+              </div>
+                              <input
+                                type="file"
+                                id={inputId}
+                                accept="image/png,image/jpeg,image/jpg,.png,.jpg,.jpeg,.webp"
+                                className="hidden"
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  e.target.value = '';
+                                  if (!file) return;
+                                  try {
+                                    const dataUrl = await readImageFileAsDataUrl(file);
+                                    const next = [...(core.shapeMaskImages ?? [])];
+                                    while (next.length <= index) next.push('');
+                                    next[index] = dataUrl;
+                                    updateCore({
+                                      shapeMaskImages: next,
+                                      shapeMaskMode: 'per-puzzle',
+                                      noBoxAroundPuzzle: true,
+                                    });
+                                  } catch (error) {
+                                    toast.error(
+                                      error instanceof Error
+                                        ? error.message
+                                        : 'Could not read the shape image'
+                                    );
+                                  }
+                                }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => document.getElementById(inputId)?.click()}
+                                className="w-full aspect-square rounded border border-dashed border-gray-300 dark:border-slate-600 overflow-hidden bg-[length:8px_8px] bg-[linear-gradient(45deg,#e5e7eb_25%,transparent_25%,transparent_75%,#e5e7eb_75%,#e5e7eb),linear-gradient(45deg,#e5e7eb_25%,#fff_25%,#fff_75%,#e5e7eb_75%,#e5e7eb)] bg-[position:0_0,4px_4px] hover:border-blue-400 transition-colors flex items-center justify-center"
+                                title={`Upload shape for puzzle ${index + 1}`}
+                              >
+                                {image ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={image}
+                                    alt={`Shape ${index + 1}`}
+                                    className="w-full h-full object-contain"
+                                  />
+                                ) : (
+                                  <Upload className="w-4 h-4 text-gray-400" />
+                                )}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+
+                  <div className="grid grid-cols-1 gap-2 pt-1 border-t border-gray-100 dark:border-slate-600">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Fit to grid</Label>
+                      <Select
+                        value={core.shapeMaskFit ?? 'contain'}
+                        onValueChange={(v) =>
+                          updateCore({
+                            shapeMaskFit: v as 'contain' | 'cover' | 'stretch',
+                          })
+                        }
+                      >
+                        <SelectTrigger className="h-8">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="contain">Contain (keep proportions)</SelectItem>
+                          <SelectItem value="cover">Cover (fill grid)</SelectItem>
+                          <SelectItem value="stretch">Stretch</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <SliderField
+                      label="Shape threshold"
+                      value={core.shapeMaskAlphaThreshold ?? 40}
+                      onValueChange={(v) => updateCore({ shapeMaskAlphaThreshold: v })}
+                      min={0}
+                      max={200}
+                      step={5}
+                      control="input"
+                    />
+                    {((core.shapeMaskMode ?? 'common') === 'common'
+                      ? Boolean(core.shapeMaskImage)
+                      : (core.shapeMaskImages ?? []).some(Boolean)) && (
+                      <div className="space-y-2 pt-1 border-t border-gray-100 dark:border-slate-600">
+                        <CheckboxItem
+                          label="Show shape image"
+                          checked={Boolean(core.shapeMaskShowImage)}
+                          onCheckedChange={(v) => updateCore({ shapeMaskShowImage: v })}
+                        />
+                        {core.shapeMaskShowImage && (
+                          <SliderField
+                            label="Image opacity"
+                            value={core.shapeMaskImageOpacity ?? 35}
+                            onValueChange={(v) => updateCore({ shapeMaskImageOpacity: v })}
+                            min={0}
+                            max={100}
+                            step={5}
+                            format="percent"
+                            control="popover"
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Allowed Directions */}
@@ -1888,10 +2763,11 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   label="Border Stroke Thickness"
                   value={core.borderStrokeThickness}
                   onValueChange={(v) => updateCore({ borderStrokeThickness: v })}
-                  min={1}
+                  min={0}
                   max={10}
                   step={1}
                   format="px"
+                  control="popover"
                 />
                 <SliderField
                   label="Border Corner Radius"
@@ -1901,6 +2777,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   max={40}
                   step={1}
                   format="px"
+                  control="popover"
                 />
                 <SliderField
                   label="Border Padding"
@@ -1910,6 +2787,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   max={40}
                   step={1}
                   format="px"
+                  control="popover"
                 />
               </div>
             </div>
@@ -1922,10 +2800,11 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   label="Border Stroke Thickness"
                   value={core.solutionBorderStrokeThickness ?? core.borderStrokeThickness}
                   onValueChange={(v) => updateCore({ solutionBorderStrokeThickness: v })}
-                  min={1}
+                  min={0}
                   max={10}
                   step={1}
                   format="px"
+                  control="popover"
                 />
                 <SliderField
                   label="Border Corner Radius"
@@ -1935,6 +2814,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   max={40}
                   step={1}
                   format="px"
+                  control="popover"
                 />
                 <SliderField
                   label="Border Padding"
@@ -1944,6 +2824,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   max={40}
                   step={1}
                   format="px"
+                  control="popover"
                 />
               </div>
             </div>
@@ -1965,21 +2846,45 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   label="Puzzle Font Size"
                   value={typography.puzzleGridFontSize}
                   onValueChange={(v) => updateTypography({ puzzleGridFontSize: v })}
-                  min={8}
+                  min={core.autoBalanceFont === true ? 18 : 0}
                   max={50}
                   step={1}
                   format="px"
+                  control="input"
                 />
                 <SliderField
                   label="Solution Font Size"
                   value={typography.answerGridFontSize}
                   onValueChange={(v) => updateTypography({ answerGridFontSize: v, setFontSizeForAnswerPages: true })}
-                  min={8}
+                  min={core.autoBalanceFont === true ? 18 : 0}
                   max={50}
                   step={1}
                   format="pt"
+                  control="input"
                 />
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <ColorInput
+                  label="Text Fill"
+                  value={colors.puzzlePage.puzzleColor}
+                  onChange={(v) => updatePuzzlePageColors({ puzzleColor: v })}
+                />
+                <ColorInput
+                  label="Text Stroke"
+                  value={colors.puzzlePage.puzzleLetterStrokeColor || '#000000'}
+                  onChange={(v) => updatePuzzlePageColors({ puzzleLetterStrokeColor: v })}
+                />
+              </div>
+              <SliderField
+                label="Stroke Thickness"
+                value={colors.puzzlePage.puzzleLetterStrokeThickness ?? 0}
+                onValueChange={(v) => updatePuzzlePageColors({ puzzleLetterStrokeThickness: v })}
+                min={0}
+                max={8}
+                step={0.5}
+                format="px"
+                control="input"
+              />
             </div>
 
             {/* Custom Letters removed per request */}
@@ -1988,17 +2893,40 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
             <div className="space-y-3">
               <Label className="text-sm font-medium">Solution Marking</Label>
               <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
-                <ColorInput label="Highlight Color" value={colors.answerPage.solutionFrameColor} onChange={(v) => updateAnswerPageColors({ solutionFrameColor: v })} />
+                <div className="grid grid-cols-2 gap-3">
+                  <ColorInput
+                    label="Highlight Fill"
+                    value={colors.answerPage.solutionFrameColor}
+                    onChange={(v) => updateAnswerPageColors({ solutionFrameColor: v })}
+                  />
+                  <ColorInput
+                    label="Highlight Stroke"
+                    value={colors.answerPage.solutionHighlightStrokeColor || '#000000'}
+                    onChange={(v) => updateAnswerPageColors({ solutionHighlightStrokeColor: v })}
+                  />
+                </div>
                 <div className="grid grid-cols-2 gap-3">
                   <SliderField
-                    label="Thickness"
+                    label="Bar Thickness"
                     value={colors.answerPage.solutionStrokeThickness}
                     onValueChange={(v) => updateAnswerPageColors({ solutionStrokeThickness: v })}
-                    min={1}
-                    max={15}
+                    min={0}
+                    max={30}
                     step={1}
                     format="px"
                   />
+                  <SliderField
+                    label="Stroke Thickness"
+                    value={colors.answerPage.solutionHighlightStrokeThickness ?? 0}
+                    onValueChange={(v) =>
+                      updateAnswerPageColors({ solutionHighlightStrokeThickness: v })
+                    }
+                    min={0}
+                    max={8}
+                    step={0.5}
+                    format="px"
+                  />
+                </div>
                   <SliderField
                     label="Transparency"
                     value={colors.answerPage.solutionHighlightAlpha ?? 30}
@@ -2011,16 +2939,27 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                 </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <p className="text-sm text-slate-500">
+              Puzzle settings for this document type will use the same Puzzle / Words / Titles tabs.
+            </p>
+          )}
         </TabsContent>
 
         {/* ==================== DESIGN SETTINGS ==================== */}
-        <TabsContent value="design" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', collapsed && 'hidden')}>
+        <TabsContent value="design" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')}>
+          {moduleIsCrossword ? (
+            <CrosswordTitlesSettingsPanel onSave={handleSave} />
+          ) : moduleIsMurdoku ? (
+            <MurdokuTitlesSettingsPanel onSave={handleSave} />
+          ) : moduleIsGeneric ? (
+            <GenericPuzzleTitlesPanel moduleType={genericModuleType} onSave={handleSave} />
+          ) : moduleIsWordSearch ? (
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
-                  Document · This tab
+                  Document Â· This tab
                 </p>
                 <h3 className="font-semibold text-gray-900">Titles</h3>
               </div>
@@ -2028,6 +2967,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                 <Save className="w-4 h-4 mr-2" />Save
               </Button>
             </div>
+
 
             {/* Title Options */}
             <div className="space-y-3">
@@ -2039,7 +2979,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
 
                   // When switching to "one-custom-title", extract only the first line
                   if (value === 'one-custom-title' && typography.titleText) {
-                    const firstLine = typography.titleText.split('\n')[0] || 'Word Search';
+                    const firstLine = (typography.titleText || '').split('\n')[0] || 'Word Search';
                     updates.titleText = firstLine;
                   }
 
@@ -2062,14 +3002,10 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
 
               {typography.selectTitleOption === 'one-custom-title' && (
                 <div className="space-y-2">
-                  <Input
+                  <SettingsTextInput
                     value={typography.titleText}
-                    onChange={(e) => {
-                      const inputValue = e.target.value;
-                      updateTypography({ titleText: inputValue });
-                      if (wordList.aiTheme !== inputValue) {
-                        updateWordListSettings({ aiTheme: inputValue });
-                      }
+                    onChange={(v) => {
+                      updateTypography({ titleText: v });
                     }}
                     placeholder="Enter the master title for all puzzles..."
                   />
@@ -2079,14 +3015,10 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
 
               {typography.selectTitleOption === 'custom' && (
                 <div className="space-y-2">
-                  <Textarea
+                  <SettingsTextarea
                     value={typography.titleText}
-                    onChange={(e) => {
-                      const inputValue = e.target.value;
-                      updateTypography({ titleText: inputValue });
-                      if (wordList.aiTheme !== inputValue) {
-                        updateWordListSettings({ aiTheme: inputValue });
-                      }
+                    onChange={(v) => {
+                      updateTypography({ titleText: v });
                     }}
                     placeholder="Enter one title per line..."
                     className="h-28"
@@ -2138,7 +3070,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   label="Title Size"
                   value={typography.puzzleTitleFontSize}
                   onValueChange={(v) => updateTypography({ puzzleTitleFontSize: v })}
-                  min={8}
+                  min={0}
                   max={50}
                   step={1}
                   format="px"
@@ -2147,7 +3079,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   label="Subtitle Size"
                   value={typography.subtitleFontSize}
                   onValueChange={(v) => updateTypography({ subtitleFontSize: v })}
-                  min={10}
+                  min={0}
                   max={24}
                   step={1}
                   format="px"
@@ -2249,7 +3181,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                     label="Size"
                     value={colors.answerPage.answerTitleFontSize}
                     onValueChange={(v) => updateAnswerPageColors({ answerTitleFontSize: v })}
-                    min={8}
+                    min={0}
                     max={50}
                     step={1}
                     format="px"
@@ -2279,9 +3211,9 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                 {typography.solutionTitleStyle === 'custom' && (
                   <div className="space-y-2">
                     <Label className="text-sm font-medium">Custom Solution Title</Label>
-                    <Input
+                    <SettingsTextInput
                       value={typography.customSolutionTitle}
-                      onChange={(e) => updateTypography({ customSolutionTitle: e.target.value })}
+                      onChange={(v) => updateTypography({ customSolutionTitle: v })}
                       placeholder="Enter solution title..."
                     />
                   </div>
@@ -2304,13 +3236,16 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
               </div>
             </div>
           </div>
+          ) : (
+            <p className="text-sm text-slate-500">Title settings for this document type are coming soon.</p>
+          )}
         </TabsContent>
 
         {/* ==================== WORD LIST SETTINGS ==================== */}
         <TabsContent
           value="words"
           style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
-          className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', collapsed && 'hidden')}
+          className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')}
           onKeyDown={(e) => {
             // Allow Enter key to work in textareas without triggering tab navigation
             if (e.key === 'Enter' && (e.target as HTMLElement)?.tagName === 'TEXTAREA') {
@@ -2318,13 +3253,36 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
             }
           }}
         >
+          {moduleIsCrossword ? (
+            <CrosswordWordsSettingsPanel onSave={handleSave} />
+          ) : moduleIsMurdoku ? (
+            <MurdokuCharactersSettingsPanel onSave={handleSave} />
+          ) : moduleIsTrivia ? (
+            <TriviaWordsSettingsPanel onSave={handleSave} />
+          ) : moduleIsGeneric ? (
+            <p className="text-sm text-slate-500">
+              {genericModuleType === 'sudoku'
+                ? 'Sudoku'
+                : genericModuleType === 'maze'
+                  ? 'Maze'
+                  : genericModuleType === 'cryptogram'
+                    ? 'Cryptogram'
+                    : 'Word Scramble'}{' '}
+              puzzles are generated from the Puzzle tab settings
+              {genericModuleType === 'cryptogram' || genericModuleType === 'word-scramble'
+                ? ' (phrases / words live there too)'
+                : ''}
+              — no separate word list is needed. Configure them in Puzzle and Titles, then click
+              Generate.
+            </p>
+          ) : moduleIsWordSearch ? (
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
-                  Document · This tab
+                  Document Â· This tab
                 </p>
-                <h3 className="font-semibold text-gray-900">Word List Settings</h3>
+              <h3 className="font-semibold text-gray-900">Word List Settings</h3>
               </div>
               <Button variant="outline" size="sm" onClick={handleSave}>
                 <Save className="w-4 h-4 mr-2" />Save
@@ -2332,21 +3290,63 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
             </div>
 
             {/* Words Per Puzzle */}
+            <div className="space-y-3">
+              <CheckboxItem
+                label="One word per puzzle"
+                checked={Boolean(wordList.oneWordPerPuzzle)}
+                onCheckedChange={(v) =>
+                  updateWordListSettings({
+                    oneWordPerPuzzle: v,
+                    ...(v
+                      ? { wordsPerPuzzle: 1, hideWordList: true }
+                      : { hideWordList: false }),
+                  })
+                }
+              />
+
+              {wordList.oneWordPerPuzzle ? (
+                <div className="space-y-2 rounded-lg border border-gray-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-700/40">
+                  <Label className="text-sm font-medium">Times word appears on grid</Label>
+                  <IntegerInput
+                    value={wordList.wordRepeatCount ?? 5}
+                    onChange={(v) => updateWordListSettings({ wordRepeatCount: v })}
+                    min={0}
+                    max={40}
+                  />
+                  <p className="text-xs text-gray-500">
+                    Add {core.numberOfPuzzles} word{core.numberOfPuzzles === 1 ? '' : 's'} (1 per
+                    puzzle). Each word is hidden {wordList.wordRepeatCount ?? 5} time
+                    {(wordList.wordRepeatCount ?? 5) === 1 ? '' : 's'} in its puzzle.
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Total needed: {requiredWords} ({core.numberOfPuzzles} × 1)
+                  </p>
+                  <CheckboxItem
+                    label="Use only the word letters"
+                    checked={Boolean(wordList.fillWithWordLettersOnly)}
+                    onCheckedChange={(v) =>
+                      updateWordListSettings({ fillWithWordLettersOnly: v })
+                    }
+                  />
+                </div>
+              ) : (
             <div className="space-y-2">
               <Label className="text-sm font-medium">Words Per Puzzle</Label>
               <IntegerInput
                 value={wordList.wordsPerPuzzle}
                 onChange={(v) => updateWordListSettings({ wordsPerPuzzle: v })}
-                min={3}
-                max={50}
+                min={0}
+                max={200}
               />
               <p className="text-xs text-gray-500">
                 Total needed: {requiredWords} ({core.numberOfPuzzles} x {wordList.wordsPerPuzzle})
               </p>
             </div>
+              )}
+            </div>
 
-            {/* Word Source */}
-            <div className="space-y-3">
+                {/* Word Source */}
+                <div className="space-y-3">
                   <Label className="text-sm font-medium">Word Source</Label>
                   <Select value={wordList.selectWordListOption} onValueChange={(value) => updateWordListSettings({ selectWordListOption: value as any })}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -2402,7 +3402,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                         label="Max Length"
                         value={wordList.aiMaxWordLength}
                         onValueChange={(v) => updateWordListSettings({ aiMaxWordLength: v })}
-                        min={3}
+                        min={0}
                         max={gridMaxWordLength}
                         step={1}
                       />
@@ -2474,7 +3474,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                     {/* Success message */}
                     {generatedWordsData && generatedWordsData.words && (
                       <div className="p-2 bg-green-50 border border-green-200 rounded text-xs text-green-700">
-                        <strong>✓ Success!</strong> Generated {generatedWordsData.words.reduce((total: number, item: any) => total + (item.words?.length || 0), 0)} words
+                        <strong>âœ“ Success!</strong> Generated {generatedWordsData.words.reduce((total: number, item: any) => total + (item.words?.length || 0), 0)} words
                       </div>
                     )}
                   </div>
@@ -2542,7 +3542,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                       label="Font Size"
                       value={wordList.wordListFontSize}
                       onValueChange={(v) => updateWordListSettings({ wordListFontSize: v })}
-                      min={8}
+                      min={0}
                       max={50}
                       step={1}
                       format="px"
@@ -2585,7 +3585,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                       </Select>
                     </div>
                     <SliderField
-                      label="Spaces Between Words Horizontally"
+                      label="Space Horizontal"
                       value={wordList.wordSpacingHorizontal ?? wordList.wordListGap ?? 50}
                       onValueChange={(v) => updateWordListSettings({ wordSpacingHorizontal: v })}
                       min={0}
@@ -2594,7 +3594,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                       format="px"
                     />
                     <SliderField
-                      label="Spaces Between Words Vertically"
+                      label="Space Vertical"
                       value={wordList.wordSpacingVertical ?? wordList.wordListGap ?? 8}
                       onValueChange={(v) => updateWordListSettings({ wordSpacingVertical: v })}
                       min={0}
@@ -2614,15 +3614,26 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   </div>
                 </div>
           </div>
+          ) : (
+            <p className="text-sm text-slate-500">Word list settings for this document type are coming soon.</p>
+          )}
+        </TabsContent>
+
+        <TabsContent
+          value="elements"
+          style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
+          className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')}
+        >
+          {moduleIsMurdoku ? <MurdokuElementsSettingsPanel onSave={handleSave} /> : null}
         </TabsContent>
 
         {/* ==================== COLOR SETTINGS ==================== */}
-        <TabsContent value="colors" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', collapsed && 'hidden')}>
+        <TabsContent value="colors" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')}>
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
-                  Layout · All documents
+                  Layout · Entire book
                 </p>
                 <h3 className="font-semibold text-gray-900">Colors, Frame, Header &amp; Page #</h3>
               </div>
@@ -2664,7 +3675,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                         <Label className="text-xs text-gray-500">Start at page</Label>
                         <Input
                           type="number"
-                          min={1}
+                          min={0}
                           value={pageNumber.startAtPage}
                           onChange={(e) =>
                             updatePageNumber({ startAtPage: Number(e.target.value) || 1 })
@@ -2751,7 +3762,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                       label="Frame Margin"
                       value={pageFrame.marginSizeIn}
                       onValueChange={(v) => updatePageFrameSettings({ marginSizeIn: v })}
-                      min={0.5}
+                      min={0}
                       max={1}
                       step={0.0625}
                       format="inches"
@@ -2769,7 +3780,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                       label="Stroke Thickness"
                       value={pageFrame.strokeThicknessPx}
                       onValueChange={(v) => updatePageFrameSettings({ strokeThicknessPx: v })}
-                      min={1}
+                      min={0}
                       max={10}
                       step={1}
                       format="px"
@@ -2780,7 +3791,7 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                       onChange={(v) => updatePageFrameSettings({ borderColor: v })}
                     />
                     <p className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight">
-                      Outer boundary around the full puzzle/solution page. Grid border is configured separately under Puzzle → Grid Options.
+                      Outer boundary around the full puzzle/solution page. Grid border is configured separately under Puzzle â†’ Grid Options.
                     </p>
                   </>
                 )}
@@ -2802,8 +3813,6 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   onFitChange={(v) => updatePuzzlePageColors({ backgroundImageFit: v })}
                   onRemove={() => updatePuzzlePageColors({ backgroundImage: undefined })}
                 />
-                <ColorInput label="Title" value={colors.puzzlePage.titleColor} onChange={(v) => updatePuzzlePageColors({ titleColor: v })} />
-                <ColorInput label="Subtitle" value={colors.puzzlePage.subtitleColor} onChange={(v) => updatePuzzlePageColors({ subtitleColor: v })} disabled={!typography.includeFunFacts} />
 
                 <div className="space-y-3 pt-2 border-t border-gray-200 dark:border-slate-700">
                   <Label className="text-sm font-medium">Header Assembly</Label>
@@ -2818,15 +3827,27 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                         Enable modular header (mix &amp; match shapes)
                       </Label>
                     </div>
-                    {headerAssembly.enabled && (
+                    {headerAssembly.enabled ? (
                       <HeaderAssemblyEditor
                         value={headerAssembly}
                         onChange={updateHeaderAssembly}
+                        titleTextColor={colors.puzzlePage.titleColor || '#1f2937'}
+                        subtitleTextColor={colors.puzzlePage.subtitleColor || '#6b7280'}
+                        onTitleTextColorChange={(v) => updatePuzzlePageColors({ titleColor: v })}
+                        onSubtitleTextColorChange={(v) => updatePuzzlePageColors({ subtitleColor: v })}
                       />
+                    ) : (
+                      <div className="space-y-2">
+                        <Label className="text-xs text-gray-500">Colors</Label>
+                <ColorInput label="Title" value={colors.puzzlePage.titleColor} onChange={(v) => updatePuzzlePageColors({ titleColor: v })} />
+                <ColorInput label="Subtitle" value={colors.puzzlePage.subtitleColor} onChange={(v) => updatePuzzlePageColors({ subtitleColor: v })} disabled={!typography.includeFunFacts} />
+                      </div>
                     )}
                     <p className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight">
-                      Pick shapes independently for Number, Title, and Subtitle. Text colors use Title/Subtitle above.
-                      Header sits inside the page frame margin + 0.25&quot; inner pad.
+                      {headerAssembly.enabled
+                        ? 'Title and subtitle text colors are under each element’s style (with Fill / Border).'
+                        : 'Title and subtitle colors live here. Enable Header Assembly to edit them with each shape’s Fill / Border.'}
+                      {' '}Header sits inside the page frame margin + 0.25&quot; inner pad.
                     </p>
                   </div>
                 </div>
@@ -2866,8 +3887,8 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                 borderColor: '#1f2937',
               }));
               updateColors({
-              puzzlePage: { backgroundColor: '#ffffff', titleColor: '#1f2937', subtitleColor: '#6b7280', boxColor: '#1f2937', puzzleColor: '#1f2937', wordListTitleColor: '#374151', wordListColor: '#4b5563', backgroundImage: undefined, backgroundImageOpacity: 100, backgroundImageFit: 'cover', backgroundImageFrameEnabled: true, backgroundImageFrameMargin: 0.56 },
-              answerPage: { backgroundColor: '#ffffff', titleColor: '#1f2937', boxColor: '#1f2937', lettersInSolutionColor: '#22c55e', lettersNotInSolutionColor: '#d1d5db', solutionStrokeThickness: 12, solutionStrokePadding: 2, solutionFrameColor: '#22c55e', solutionFrameStyle: 'rounded', solutionFrameRadius: 6, solutionHighlightAlpha: 30, answerTitlePrefix: 'Solution', answerTitleFontFamily: 'Arial', answerTitleFontSize: 20, answerTitleAlignment: 'center', showAnswerNumber: true, backgroundImage: undefined, backgroundImageOpacity: 100, backgroundImageFit: 'cover', backgroundImageFrameEnabled: true, backgroundImageFrameMargin: 0.56 }
+              puzzlePage: { backgroundColor: '#ffffff', titleColor: '#1f2937', subtitleColor: '#6b7280', boxColor: '#1f2937', puzzleColor: '#1f2937', puzzleLetterStrokeColor: '#000000', puzzleLetterStrokeThickness: 0, wordListTitleColor: '#374151', wordListColor: '#4b5563', backgroundImage: undefined, backgroundImageOpacity: 100, backgroundImageFit: 'cover', backgroundImageFrameEnabled: true, backgroundImageFrameMargin: 0.56 },
+              answerPage: { backgroundColor: '#ffffff', titleColor: '#1f2937', boxColor: '#1f2937', lettersInSolutionColor: '#22c55e', lettersNotInSolutionColor: '#d1d5db', solutionStrokeThickness: 12, solutionStrokePadding: 2, solutionFrameColor: '#22c55e', solutionHighlightStrokeColor: '#000000', solutionHighlightStrokeThickness: 0, solutionFrameStyle: 'rounded', solutionFrameRadius: 6, solutionHighlightAlpha: 30, answerTitlePrefix: 'Solution', answerTitleFontFamily: 'Arial', answerTitleFontSize: 20, answerTitleAlignment: 'center', showAnswerNumber: true, backgroundImage: undefined, backgroundImageOpacity: 100, backgroundImageFit: 'cover', backgroundImageFrameEnabled: true, backgroundImageFrameMargin: 0.56 }
             });
             }} className="w-full hover:bg-gradient-to-r hover:from-gray-100 hover:to-gray-200 dark:hover:from-slate-700 dark:hover:to-slate-600 transition-all duration-200 border-gray-300 dark:border-slate-600">
               Reset Colors
@@ -2876,12 +3897,12 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
         </TabsContent>
 
         {/* ==================== BOOK SETTINGS ==================== */}
-        <TabsContent value="book" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', collapsed && 'hidden')}>
+        <TabsContent value="book" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')}>
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
-                  Layout · All documents
+                  Layout · Entire book
                 </p>
                 <h3 className="font-semibold text-gray-900">Trim &amp; Page Size</h3>
               </div>
@@ -2982,69 +4003,23 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
               </div>
             )}
 
-            {/* Answers Per Page */}
-            <div className="space-y-1">
-              <Label className="text-sm font-medium">Answers Per Page</Label>
-              <Select value={bookCanvas.answersPerPage.toString()} onValueChange={(value) => updateBookCanvas({ answersPerPage: parseInt(value) })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {[1, 2, 4].map((n) => <SelectItem key={n} value={n.toString()}>{n} Solution{n > 1 ? 's' : ''}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Page Layout gaps (book-wide) */}
-            <div className="space-y-3 pt-2 border-t">
-              <Label className="text-sm font-medium">Page Layout Spacing</Label>
-              <div className="grid grid-cols-2 gap-3">
-                <SliderField
-                  label="Title to Answer"
-                  value={titleToAnswerGap}
-                  onValueChange={setTitleToAnswerGap}
-                  min={0}
-                  max={100}
-                  step={1}
-                  format="px"
-                />
-                <SliderField
-                  label="Solution to Solution"
-                  value={solutionToSolutionGap}
-                  onValueChange={setSolutionToSolutionGap}
-                  min={6}
-                  max={80}
-                  step={1}
-                  format="px"
-                />
-                <SliderField
-                  label="Solution Page Margin"
-                  value={pageMargin}
-                  onValueChange={setPageMargin}
-                  min={70}
-                  max={200}
-                  step={5}
-                  format="px"
-                />
-              </div>
-              <p className="text-xs text-gray-500">Solution Page Margin controls distance from solution page edges only (KDP safe zone).</p>
-            </div>
-
           </div>
         </TabsContent>
 
-        {/* ==================== CHAPTER PAGES (Layout · All documents) ==================== */}
+        {/* ==================== CHAPTER PAGES (Layout Â· All documents) ==================== */}
         <TabsContent
           value="pages"
           style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
           className={cn(
             'flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2',
-            collapsed && 'hidden'
+            (collapsed || canvasEditOpen) && 'hidden'
           )}
         >
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
-                  Layout · All documents
+                  Layout · Entire book
                 </p>
                 <h3 className="font-semibold text-gray-900 dark:text-white">Chapter title</h3>
               </div>
@@ -3056,23 +4031,55 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
           </div>
         </TabsContent>
 
-        {!moduleIsWordSearch && (
+        {!moduleHasPuzzleDocumentTabs && (
         <TabsContent
           value="page"
           style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
           className={cn(
-            'flex-1 min-h-0 p-4 space-y-4 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2',
-            collapsed && 'hidden'
+            'flex-1 min-h-0 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2',
+            isFrontMatterEditor ? 'p-0 overflow-hidden' : 'p-4 space-y-4',
+            (collapsed || canvasEditOpen) && 'hidden'
           )}
         >
+          {isTocPage && activeTextSettings && activeDocumentPage ? (
+            <TocContextualControls
+              pageName={activeDocumentPage.name}
+              settings={activeTextSettings}
+              globalSettings={wordSearchSettings}
+              documentPages={documentPages}
+              tocEntries={tocEntries}
+              onSettingsChange={updateActiveTextModuleSettings}
+              onClose={() => {}}
+              variant="sidebar"
+            />
+          ) : isTitlePage && activeTextSettings && activeDocumentPage ? (
+            <TextPageContextualControls
+              pageName={activeDocumentPage.name}
+              settings={activeTextSettings}
+              globalSettings={wordSearchSettings}
+              activeTarget={textPageEditTarget}
+              selectedBlockId={selectedTextBlockId}
+              onTargetChange={changeTextPageEditTarget}
+              onSelectBlock={selectTextBlock}
+              onSettingsChange={updateActiveTextModuleSettings}
+              documentPages={documentPages}
+              activePageId={activeDocumentPage.id}
+              onApplySeparatorLayouts={applyTextSettingsToDocumentPages}
+              onClose={() => {}}
+              onHideBlockChrome={hideTextBlockChrome}
+              variant="sidebar"
+            />
+          ) : (
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
               Document · This tab
             </p>
             <h3 className="font-semibold text-gray-900 dark:text-white">{activeDocumentPage?.name ?? 'Text Page'}</h3>
           </div>
-          {activeTextSettings && (
+          )}
+          {!isFrontMatterEditor && activeTextSettings && (
             <>
+
               <div className="space-y-2">
                 <Label>Page Title</Label>
                 <Input
@@ -3080,33 +4087,10 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   onChange={(e) => updateActiveTextModuleSettings({ title: e.target.value })}
                 />
               </div>
-              {activeDocumentPage?.moduleType === 'table-of-contents' && (
-                <div className="space-y-2">
-                  <Label>TOC Mode</Label>
-                  <Select
-                    value={activeTextSettings.tocMode ?? 'auto'}
-                    onValueChange={(value) =>
-                      updateActiveTextModuleSettings({ tocMode: value as 'auto' | 'manual' })
-                    }
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="auto">Auto (from document tabs)</SelectItem>
-                      <SelectItem value="manual">Manual</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {(activeTextSettings.tocMode ?? 'auto') === 'auto' && (
-                    <p className="text-xs text-muted-foreground">
-                      Titles and page numbers update automatically from your document tab order.
-                      Use the floating panel on the canvas to style the table.
-                    </p>
-                  )}
-                </div>
-              )}
               <div className="space-y-2">
                 <Label>Font</Label>
                 <Select
-                  value={activeTextSettings.fontFamily}
+                  value={selectPublishingFont(activeTextSettings.fontFamily)}
                   onValueChange={(value) => updateActiveTextModuleSettings({ fontFamily: value })}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -3116,28 +4100,30 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
+          </div>
               <SliderField
                 label="Font Size"
                 value={activeTextSettings.fontSize}
                 onValueChange={(v) => updateActiveTextModuleSettings({ fontSize: v })}
-                min={10}
+                min={0}
                 max={48}
                 step={1}
               />
               <div className="space-y-2">
-                <Label>Text Color</Label>
-                <input
-                  type="color"
+                <ColorInput
+                  label="Text Color"
                   value={activeTextSettings.textColor ?? '#000000'}
-                  onChange={(e) => updateActiveTextModuleSettings({ textColor: e.target.value })}
-                  className="h-8 w-full cursor-pointer rounded border border-gray-200"
+                  onChange={(v) => updateActiveTextModuleSettings({ textColor: v })}
                 />
               </div>
               <div className="space-y-2">
                 <Label>Alignment</Label>
                 <Select
-                  value={activeTextSettings.alignment}
+                  value={
+                    activeTextSettings.alignment === 'left' || activeTextSettings.alignment === 'right'
+                      ? activeTextSettings.alignment
+                      : 'center'
+                  }
                   onValueChange={(value) =>
                     updateActiveTextModuleSettings({ alignment: value as 'left' | 'center' | 'right' })
                   }
@@ -3152,23 +4138,12 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
               </div>
               <div className="space-y-2">
                 <Label>Content</Label>
-                {(activeDocumentPage?.moduleType === 'table-of-contents' &&
-                  (activeTextSettings.tocMode ?? 'auto') === 'auto') ? (
-                  <Textarea
-                    value={activeTextSettings.content}
-                    readOnly
-                    rows={12}
-                    className="bg-muted/40"
-                    placeholder="Auto-generated from your documents…"
-                  />
-                ) : (
-                  <Textarea
+                <Textarea
                     value={activeTextSettings.content}
                     onChange={(e) => updateActiveTextModuleSettings({ content: e.target.value })}
                     rows={12}
                     placeholder="Enter page content..."
                   />
-                )}
               </div>
             </>
           )}
@@ -3178,11 +4153,32 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
       <CanvasApplyToAllConfirmDialog
         open={generateConfirmOpen}
         onOpenChange={setGenerateConfirmOpen}
-        editedPageIndices={editedPageIndicesInDocument}
+        editedPageIndices={editedIndicesForActiveModule}
         preserveEditedPages={preserveEditedPagesOnGenerate}
         onPreserveEditedPagesChange={setPreserveEditedPagesOnGenerate}
         onConfirm={handleGenerateConfirm}
         confirmLabel={generatePuzzlesLabel}
+      />
+      <AiProjectWizard
+        open={aiGenerateOpen}
+        onClose={() => setAiGenerateOpen(false)}
+        onComplete={() => setAiGenerateOpen(false)}
+        mode="current-document"
+        lockedType={
+          isAiPuzzleType(activeDocumentPage?.moduleType)
+            ? activeDocumentPage.moduleType
+            : undefined
+        }
+        lockedCount={
+          moduleIsCrossword
+            ? crosswordSettings.core.numberOfPuzzles
+            : moduleIsMurdoku
+              ? murdokuSettings.core.numberOfPuzzles
+              : moduleIsGeneric
+              ? genericPuzzleSettings.core.numberOfPuzzles
+              : wordSearchSettings.core.numberOfPuzzles
+        }
+        defaultTitle={projectName || titleWords.title || 'Puzzle Book'}
       />
     </div>
   );

@@ -46,9 +46,12 @@ export interface SolutionPageLayoutResult {
   blocks: SolutionBlockLayout[];
 }
 
-/** 1×1, 1×2, or 2×2 solution block grid from answers-per-page setting. */
+/** 1×1, 1×2, 2×2, 2×3, or 3×3 solution block grid from answers-per-page. */
 export function getSolutionGridLayout(answersPerPage: number): SolutionGridLayout {
+  if (answersPerPage >= 9) return { columns: 3, rows: 3 };
+  if (answersPerPage >= 6) return { columns: 2, rows: 3 };
   if (answersPerPage >= 4) return { columns: 2, rows: 2 };
+  if (answersPerPage >= 3) return { columns: 3, rows: 1 };
   if (answersPerPage >= 2) return { columns: 1, rows: 2 };
   return { columns: 1, rows: 1 };
 }

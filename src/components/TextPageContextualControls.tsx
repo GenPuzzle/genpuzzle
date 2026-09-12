@@ -14,12 +14,13 @@ import {
   Underline,
   Upload,
 } from 'lucide-react';
-import { PUBLISHING_FONTS } from '@/lib/publishing-fonts';
+import { PUBLISHING_FONTS, selectPublishingFont } from '@/lib/publishing-fonts';
 import { SliderField } from '@/components/ui/slider-field';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
+import { MiniColorInput } from '@/components/ui/color-input';
 import { FloatingPanelShell } from '@/components/FloatingPanelShell';
 import { AddImageSourceDialog } from '@/components/AddImageSourceDialog';
 import { SeparatorLayoutSyncPanel } from '@/components/SeparatorLayoutSyncPanel';
@@ -100,31 +101,6 @@ const PAGE_ALIGN_OPTIONS: Array<{
     icon: <AlignRight className="h-3.5 w-3.5" />,
   },
 ];
-
-function MiniColorInput({
-  label,
-  value,
-  onChange,
-  disabled = false,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className={cn('flex items-center justify-between gap-2', disabled && 'opacity-50 pointer-events-none')}>
-      <Label className="text-xs text-gray-500 shrink-0">{label}</Label>
-      <input
-        type="color"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-        className="h-7 w-10 cursor-pointer rounded border border-gray-200 disabled:cursor-default"
-      />
-    </div>
-  );
-}
 
 function BackgroundImageControl({
   image,
@@ -243,7 +219,7 @@ function WordToolbarButton({
   );
 }
 
-interface TextPageContextualControlsProps {
+export interface TextPageContextualControlsProps {
   pageName: string;
   settings: TextModuleSettings;
   globalSettings: WordSearchSettings;
@@ -264,6 +240,7 @@ interface TextPageContextualControlsProps {
   ) => void;
   onClose: () => void;
   onHideBlockChrome?: () => void;
+  variant?: 'floating' | 'sidebar';
 }
 
 export function TextPageContextualControls({
@@ -280,6 +257,7 @@ export function TextPageContextualControls({
   onApplySeparatorLayouts,
   onClose,
   onHideBlockChrome,
+  variant = 'floating',
 }: TextPageContextualControlsProps) {
   const [addImageDialogOpen, setAddImageDialogOpen] = useState(false);
   const globalFrame = resolvePageFrameSettings(globalSettings);
@@ -428,6 +406,7 @@ export function TextPageContextualControls({
 
   const isImageBlock = selectedBlock?.kind === 'image';
   const ownershipBlock = findTextPageBlockByKind(blocks, 'ownership');
+  const copyrightBlock = findTextPageBlockByKind(blocks, 'copyright');
   const showFontSettings = !!selectedBlock && !isImageBlock;
   const showPositionSettings = !!selectedBlock;
   const pageAlign = selectedBlock ? getPageHorizontalAlign(selectedBlock) : 'center';
@@ -506,8 +485,10 @@ export function TextPageContextualControls({
     : (selectionFormat?.textColor ?? blockTextColor);
   const mixedFontFamily = !!selectionFormat?.mixedFontFamily;
   const mixedFontSize = !!selectionFormat?.mixedFontSize;
-  const fontSizeSelectValue = mixedFontSize ? undefined : String(effectiveFontSize);
-  const fontFamilySelectValue = mixedFontFamily ? undefined : effectiveFontFamily;
+  const fontFamilySelectValue = selectPublishingFont(effectiveFontFamily);
+  const fontSizeSelectValue = String(
+    Number.isFinite(effectiveFontSize) ? effectiveFontSize : 18
+  );
   const fontSizeOptions = useMemo(() => {
     if (mixedFontSize || WORD_FONT_SIZES.includes(effectiveFontSize)) {
       return WORD_FONT_SIZES;
@@ -522,22 +503,12 @@ export function TextPageContextualControls({
   const resolvedTarget: TextPageEditTarget =
     activeTarget === 'page-frame' ? 'page-frame' : 'page-elements';
 
-  return (
-    <>
-    <FloatingPanelShell
-      title={pageName}
-      onClose={onClose}
-      tabs={[
-        { id: 'page-elements', label: 'Page Title' },
-        { id: 'page-frame', label: 'Frame' },
-      ]}
-      activeTabId={resolvedTarget}
-      onTabSelect={(id) => {
-        hideBlockChrome();
-        onTargetChange(id as TextPageEditTarget);
-      }}
-      onTabClose={() => {}}
-    >
+  const pageTabs = [
+    { id: 'page-elements', label: 'Page Title' },
+    { id: 'page-frame', label: 'Frame' },
+  ];
+
+  const body = (
       <div
         onPointerDownCapture={hideBlockChrome}
         onFocusCapture={hideBlockChrome}
@@ -635,6 +606,29 @@ export function TextPageContextualControls({
                   </Select>
                 </div>
               )}
+              <div className="flex items-center gap-2 pt-1">
+                <Checkbox
+                  id="page-element-copyright"
+                  checked={!!copyrightBlock}
+                  onCheckedChange={(checked) => {
+                    const patch = toggleTextPageBlockKind(
+                      settings,
+                      'copyright',
+                      !!checked,
+                      pageName,
+                      globalSettings
+                    );
+                    onSettingsChange(patch);
+                    if (checked && patch.blocks) {
+                      const block = findTextPageBlockByKind(patch.blocks, 'copyright');
+                      if (block) onSelectBlock(block.id);
+                    }
+                  }}
+                />
+                <Label htmlFor="page-element-copyright" className="text-xs font-normal cursor-pointer">
+                  Copyright
+                </Label>
+              </div>
             </div>
           </div>
           )}
@@ -700,11 +694,11 @@ export function TextPageContextualControls({
                 <Label className="canvas-context-panel__section-label">Font settings</Label>
                 <div className="title-page-word-toolbar">
                   <Select
-                    key={mixedFontFamily ? 'font-family-mixed' : `font-family-${effectiveFontFamily}`}
                     value={fontFamilySelectValue}
-                    onValueChange={(value) =>
-                      applyTextFormat({ type: 'fontFamily', value }, { fontFamily: value })
-                    }
+                    onValueChange={(value) => {
+                      if (value === fontFamilySelectValue && !mixedFontFamily) return;
+                      applyTextFormat({ type: 'fontFamily', value }, { fontFamily: value });
+                    }}
                   >
                     <SelectTrigger className="title-page-word-font h-8 text-xs flex-1 min-w-0">
                       {mixedFontFamily ? (
@@ -723,10 +717,15 @@ export function TextPageContextualControls({
                   </Select>
 
                   <Select
-                    key={mixedFontSize ? 'font-size-mixed' : `font-size-${effectiveFontSize}`}
-                    value={fontSizeSelectValue}
+                    value={
+                      fontSizeOptions.some((size) => String(size) === fontSizeSelectValue)
+                        ? fontSizeSelectValue
+                        : String(fontSizeOptions[0] ?? 18)
+                    }
                     onValueChange={(v) => {
                       const fontSize = Number(v);
+                      if (!Number.isFinite(fontSize)) return;
+                      if (!mixedFontSize && fontSize === effectiveFontSize) return;
                       applyTextFormat({ type: 'fontSize', value: fontSize }, { fontSize });
                     }}
                   >
@@ -784,7 +783,7 @@ export function TextPageContextualControls({
                       label="Line spacing"
                       value={Math.round((selectedBlock.lineHeight ?? 1.35) * 100)}
                       onValueChange={(v) => updateBlock({ lineHeight: v / 100 })}
-                      min={80}
+                      min={0}
                       max={300}
                       step={5}
                       format="%"
@@ -833,17 +832,12 @@ export function TextPageContextualControls({
                     </WordToolbarButton>
                   </div>
 
-                  <input
-                    type="color"
+                  <MiniColorInput
+                    label="Font color"
                     value={effectiveTextColor}
-                    onChange={(e) =>
-                      applyTextFormat(
-                        { type: 'textColor', value: e.target.value },
-                        { textColor: e.target.value }
-                      )
+                    onChange={(v) =>
+                      applyTextFormat({ type: 'textColor', value: v }, { textColor: v })
                     }
-                    className="title-page-word-color h-8 w-9 cursor-pointer rounded border border-gray-200"
-                    title="Font color"
                   />
                 </div>
               </div>
@@ -897,7 +891,7 @@ export function TextPageContextualControls({
                           label="Border thickness"
                           value={selectedBlock.frameBorderThicknessPx ?? 2}
                           onValueChange={(v) => updateBlock({ frameBorderThicknessPx: v })}
-                          min={1}
+                          min={0}
                           max={12}
                           step={1}
                           format="px"
@@ -919,7 +913,7 @@ export function TextPageContextualControls({
                           label="Padding"
                           value={selectedBlock.framePaddingPx ?? 12}
                           onValueChange={(v) => updateBlock({ framePaddingPx: v })}
-                          min={4}
+                          min={0}
                           max={48}
                           step={1}
                           format="px"
@@ -997,7 +991,7 @@ export function TextPageContextualControls({
                     label="Frame margin"
                     value={displayFrame.marginSizeIn}
                     onValueChange={(v) => updateCustomFrame({ marginSizeIn: v })}
-                    min={0.5}
+                    min={0}
                     max={1}
                     step={0.0625}
                     format="inches"
@@ -1018,7 +1012,7 @@ export function TextPageContextualControls({
                       label="Stroke"
                       value={displayFrame.strokeThicknessPx}
                       onValueChange={(v) => updateCustomFrame({ strokeThicknessPx: v })}
-                      min={1}
+                      min={0}
                       max={10}
                       step={1}
                       format="px"
@@ -1119,13 +1113,72 @@ export function TextPageContextualControls({
           />
         )}
       </div>
-    </FloatingPanelShell>
+  );
 
-    <AddImageSourceDialog
-      open={addImageDialogOpen}
-      onOpenChange={setAddImageDialogOpen}
-      onImageSelected={handleImageSelected}
-    />
-  </>
+  const panel =
+    variant === 'sidebar' ? (
+      <div
+        className="canvas-context-panel canvas-context-panel--sidebar"
+        role="region"
+        aria-label="Page edit controls"
+      >
+        <div className="canvas-context-panel__header canvas-context-panel__header--sidebar">
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
+              Document · This tab
+            </p>
+            <span className="canvas-context-panel__title">{pageName}</span>
+            <p className="canvas-context-panel__select-hint">
+              Drag boxes on the page to move them. Click text to type.
+            </p>
+          </div>
+        </div>
+        <div className="sidebar-edit-tabs" role="tablist" aria-label="Page settings">
+          {pageTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={resolvedTarget === tab.id}
+              className={cn(
+                'sidebar-edit-tab',
+                resolvedTarget === tab.id && 'sidebar-edit-tab--active'
+              )}
+              onClick={() => {
+                hideBlockChrome();
+                onTargetChange(tab.id as TextPageEditTarget);
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="canvas-context-panel__body">{body}</div>
+      </div>
+    ) : (
+      <FloatingPanelShell
+        title={pageName}
+        onClose={onClose}
+        tabs={pageTabs}
+        activeTabId={resolvedTarget}
+        onTabSelect={(id) => {
+          hideBlockChrome();
+          onTargetChange(id as TextPageEditTarget);
+        }}
+        onTabClose={() => {}}
+      >
+        {body}
+      </FloatingPanelShell>
+    );
+
+  return (
+    <>
+      {panel}
+      <AddImageSourceDialog
+        open={addImageDialogOpen}
+        onOpenChange={setAddImageDialogOpen}
+        onImageSelected={handleImageSelected}
+      />
+    </>
   );
 }

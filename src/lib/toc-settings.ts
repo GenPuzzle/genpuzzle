@@ -177,6 +177,16 @@ export function applyTocTableForm(
   });
 }
 
+/** Nested style indents every row; level-2 rows use the full indent. */
+export function tocEntryIndentPx(
+  toc: Pick<TocSettings, 'tableFormat' | 'entryIndentPx'>,
+  level: 1 | 2
+): number {
+  if (toc.tableFormat !== 'indented') return 0;
+  const base = toc.entryIndentPx ?? 24;
+  return level === 2 ? base : Math.max(16, Math.round(base * 0.7));
+}
+
 function newChapterId(): string {
   return `chapter-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -326,6 +336,17 @@ function leaderChar(style: TocLeaderStyle): string {
   }
 }
 
+/** Visible TOC page-number text, falling back to the physical book page. */
+export function displayTocPageNumber(
+  entry: Pick<ResolvedTocEntry, 'pageNumber' | 'bookPageIndex'>,
+  showPageNumbers: boolean
+): string {
+  if (!showPageNumbers) return '';
+  const explicit = String(entry.pageNumber ?? '').trim();
+  if (explicit) return explicit;
+  return String(Math.max(1, (entry.bookPageIndex ?? 0) + 1));
+}
+
 /** Format TOC entries as plain text (export / manual preview fallback). */
 export function formatTocLines(
   entries: ResolvedTocEntry[],
@@ -337,15 +358,16 @@ export function formatTocLines(
   return entries
     .map((entry) => {
       const indent =
-        settings.tableFormat === 'indented' && entry.level === 2
-          ? '    '
+        settings.tableFormat === 'indented'
+          ? entry.level === 2
+            ? '    '
+            : '  '
           : settings.tableFormat === 'simple'
             ? ''
             : entry.level === 2
               ? '    '
               : '';
-      const num =
-        settings.showPageNumbers && entry.pageNumber ? entry.pageNumber : '';
+      const num = displayTocPageNumber(entry, settings.showPageNumbers);
       const title = entry.title;
 
       if (settings.tableFormat === 'simple' || settings.leaderStyle === 'none') {

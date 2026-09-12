@@ -404,7 +404,15 @@ export function getGridCellWrapperStyle(options: {
 }
 
 /** Inner glyph — centred, clipped to cell. */
-export function getGridLetterGlyphStyle(fontSize: number): CSSProperties {
+export function getGridLetterGlyphStyle(
+  fontSize: number,
+  options?: {
+    strokeColor?: string;
+    strokeThicknessPx?: number;
+  }
+): CSSProperties {
+  const strokeThickness = Math.max(0, options?.strokeThicknessPx ?? 0);
+  const strokeColor = options?.strokeColor || 'transparent';
   return {
     display: 'flex',
     alignItems: 'center',
@@ -417,7 +425,11 @@ export function getGridLetterGlyphStyle(fontSize: number): CSSProperties {
     fontSize,
     margin: 0,
     padding: 0,
-    textAlign: 'center',
-    overflow: 'hidden',
+    ...(strokeThickness > 0
+      ? {
+          WebkitTextStroke: `${strokeThickness}px ${strokeColor}`,
+          paintOrder: 'stroke fill',
+        }
+      : {}),
   };
 }

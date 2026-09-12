@@ -163,3 +163,27 @@ export function getOwnershipNameLineRect(
     nameLineHeightPt,
   };
 }
+
+/**
+ * Canvas ownership block: label at the top of the inner box (`height: auto`),
+ * signature line at the bottom (`margin-top: auto`, min-height 1.4em).
+ */
+export function getOwnershipCanvasLayout(block: TextPageBlock, rect: TextPageBlockRectPt) {
+  const fontSizePt = block.fontSize;
+  const lineHeightPt = fontSizePt * (block.lineHeight ?? 1.35);
+  const nameLine = getOwnershipNameLineRect(rect, block);
+  const gapToLinePt = Math.max(
+    0,
+    nameLine.lineTopFromPageTop - rect.innerTopFromPageTop
+  );
+  return {
+    fontSizePt,
+    lineHeightPt,
+    textTopPt: rect.innerTopFromPageTop,
+    /** Full gap above the signature line (PDF cursor limit). */
+    textHeightPt: Math.max(lineHeightPt, gapToLinePt),
+    /** CSS label box is only as tall as its line boxes — do not stretch this in PPT. */
+    labelBoxHeightPt: lineHeightPt,
+    nameLine,
+  };
+}

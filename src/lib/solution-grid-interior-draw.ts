@@ -3,19 +3,17 @@
  * Used by the UI solution preview canvas and by solution-canvas-snapshot (PPT).
  */
 import type { WordSearchPuzzle } from './puzzles/types';
+import { isWordSearchShapeCell } from './puzzles/word-search-shape-mask';
+import { parseRgba } from './color-utils';
 
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const clean = (hex || '#000000').replace(/^#/, '');
-  const full = clean.length === 3
-    ? clean.split('').map((c) => c + c).join('')
-    : clean;
-  const n = parseInt(full.padEnd(6, '0'), 16);
-  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+function hexToRgb(hex: string): { r: number; g: number; b: number; a: number } {
+  return parseRgba(hex);
 }
 
 function rgbaStr(hex: string, alpha: number): string {
-  const { r, g, b } = hexToRgb(hex);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, alpha))})`;
+  const { r, g, b, a } = hexToRgb(hex);
+  const combined = (a / 255) * Math.max(0, Math.min(1, alpha));
+  return `rgba(${r},${g},${b},${combined})`;
 }
 
 export function roundRectPath(
@@ -50,6 +48,16 @@ export interface SolutionGridInteriorDrawOptions {
   solutionStrokeThicknessPx: number;
   solutionStrokePaddingPx: number;
   solutionHighlightAlpha: number;
+  letterStrokeColor?: string;
+  letterStrokeThicknessPx?: number;
+  /** Outline color for highlight capsules. */
+  solutionHighlightStrokeColor?: string;
+  /** Outline thickness for highlight capsules in CSS px (0 = no outline). */
+  solutionHighlightStrokeThicknessPx?: number;
+  /** When false, skip solution highlight capsules (puzzle-page snapshots). */
+  drawHighlights?: boolean;
+  /** When false, skip letter glyphs (PPT underlay: highlights/shape only; letters stay editable). */
+  drawLetters?: boolean;
 }
 
 /** Draw highlight capsules then centred letters on a grid-local canvas context. */
@@ -67,6 +75,12 @@ export function drawSolutionGridInterior(
     solutionStrokeThicknessPx,
     solutionStrokePaddingPx,
     solutionHighlightAlpha,
+    letterStrokeColor,
+    letterStrokeThicknessPx = 0,
+    solutionHighlightStrokeColor,
+    solutionHighlightStrokeThicknessPx = 0,
+    drawHighlights = true,
+    drawLetters = true,
   } = options;
 
   const cols = puzzle.grid[0]?.length || 1;
@@ -74,8 +88,20 @@ export function drawSolutionGridInterior(
   const hThickPx = Math.max(1, solutionStrokeThicknessPx);
   const hPadPx = Math.max(0, solutionStrokePaddingPx);
   const hAlpha = Math.max(0, Math.min(100, solutionHighlightAlpha)) / 100;
+  const hStrokePx = Math.max(0, solutionHighlightStrokeThicknessPx);
+  const hStrokeColor = solutionHighlightStrokeColor || '#000000';
 
-  if (puzzle.placements && puzzle.placements.length > 0) {
+  const paintCapsule = () => {
+    ctx.fill();
+    if (hStrokePx > 0) {
+      ctx.strokeStyle = rgbaStr(hStrokeColor, Math.min(1, hAlpha + 0.35));
+      ctx.lineWidth = hStrokePx;
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+    }
+  };
+
+  if (drawHighlights && puzzle.placements && puzzle.placements.length > 0) {
     for (const placement of puzzle.placements) {
       const { start, end } = placement;
       const color = placement.color || solutionFrameColor;
@@ -115,7 +141,7 @@ export function drawSolutionGridInterior(
         ctx.translate(cx, cy);
         ctx.rotate(angle);
         roundRectPath(ctx, -capsuleW / 2, -capsuleH / 2, capsuleW, capsuleH, radius);
-        ctx.fill();
+        paintCapsule();
       } else if (isH) {
         const minC = Math.min(start.col, end.col);
         const maxC = Math.max(start.col, end.col);
@@ -123,7 +149,7 @@ export function drawSolutionGridInterior(
         const y = start.row * cellPx + (cellPx - thickness) / 2;
         const w = (maxC - minC + 1) * cellPx + padding * 2;
         roundRectPath(ctx, x, y, w, thickness, radius);
-        ctx.fill();
+        paintCapsule();
       } else {
         const minR = Math.min(start.row, end.row);
         const maxR = Math.max(start.row, end.row);
@@ -131,12 +157,14 @@ export function drawSolutionGridInterior(
         const y = minR * cellPx - padding;
         const h = (maxR - minR + 1) * cellPx + padding * 2;
         roundRectPath(ctx, x, y, thickness, h, radius);
-        ctx.fill();
+        paintCapsule();
       }
 
       ctx.restore();
     }
   }
+
+  if (!drawLetters) return;
 
   const fontFamilyCss = fontFamily.includes(' ')
     ? `"${fontFamily}", Arial, sans-serif`
@@ -145,14 +173,27 @@ export function drawSolutionGridInterior(
   ctx.fillStyle = letterColor;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  const letterOutline = Math.max(0, letterStrokeThicknessPx);
+  const letterRgba = parseRgba(letterColor);
+  if (letterOutline > 0 && letterStrokeColor) {
+    const strokeRgba = parseRgba(letterStrokeColor);
+    ctx.strokeStyle = rgbaStr(letterStrokeColor, strokeRgba.a / 255);
+    ctx.lineWidth = letterOutline * 2;
+    ctx.lineJoin = 'round';
+  }
+  ctx.fillStyle = rgbaStr(letterColor, letterRgba.a / 255);
 
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
+      if (!isWordSearchShapeCell(puzzle.shapeMask, row, col)) continue;
       const letter = (puzzle.grid[row]?.[col] ?? '').trim();
       if (!letter) continue;
       const cx = col * cellPx + cellPx / 2;
       const cy = row * cellPx + cellPx / 2;
       ctx.font = `${Math.max(1, fontPx)}px ${fontFamilyCss}`;
+      if (letterOutline > 0 && letterStrokeColor) {
+        ctx.strokeText(letter, cx, cy);
+      }
       ctx.fillText(letter, cx, cy);
     }
   }

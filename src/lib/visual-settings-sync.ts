@@ -1,10 +1,15 @@
 /**
  * Sync colors / background / frame / header / page-number settings across
  * all Word Search document tabs when changed from General settings.
+ * Also supports applying full Layout settings to every puzzle document type.
  */
 
-import type { WordSearchSettings } from './puzzles/types';
+import type { BookCanvasSettings, WordSearchSettings } from './puzzles/types';
 import type { DocumentPage, PuzzleModuleSettings } from './document-model';
+import { isPuzzleModuleType } from './document-model';
+import { isGenericPuzzleModuleType } from './generic-puzzle-settings';
+import type { CrosswordSettings } from './crossword-settings';
+import type { MurdokuSettings } from './murdoku-settings';
 import { formatPageNumberList } from './canvas-edit-session';
 
 export interface VisualSyncScope {
@@ -13,12 +18,113 @@ export interface VisualSyncScope {
   pageNumber: boolean;
 }
 
+export interface LayoutSyncScope extends VisualSyncScope {
+  /** Trim / page-size fields from Layout → Trim. */
+  bookCanvas: boolean;
+}
+
+export function getFullLayoutSyncScope(): LayoutSyncScope {
+  return {
+    colors: true,
+    pageFrame: true,
+    pageNumber: true,
+    bookCanvas: true,
+  };
+}
+
+/** Detect Layout-panel changes (trim + colors + frame + page numbers). */
+export function detectLayoutSyncScope(
+  prev: WordSearchSettings,
+  updates: Partial<WordSearchSettings>
+): LayoutSyncScope | null {
+  const visual = detectVisualSyncScope(prev, updates);
+  let bookCanvas = false;
+  if (updates.bookCanvas) {
+    const keys: Array<keyof BookCanvasSettings> = [
+      'includeBleed',
+      'useCustomTrim',
+      'customWidth',
+      'customHeight',
+      'trimSizePreset',
+      'measurementUnits',
+    ];
+    for (const key of keys) {
+      if (
+        updates.bookCanvas[key] !== undefined &&
+        updates.bookCanvas[key] !== prev.bookCanvas[key]
+      ) {
+        bookCanvas = true;
+        break;
+      }
+    }
+  }
+  if (!visual && !bookCanvas) return null;
+  return {
+    colors: visual?.colors ?? false,
+    pageFrame: visual?.pageFrame ?? false,
+    pageNumber: visual?.pageNumber ?? false,
+    bookCanvas,
+  };
+}
+
+/**
+ * Keep document-specific puzzle settings, but force Layout fields from the
+ * shared book layout source so the Layout UI never jumps between tabs.
+ */
+export function mergeDocumentSettingsPreservingLayout(
+  documentWs: WordSearchSettings,
+  layoutSource: WordSearchSettings
+): WordSearchSettings {
+  return applyLayoutSettingsToWordSearch(
+    documentWs,
+    layoutSource,
+    getFullLayoutSyncScope()
+  );
+}
+
+export function applyLayoutSettingsToCrosswordDocument(
+  cw: CrosswordSettings,
+  layoutSource: WordSearchSettings
+): CrosswordSettings {
+  return applyLayoutToCrossword(cw, layoutSource, getFullLayoutSyncScope());
+}
+
+export function applyLayoutSettingsToGenericDocument(
+  settings: NonNullable<PuzzleModuleSettings['genericPuzzleSettings']>,
+  layoutSource: WordSearchSettings
+): NonNullable<PuzzleModuleSettings['genericPuzzleSettings']> {
+  return applyLayoutToGenericColors(settings, layoutSource, getFullLayoutSyncScope());
+}
+
+export function applyLayoutSettingsToMurdokuDocument(
+  md: MurdokuSettings,
+  layoutSource: WordSearchSettings
+): MurdokuSettings {
+  return applyLayoutToMurdoku(md, layoutSource, getFullLayoutSyncScope());
+}
+
 function stableJson(value: unknown): string {
   try {
     return JSON.stringify(value);
   } catch {
     return '';
   }
+}
+
+/** Copy shared trim/page-size fields without overwriting per-doc answersPerPage etc. */
+export function applyBookCanvasLayoutFields(
+  target: BookCanvasSettings,
+  source: BookCanvasSettings
+): BookCanvasSettings {
+  return {
+    ...target,
+    includeBleed: source.includeBleed,
+    useCustomTrim: source.useCustomTrim,
+    customWidth: source.customWidth,
+    customHeight: source.customHeight,
+    trimSizePreset: source.trimSizePreset,
+    measurementUnits: source.measurementUnits,
+  };
 }
 
 export function detectVisualSyncScope(
@@ -111,6 +217,106 @@ export function applyVisualSettingsToTarget(
   }
 
   return next;
+}
+
+export function applyLayoutSettingsToWordSearch(
+  target: WordSearchSettings,
+  source: WordSearchSettings,
+  scope: LayoutSyncScope
+): WordSearchSettings {
+  let next = applyVisualSettingsToTarget(target, source, scope);
+  if (scope.bookCanvas) {
+    next = {
+      ...next,
+      bookCanvas: applyBookCanvasLayoutFields(next.bookCanvas, source.bookCanvas),
+    };
+  }
+  return next;
+}
+
+function applyLayoutToCrossword(
+  cw: CrosswordSettings,
+  source: WordSearchSettings,
+  scope: LayoutSyncScope
+): CrosswordSettings {
+  let next = cw;
+  if (scope.bookCanvas) {
+    next = {
+      ...next,
+      bookCanvas: applyBookCanvasLayoutFields(next.bookCanvas, source.bookCanvas),
+    };
+  }
+  if (scope.pageFrame) {
+    next = {
+      ...next,
+      pageFrameSettings: source.pageFrameSettings
+        ? { ...source.pageFrameSettings }
+        : source.pageFrameSettings,
+    };
+  }
+  if (scope.colors) {
+    next = {
+      ...next,
+      colors: {
+        ...next.colors,
+        backgroundColor: source.colors.puzzlePage.backgroundColor,
+        titleColor: source.colors.puzzlePage.titleColor,
+        subtitleColor: source.colors.puzzlePage.subtitleColor,
+      },
+    };
+  }
+  if (scope.pageNumber) {
+    next = {
+      ...next,
+      typography: {
+        ...next.typography,
+        pageNumber: { ...source.typography.pageNumber },
+        includePageNumbers:
+          source.typography.pageNumber?.enabled ?? next.typography.includePageNumbers,
+      },
+    };
+  }
+  return next;
+}
+
+function applyLayoutToMurdoku(
+  md: MurdokuSettings,
+  source: WordSearchSettings,
+  scope: LayoutSyncScope
+): MurdokuSettings {
+  let next = md;
+  if (scope.bookCanvas) {
+    next = {
+      ...next,
+      bookCanvas: applyBookCanvasLayoutFields(next.bookCanvas, source.bookCanvas),
+    };
+  }
+  if (scope.pageFrame) {
+    next = {
+      ...next,
+      pageFrameSettings: source.pageFrameSettings
+        ? { ...source.pageFrameSettings }
+        : source.pageFrameSettings,
+    };
+  }
+  return next;
+}
+
+function applyLayoutToGenericColors(
+  settings: NonNullable<PuzzleModuleSettings['genericPuzzleSettings']>,
+  source: WordSearchSettings,
+  scope: LayoutSyncScope
+): NonNullable<PuzzleModuleSettings['genericPuzzleSettings']> {
+  if (!scope.colors) return settings;
+  return {
+    ...settings,
+    colors: {
+      ...settings.colors,
+      backgroundColor: source.colors.puzzlePage.backgroundColor,
+      titleColor: source.colors.puzzlePage.titleColor,
+      gridColor: source.colors.puzzlePage.puzzleColor,
+    },
+  };
 }
 
 export function visualSettingsMatch(
@@ -221,11 +427,7 @@ export function syncVisualSettingsAcrossWordSearchDocuments(
         ...page,
         settings: {
           ...settings,
-          wordSearchSettings: applyVisualSettingsToTarget(
-            source,
-            source,
-            scope
-          ),
+          wordSearchSettings: applyVisualSettingsToTarget(source, source, scope),
         } as PuzzleModuleSettings,
       };
     }
@@ -237,6 +439,86 @@ export function syncVisualSettingsAcrossWordSearchDocuments(
       } as PuzzleModuleSettings,
     };
   });
+}
+
+/** Copy Layout fields onto one puzzle document; text pages keep using the shared book layout. */
+export function applyBookLayoutToDocumentPage(
+  page: DocumentPage,
+  source: WordSearchSettings,
+  scope: LayoutSyncScope = getFullLayoutSyncScope()
+): DocumentPage {
+  if (!isPuzzleModuleType(page.moduleType)) return page;
+  const settings = page.settings as PuzzleModuleSettings;
+
+  if (page.moduleType === 'word-search') {
+    const current = settings.wordSearchSettings ?? source;
+    return {
+      ...page,
+      settings: {
+        ...settings,
+        wordSearchSettings: applyLayoutSettingsToWordSearch(current, source, scope),
+      } as PuzzleModuleSettings,
+    };
+  }
+
+  if (page.moduleType === 'crossword') {
+    const cw = settings.crosswordSettings;
+    if (!cw) return page;
+    return {
+      ...page,
+      settings: {
+        ...settings,
+        crosswordSettings: applyLayoutToCrossword(cw, source, scope),
+      } as PuzzleModuleSettings,
+    };
+  }
+
+  if (page.moduleType === 'murdoku') {
+    const md = settings.murdokuSettings;
+    if (!md) return page;
+    return {
+      ...page,
+      settings: {
+        ...settings,
+        murdokuSettings: applyLayoutToMurdoku(md, source, scope),
+      } as PuzzleModuleSettings,
+    };
+  }
+
+  if (isGenericPuzzleModuleType(page.moduleType) && settings.genericPuzzleSettings) {
+    return {
+      ...page,
+      settings: {
+        ...settings,
+        genericPuzzleSettings: applyLayoutToGenericColors(
+          settings.genericPuzzleSettings,
+          source,
+          scope
+        ),
+      } as PuzzleModuleSettings,
+    };
+  }
+
+  return page;
+}
+
+export function overlayBookLayoutOnAllDocuments(
+  documentPages: DocumentPage[],
+  source: WordSearchSettings,
+  scope: LayoutSyncScope = getFullLayoutSyncScope()
+): DocumentPage[] {
+  return documentPages.map((page) => applyBookLayoutToDocumentPage(page, source, scope));
+}
+
+/** Apply Layout (trim / colors / frame / page #) to every puzzle document tab. */
+export function syncLayoutSettingsAcrossAllPuzzleDocuments(
+  documentPages: DocumentPage[],
+  source: WordSearchSettings,
+  scope: LayoutSyncScope = getFullLayoutSyncScope()
+): { pages: DocumentPage[]; puzzleDocCount: number } {
+  const pages = overlayBookLayoutOnAllDocuments(documentPages, source, scope);
+  const puzzleDocCount = pages.filter((page) => isPuzzleModuleType(page.moduleType)).length;
+  return { pages, puzzleDocCount };
 }
 
 export function stripVisualOverridesFromMap(

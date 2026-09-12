@@ -6,7 +6,8 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Slider } from '@/components/ui/slider';
+import { MiniColorInput } from '@/components/ui/color-input';
+import { SliderField } from '@/components/ui/slider-field';
 import {
   Select,
   SelectContent,
@@ -35,8 +36,16 @@ import {
   type ChapterLayoutId,
   type ChapterPageStyleSettings,
 } from '@/lib/chapter-page-layouts';
+import {
+  CHAPTER_TITLES_DRAFT_EVENT,
+  parseChapterTitleLines,
+  readChapterTitlesDraft,
+  writeChapterTitlesDraft,
+  type ChapterTitlesDraft,
+} from '@/lib/chapter-titles-draft';
 import { usePersistedState } from '@/hooks/usePersistedState';
 import { useDebouncedCallback } from '@/hooks/useDebouncedCallback';
+import { useOptionalAppBusy } from '@/lib/app-busy-context';
 import { PUBLISHING_FONTS } from '@/lib/publishing-fonts';
 import { Upload, Trash2, Layers, LayoutTemplate } from 'lucide-react';
 import { ChapterLayoutIcon } from '@/components/ChapterLayoutIcon';
@@ -65,6 +74,7 @@ function mergeChapterPageStyle(
 export function ChapterPagesBatchPanel() {
   const { documentPages, wordSearchSettings, replaceDocumentPages, activeDocumentPageId } =
     useApp();
+  const { showBusy, hideBusy } = useOptionalAppBusy();
 
   const puzzleDocs = useMemo(
     () => documentPages.filter((d) => isPuzzleModuleType(d.moduleType)),
@@ -87,6 +97,8 @@ export function ChapterPagesBatchPanel() {
   const [titlesText, setTitlesText] = useState(() => {
     const existing = getExistingChapterTitleLines(documentPages);
     if (existing.length > 0) return existing.join('\n');
+    const draft = readChapterTitlesDraft();
+    if (draft.touched && draft.titles.length > 0) return draft.titles.join('\n');
     return defaultChapterTitleLines(puzzleDocs.length || 3).join('\n');
   });
   const [subtitlesText, setSubtitlesText] = useState(() => {
@@ -102,13 +114,18 @@ export function ChapterPagesBatchPanel() {
   const multiImageInputRef = useRef<HTMLInputElement>(null);
   const chapterImageInputRef = useRef<HTMLInputElement>(null);
   const chapterImageTargetIndex = useRef<number | null>(null);
-  const titlesTouchedRef = useRef(getExistingChapterTitleLines(documentPages).length > 0);
+  const titlesTouchedRef = useRef(
+    getExistingChapterTitleLines(documentPages).length > 0 || readChapterTitlesDraft().touched
+  );
   const subtitlesTouchedRef = useRef(getExistingChapterSubtitleLines(documentPages).some(Boolean));
   const skipNextStyleSyncRef = useRef(true);
   const documentPagesRef = useRef(documentPages);
   documentPagesRef.current = documentPages;
   const styleRef = useRef(style);
   styleRef.current = style;
+
+  const isEditingTitlesRef = useRef(false);
+  const titlesDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Keep title/subtitle lines in sync until the user edits the textareas.
   useEffect(() => {
@@ -117,7 +134,12 @@ export function ChapterPagesBatchPanel() {
       if (existing.length > 0) {
         setTitlesText(existing.join('\n'));
       } else {
-        setTitlesText(defaultChapterTitleLines(puzzleDocs.length || 3).join('\n'));
+        const draft = readChapterTitlesDraft();
+        if (draft.touched && draft.titles.length > 0) {
+          setTitlesText(draft.titles.join('\n'));
+        } else {
+          setTitlesText(defaultChapterTitleLines(puzzleDocs.length || 3).join('\n'));
+        }
       }
     }
     if (!subtitlesTouchedRef.current) {
@@ -127,6 +149,32 @@ export function ChapterPagesBatchPanel() {
       }
     }
   }, [puzzleDocs.length, chapterCount]);
+
+  useEffect(() => {
+    const onDraft = (event: Event) => {
+      // If user is actively typing in the textarea, never clobber their typing!
+      if (isEditingTitlesRef.current) return;
+      const detail = (event as CustomEvent<ChapterTitlesDraft>).detail;
+      if (!detail?.titles) return;
+      titlesTouchedRef.current = detail.touched;
+      setTitlesText((prev) => {
+        const currentParsed = parseChapterTitleLines(prev);
+        const newParsed = detail.titles;
+        const isSame =
+          currentParsed.length === newParsed.length &&
+          currentParsed.every((t, i) => t === newParsed[i]);
+        if (isSame) return prev;
+        return detail.titles.join('\n');
+      });
+    };
+    window.addEventListener(CHAPTER_TITLES_DRAFT_EVENT, onDraft as EventListener);
+    return () => {
+      window.removeEventListener(CHAPTER_TITLES_DRAFT_EVENT, onDraft as EventListener);
+      if (titlesDebounceTimerRef.current) {
+        clearTimeout(titlesDebounceTimerRef.current);
+      }
+    };
+  }, []);
 
   const titles = useMemo(
     () =>
@@ -217,21 +265,28 @@ export function ChapterPagesBatchPanel() {
 
     // Chapters already exist → update titles/style in place (no duplicate pages).
     if (chapterCount > 0) {
-      const { documentPages: nextPages, updatedCount, firstPageId } = updateExistingChapterPages(
-        documentPages,
-        entries,
-        chapterOptions
-      );
-
-      skipNextStyleSyncRef.current = true;
-      replaceDocumentPages(nextPages, firstPageId ?? activeDocumentPageId);
+      showBusy(`Updating ${entries.length} chapter page${entries.length === 1 ? '' : 's'}…`);
       window.setTimeout(() => {
-        skipNextStyleSyncRef.current = false;
-      }, 500);
+        try {
+          const { documentPages: nextPages, updatedCount, firstPageId } = updateExistingChapterPages(
+            documentPages,
+            entries,
+            chapterOptions
+          );
 
-      setStatus(
-        `Updated ${updatedCount} chapter title page${updatedCount === 1 ? '' : 's'} (no new pages created).`
-      );
+          skipNextStyleSyncRef.current = true;
+          replaceDocumentPages(nextPages, firstPageId ?? activeDocumentPageId);
+          window.setTimeout(() => {
+            skipNextStyleSyncRef.current = false;
+          }, 500);
+
+          setStatus(
+            `Updated ${updatedCount} chapter title page${updatedCount === 1 ? '' : 's'} (no new pages created).`
+          );
+        } finally {
+          window.setTimeout(() => hideBusy(), 280);
+        }
+      }, 40);
       return;
     }
 
@@ -240,29 +295,36 @@ export function ChapterPagesBatchPanel() {
       return;
     }
 
-    const { documentPages: nextPages, firstNewPageId } = buildBatchChapterPages(
-      documentPages,
-      entries,
-      {
-        position: 'before-each-puzzle',
-        ...chapterOptions,
-      }
-    );
-
-    // Avoid double-apply from style effect right after create
-    skipNextStyleSyncRef.current = true;
-    replaceDocumentPages(nextPages, firstNewPageId);
+    showBusy(`Generating ${entries.length} chapter page${entries.length === 1 ? '' : 's'}…`);
     window.setTimeout(() => {
-      skipNextStyleSyncRef.current = false;
-    }, 500);
+      try {
+        const { documentPages: nextPages, firstNewPageId } = buildBatchChapterPages(
+          documentPages,
+          entries,
+          {
+            position: 'before-each-puzzle',
+            ...chapterOptions,
+          }
+        );
 
-    setStatus(
-      `Placed ${Math.min(entries.length, puzzleDocs.length)} chapter page(s) before puzzle documents${
-        entries.length > puzzleDocs.length
-          ? ` (${entries.length - puzzleDocs.length} extra appended)`
-          : ''
-      }.`
-    );
+        // Avoid double-apply from style effect right after create
+        skipNextStyleSyncRef.current = true;
+        replaceDocumentPages(nextPages, firstNewPageId);
+        window.setTimeout(() => {
+          skipNextStyleSyncRef.current = false;
+        }, 500);
+
+        setStatus(
+          `Placed ${Math.min(entries.length, puzzleDocs.length)} chapter page(s) before puzzle documents${
+            entries.length > puzzleDocs.length
+              ? ` (${entries.length - puzzleDocs.length} extra appended)`
+              : ''
+          }.`
+        );
+      } finally {
+        window.setTimeout(() => hideBusy(), 280);
+      }
+    }, 40);
   };
 
   return (
@@ -339,48 +401,39 @@ export function ChapterPagesBatchPanel() {
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-1">
-            <Label className="text-[10px] text-muted-foreground">
-              Title size ({style.titleFontSize}pt)
-            </Label>
-            <Slider
-              value={[style.titleFontSize]}
-              min={14}
-              max={64}
-              step={1}
-              onValueChange={([v]) => updateStyle({ titleFontSize: v })}
-            />
-          </div>
+          <SliderField
+            label="Title Size"
+            value={style.titleFontSize}
+            onValueChange={(v) => updateStyle({ titleFontSize: v })}
+            min={0}
+            max={64}
+            step={1}
+            format="pt"
+          />
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-1">
-            <Label className="text-[10px] text-muted-foreground">Title color</Label>
-            <Input
-              type="color"
-              value={style.titleColor}
-              onChange={(e) => updateStyle({ titleColor: e.target.value })}
-              className="h-8 p-1"
-            />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-[10px] text-muted-foreground">Alignment</Label>
-            <Select
-              value={style.titleAlignment}
-              onValueChange={(v) =>
-                updateStyle({ titleAlignment: v as ChapterPageStyleSettings['titleAlignment'] })
-              }
-            >
-              <SelectTrigger className="h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="left">Left</SelectItem>
-                <SelectItem value="center">Center</SelectItem>
-                <SelectItem value="right">Right</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+        <MiniColorInput
+          label="Title color"
+          value={style.titleColor}
+          onChange={(v) => updateStyle({ titleColor: v })}
+        />
+        <div className="space-y-1">
+          <Label className="text-[10px] text-muted-foreground">Alignment</Label>
+          <Select
+            value={style.titleAlignment}
+            onValueChange={(v) =>
+              updateStyle({ titleAlignment: v as ChapterPageStyleSettings['titleAlignment'] })
+            }
+          >
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="left">Left</SelectItem>
+              <SelectItem value="center">Center</SelectItem>
+              <SelectItem value="right">Right</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="flex items-center gap-2">
@@ -437,30 +490,23 @@ export function ChapterPagesBatchPanel() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-1">
-                  <Label className="text-[10px] text-muted-foreground">
-                    Size ({style.subtitleFontSize}pt)
-                  </Label>
-                  <Slider
-                    value={[style.subtitleFontSize]}
-                    min={10}
-                    max={36}
-                    step={1}
-                    onValueChange={([v]) => updateStyle({ subtitleFontSize: v })}
-                  />
-                </div>
+                <SliderField
+                  label="Subtitle Size"
+                  value={style.subtitleFontSize}
+                  onValueChange={(v) => updateStyle({ subtitleFontSize: v })}
+                  min={0}
+                  max={36}
+                  step={1}
+                  format="pt"
+                />
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <Label className="text-[10px] text-muted-foreground">Subtitle color</Label>
-                  <Input
-                    type="color"
-                    value={style.subtitleColor}
-                    onChange={(e) => updateStyle({ subtitleColor: e.target.value })}
-                    className="h-8 p-1"
-                  />
-                </div>
-                <div className="flex items-center gap-2 pt-4">
+                <MiniColorInput
+                  label="Subtitle color"
+                  value={style.subtitleColor}
+                  onChange={(v) => updateStyle({ subtitleColor: v })}
+                />
+                <div className="flex items-center gap-2 pt-1">
                   <Checkbox
                     id="subtitle-frame"
                     checked={style.subtitleFrameEnabled}
@@ -481,64 +527,50 @@ export function ChapterPagesBatchPanel() {
         {(style.titleFrameEnabled || style.subtitleFrameEnabled) && (
           <div className="border-t border-gray-200 dark:border-slate-700 pt-2 space-y-2">
             <Label className="text-[10px] text-muted-foreground">Frame style</Label>
-            <div className="grid grid-cols-2 gap-2">
-              <Select
-                value={style.frameShape}
-                onValueChange={(v) =>
-                  updateStyle({ frameShape: v as ChapterPageStyleSettings['frameShape'] })
-                }
-              >
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="rectangle">Rectangle</SelectItem>
-                  <SelectItem value="rounded">Rounded</SelectItem>
-                  <SelectItem value="circle">Circle</SelectItem>
-                  <SelectItem value="pill">Pill</SelectItem>
-                </SelectContent>
-              </Select>
-              <div className="flex gap-1">
-                <Input
-                  type="color"
-                  value={style.frameBorderColor}
-                  onChange={(e) => updateStyle({ frameBorderColor: e.target.value })}
-                  className="h-8 p-1 flex-1"
-                  title="Border"
-                />
-                <Input
-                  type="color"
-                  value={style.frameFillColor}
-                  onChange={(e) => updateStyle({ frameFillColor: e.target.value })}
-                  className="h-8 p-1 flex-1"
-                  title="Fill"
-                />
-              </div>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-[10px] text-muted-foreground">
-                Border ({style.frameBorderThicknessPx}px)
-              </Label>
-              <Slider
-                value={[style.frameBorderThicknessPx]}
-                min={1}
-                max={10}
-                step={1}
-                onValueChange={([v]) => updateStyle({ frameBorderThicknessPx: v })}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-[10px] text-muted-foreground">
-                Corner radius ({style.frameCornerRadiusPx}px)
-              </Label>
-              <Slider
-                value={[style.frameCornerRadiusPx]}
-                min={0}
-                max={32}
-                step={1}
-                onValueChange={([v]) => updateStyle({ frameCornerRadiusPx: v })}
-              />
-            </div>
+            <Select
+              value={style.frameShape}
+              onValueChange={(v) =>
+                updateStyle({ frameShape: v as ChapterPageStyleSettings['frameShape'] })
+              }
+            >
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="rectangle">Rectangle</SelectItem>
+                <SelectItem value="rounded">Rounded</SelectItem>
+                <SelectItem value="circle">Circle</SelectItem>
+                <SelectItem value="pill">Pill</SelectItem>
+              </SelectContent>
+            </Select>
+            <MiniColorInput
+              label="Frame border"
+              value={style.frameBorderColor}
+              onChange={(v) => updateStyle({ frameBorderColor: v })}
+            />
+            <MiniColorInput
+              label="Frame fill"
+              value={style.frameFillColor}
+              onChange={(v) => updateStyle({ frameFillColor: v })}
+            />
+            <SliderField
+              label="Border Thickness"
+              value={style.frameBorderThicknessPx}
+              onValueChange={(v) => updateStyle({ frameBorderThicknessPx: v })}
+              min={0}
+              max={10}
+              step={1}
+              format="px"
+            />
+            <SliderField
+              label="Corner Radius"
+              value={style.frameCornerRadiusPx}
+              onValueChange={(v) => updateStyle({ frameCornerRadiusPx: v })}
+              min={0}
+              max={32}
+              step={1}
+              format="px"
+            />
           </div>
         )}
 
@@ -555,18 +587,15 @@ export function ChapterPagesBatchPanel() {
           </div>
           {style.showImage && (
             <>
-              <div className="space-y-1">
-                <Label className="text-[10px] text-muted-foreground">
-                  Image size in slot ({Math.round(style.imageSizeScale * 100)}%)
-                </Label>
-                <Slider
-                  value={[style.imageSizeScale]}
-                  min={0.5}
-                  max={1}
-                  step={0.05}
-                  onValueChange={([v]) => updateStyle({ imageSizeScale: v })}
-                />
-              </div>
+              <SliderField
+                label="Image Size"
+                value={Math.round(style.imageSizeScale * 100)}
+                onValueChange={(v) => updateStyle({ imageSizeScale: v / 100 })}
+                min={0}
+                max={100}
+                step={5}
+                format="percent"
+              />
               <div className="space-y-1">
                 <Label className="text-[10px] text-muted-foreground">Image fit</Label>
                 <Select
@@ -589,15 +618,11 @@ export function ChapterPagesBatchPanel() {
           )}
         </div>
 
-        <div className="space-y-1">
-          <Label className="text-[10px] text-muted-foreground">Page background</Label>
-          <Input
-            type="color"
-            value={style.pageBackgroundColor}
-            onChange={(e) => updateStyle({ pageBackgroundColor: e.target.value })}
-            className="h-8 p-1 w-full"
-          />
-        </div>
+        <MiniColorInput
+          label="Page background"
+          value={style.pageBackgroundColor}
+          onChange={(v) => updateStyle({ pageBackgroundColor: v })}
+        />
 
         {chapterCount > 0 && (
           <Button
@@ -623,7 +648,12 @@ export function ChapterPagesBatchPanel() {
               className="h-7 text-[10px]"
               onClick={() => {
                 titlesTouchedRef.current = true;
-                setTitlesText(suggestedTitles.join('\n'));
+                const next = suggestedTitles.join('\n');
+                setTitlesText(next);
+                writeChapterTitlesDraft({
+                  titles: parseChapterTitleLines(next),
+                  touched: true,
+                });
               }}
             >
               Use puzzle names
@@ -632,9 +662,32 @@ export function ChapterPagesBatchPanel() {
         </div>
         <Textarea
           value={titlesText}
+          onFocus={() => {
+            isEditingTitlesRef.current = true;
+          }}
+          onBlur={(e) => {
+            isEditingTitlesRef.current = false;
+            if (titlesDebounceTimerRef.current) {
+              clearTimeout(titlesDebounceTimerRef.current);
+            }
+            writeChapterTitlesDraft({
+              titles: parseChapterTitleLines(e.target.value),
+              touched: true,
+            });
+          }}
           onChange={(e) => {
+            const next = e.target.value;
             titlesTouchedRef.current = true;
-            setTitlesText(e.target.value);
+            setTitlesText(next);
+            if (titlesDebounceTimerRef.current) {
+              clearTimeout(titlesDebounceTimerRef.current);
+            }
+            titlesDebounceTimerRef.current = setTimeout(() => {
+              writeChapterTitlesDraft({
+                titles: parseChapterTitleLines(next),
+                touched: true,
+              });
+            }, 300);
           }}
           rows={5}
           placeholder={'Chapter 1: Animals\nChapter 2: Nature\nChapter 3: Space'}

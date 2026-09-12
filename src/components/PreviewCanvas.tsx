@@ -2,15 +2,36 @@
 
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useApp } from '@/lib/app-context';
-import { Eye, EyeOff, ChevronLeft, ChevronRight, AlertCircle, Layout, FileText, Files, BookOpen } from 'lucide-react';
+import { useOptionalAppBusy } from '@/lib/app-busy-context';
+import { Eye, EyeOff, ChevronLeft, ChevronRight, AlertCircle, Layout, FileText, Files, BookOpen, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { resolvePageFrameSettings } from '@/lib/page-frame-settings';
 import type { PageFrameSettings } from '@/lib/puzzles/types';
 import {
+  buildGenericHeaderAssembly,
+  getHeaderAssemblySettings,
+  isGlobalHeaderAssemblyEnabled,
+  resolveGenericPageContentInsetPt,
+  resolveGenericPageSurfaceColors,
+} from '@/lib/generic-page-chrome';
+import {
+  crosswordFixedCellCssPx,
+  resolveCrosswordPageNumberZoneTopPt,
+} from '@/lib/crossword-puzzle-page-layout';
+import {
   computeSolutionPageContentArea,
   computeSolutionPageLayout,
+  getSolutionGridLayout,
 } from '@/lib/solution-page-layout';
-import { WordSearchPuzzle, WordSearchSettings, TitleWordsSettings } from '@/lib/puzzles/types';
+import { WordSearchPuzzle, WordSearchSettings, TitleWordsSettings, CrosswordPuzzle } from '@/lib/puzzles/types';
+import type { MurdokuPuzzle } from '@/lib/puzzles/murdoku';
+import { MurdokuPageCanvas } from '@/components/puzzle/MurdokuPagePreview';
+import {
+  getDefaultMurdokuSettings,
+  normalizeMurdokuSettings,
+  type MurdokuSettings,
+} from '@/lib/murdoku-settings';
+import type { MurdokuPagePart } from '@/lib/murdoku-page-layout';
 import { DocumentPage, TextModuleSettings, PuzzleModuleSettings, isTextModuleType, isPuzzleModuleType, isTextModuleSettings, getDefaultTextModuleSettings } from '@/lib/document-model';
 import {
   resolveTextPageBackground,
@@ -20,36 +41,66 @@ import {
   isNearWhiteCssColor,
 } from '@/lib/text-page-settings';
 import {
-  TextPageContextualControls,
   type TextPageEditTarget,
 } from '@/components/TextPageContextualControls';
+import { type CrosswordEditTarget } from '@/components/CrosswordContextualControls';
+import type { GenericPuzzleEditTarget } from '@/components/GenericPuzzleContextualControls';
 import {
-  CrosswordContextualControls,
-  type CrosswordEditTarget,
-} from '@/components/CrosswordContextualControls';
-import { getDefaultCrosswordSettings, type CrosswordSettings } from '@/lib/crossword-settings';
+  getDefaultCrosswordSettings,
+  normalizeCrosswordSettings,
+  resolveCrosswordPuzzleTitle,
+  resolveCrosswordSolutionTitle,
+  resolveCrosswordSubtitle,
+  type CrosswordSettings,
+} from '@/lib/crossword-settings';
+import {
+  getDefaultGenericPuzzleSettings,
+  normalizeGenericPuzzleSettings,
+  resolveGenericPuzzleTitle,
+  resolveGenericPuzzleTitleParts,
+  resolveGenericSolutionTitle,
+  isGenericPuzzleModuleType,
+  getGenericModuleDefaultTitle,
+  type GenericPuzzleSettings,
+  type GenericPuzzleModuleType,
+} from '@/lib/generic-puzzle-settings';
+import {
+  computeTriviaSolutionsPerPage,
+  packTriviaGamesForSolutionPages,
+  formatTriviaSolutionHeading,
+  resolveTriviaAnswerLabel,
+} from '@/lib/puzzles/trivia';
 import { TextPageBlockCanvas } from '@/components/TextPageBlockCanvas';
 import {
+  createDefaultTitlePageBlocks,
   resolveTextPageBlocks,
   removeTextPageBlock,
   syncLegacyFieldsFromBlocks,
 } from '@/lib/text-page-blocks';
+import { isSpecialBlankTitlePage } from '@/lib/insert-separator-page';
 import {
   compileBook,
   groupPuzzlesByDocument,
+  groupCrosswordPuzzlesByDocument,
+  groupGenericPuzzlesByDocument,
+  groupMurdokuPuzzlesByDocument,
   getTitleWordsForDocument,
   findBookPageIndexForDocument,
+  findBookPageIndexForSolution,
+  getCompiledSolutionPagesForDocument,
   shouldDrawBookPageNumber,
+  visibleBookPageIndex,
+  isCompiledSolutionKind,
   type CompiledPage,
   type CompiledSolutionPage,
   type CompiledTextPage,
   type CompiledBook,
 } from '@/lib/book-compiler';
 import { TocPageCanvas } from '@/components/TocPageCanvas';
-import { TocContextualControls } from '@/components/TocContextualControls';
 import { resolvePageNumberSettingsForBook } from '@/lib/text-page-pdf-draw';
 import { BookFlipbookViewer } from '@/components/BookFlipbookViewer';
 import { AllPagesGridPreview } from '@/components/AllPagesGridPreview';
+import { overlayBookLayoutOnAllDocuments } from '@/lib/visual-settings-sync';
 import { getEffectiveSettingsForPage } from '@/lib/page-settings';
 import { TRIM_SIZE_PRESETS, computeTrimScaleRatio, resolveTrimDimensions, type TrimSizePresetId } from '@/lib/trim-size-layout';
 import {
@@ -70,6 +121,7 @@ import { PageNumberOverlay } from '@/components/page-number/PageNumberOverlay';
 import { computePageNumberLayout } from '@/lib/page-number/layout';
 import { normalizePageNumberSettings } from '@/lib/page-number/settings';
 import { CanvasDocumentTabsBar } from '@/components/CanvasDocumentTabsBar';
+import { AiProjectWizard } from '@/components/ai/AiProjectWizard';
 import { RemoveDocumentConfirmDialog } from '@/components/RemoveDocumentConfirmDialog';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -91,9 +143,9 @@ import {
 import { layoutSolutionBlockTitlePt } from '@/lib/header-assembly/fit-title';
 import { HeaderAssemblyBar } from '@/components/header/HeaderAssemblyBar';
 import {
-  CanvasContextualControls,
   type CanvasEditTarget,
 } from '@/components/CanvasContextualControls';
+import { useCanvasEditPanel } from '@/lib/canvas-edit-panel-context';
 import {
   anyCanvasEditTabHasUnsavedEdits,
   buildGlobalBookTextUpdatesForAllCommit,
@@ -124,7 +176,7 @@ import {
   type CanvasEditSession,
   type CanvasEditTab,
 } from '@/lib/canvas-edit-session';
-import { getWordsForPuzzlePage } from '@/lib/puzzle-word-list';
+import { getWordsForPuzzlePage, getEffectiveWordsPerPuzzle } from '@/lib/puzzle-word-list';
 import {
   documentPagesToBatchIndices,
   parsePageRangeSelection,
@@ -136,11 +188,15 @@ import '@/components/canvas-contextual-controls.css';
 import '@/components/preview-canvas-toolbar.css';
 import { cn } from '@/lib/utils';
 import { WordSearchGrid } from './puzzle/WordSearchGrid';
+import { resolveShapeMaskImageSrc } from '@/lib/puzzles/word-search-shape-mask';
 import { SudokuGrid } from './puzzle/SudokuGrid';
-import { CrosswordGrid } from './puzzle/CrosswordGrid';
+import { PageBackgroundImage } from './puzzle/PageBackgroundImage';
+import { CrosswordGrid, CrosswordClueLists } from './puzzle/CrosswordGrid';
 import { MazeDisplay } from './puzzle/MazeDisplay';
 import { CryptogramDisplay } from './puzzle/CryptogramDisplay';
 import { WordScrambleDisplay } from './puzzle/WordScrambleDisplay';
+import { TriviaDisplay } from './puzzle/TriviaDisplay';
+import { FitToSafeArea } from './puzzle/FitToSafeArea';
 import { WordMatchDisplay } from './puzzle/WordMatchDisplay';
 import { DotToDotDisplay } from './puzzle/DotToDotDisplay';
 
@@ -338,8 +394,8 @@ function WordListPreview({ layout, ptToPx }: { layout: UnifiedPageLayout; ptToPx
           key={colIdx}
           style={{
             position: 'relative',
+            width: ptToPx(safeNumber(wl.columnWidthsPt?.[colIdx], blockWidthPt / wl.columns || 40)),
             minWidth: ptToPx(safeNumber(wl.columnWidthsPt?.[colIdx], blockWidthPt / wl.columns || 40)),
-            width: 'auto',
             flex: '0 0 auto',
             height: ptToPx(col.length * lineHeightPt),
             overflow: 'visible',
@@ -433,12 +489,13 @@ function PuzzlePageCanvas({
   ptToPx,
   puzzleGridScale,
   bookHeaderTitleFontSizePt,
-  bookPageIndex = 0,
+  bookPageIndex,
   canvasEditEnabled = false,
   canvasEditTarget = null,
   canvasEditHighlightTarget = null,
   canvasEditHideGuides = false,
   onCanvasEditTargetChange,
+  pagePart = 'clues',
 }: {
   puzzle: WordSearchPuzzle;
   settings: WordSearchSettings;
@@ -456,8 +513,10 @@ function PuzzlePageCanvas({
   canvasEditHighlightTarget?: CanvasEditTarget | null;
   canvasEditHideGuides?: boolean;
   onCanvasEditTargetChange?: (target: CanvasEditTarget | null) => void;
+  pagePart?: 'clues' | 'grid';
 }) {
   const editHighlight = canvasEditHighlightTarget ?? canvasEditTarget;
+  const isGridOnlyPage = pagePart === 'grid';
 
   const layout = useMemo(() => {
     return computeWordSearchPageLayout(
@@ -467,11 +526,13 @@ function PuzzlePageCanvas({
       showSolution,
       puzzleGridScale,
       10,
-      bookHeaderTitleFontSizePt
+      bookHeaderTitleFontSizePt,
+      pagePart
     );
-  }, [puzzle, settings, titleWords, showSolution, puzzleGridScale, bookHeaderTitleFontSizePt]);
+  }, [puzzle, settings, titleWords, showSolution, puzzleGridScale, bookHeaderTitleFontSizePt, pagePart]);
 
   const { page, title, subtitle, headerAssembly, grid, wordList } = layout;
+  const shouldRenderGrid = !settings.core.twoPagePuzzles || pagePart === 'grid';
 
   const widthPx = ptToPx(page.widthPt);
   const heightPx = ptToPx(page.heightPt);
@@ -527,15 +588,16 @@ function PuzzlePageCanvas({
     }
 
     const pageNumberSettings = normalizePageNumberSettings(settings.typography.pageNumber);
-    const pageNumberLayout = pageNumberSettings.enabled
-      ? computePageNumberLayout(
-          page.widthPt,
-          page.heightPt,
-          settings,
-          bookPageIndex,
-          pageNumberSettings
-        )
-      : null;
+    const pageNumberLayout =
+      pageNumberSettings.enabled && typeof bookPageIndex === 'number'
+        ? computePageNumberLayout(
+            page.widthPt,
+            page.heightPt,
+            settings,
+            bookPageIndex,
+            pageNumberSettings
+          )
+        : null;
 
     return {
       title: { topPt: titleTopPt, leftPt: titleLeftPt, widthPt: titleWidthPt, heightPt: titleHeightPt },
@@ -582,15 +644,10 @@ function PuzzlePageCanvas({
     >
       {/* Background Image Layer */}
       {settings.colors.puzzlePage.backgroundImage && (
-        <div
-          className="absolute inset-0 pointer-events-none z-0"
-          style={{
-            backgroundImage: `url(${settings.colors.puzzlePage.backgroundImage})`,
-            backgroundSize: settings.colors.puzzlePage.backgroundImageFit || 'cover',
-            backgroundRepeat: 'no-repeat',
-            backgroundPosition: 'center',
-            opacity: (settings.colors.puzzlePage.backgroundImageOpacity ?? 100) / 100,
-          }}
+        <PageBackgroundImage
+          src={settings.colors.puzzlePage.backgroundImage}
+          opacity={settings.colors.puzzlePage.backgroundImageOpacity}
+          fit={settings.colors.puzzlePage.backgroundImageFit}
         />
       )}
       {/* Page container frame (global Color Settings) */}
@@ -632,7 +689,7 @@ function PuzzlePageCanvas({
       {/* Content — page-absolute coordinates (matches PDF/PPT export) */}
       <>
         {/* Modular header assembly */}
-        {headerAssembly && (
+        {!isGridOnlyPage && headerAssembly && (
       <div
         style={{
           position: 'absolute',
@@ -662,7 +719,7 @@ function PuzzlePageCanvas({
         )}
 
         {/* Title (legacy plain text) */}
-        {!headerAssembly && title && (
+        {!isGridOnlyPage && !headerAssembly && title && (
           <div
             style={{
               position: 'absolute',
@@ -683,7 +740,7 @@ function PuzzlePageCanvas({
         )}
 
         {/* Subtitle / Fun facts (legacy) */}
-        {!headerAssembly && subtitle && (
+        {!isGridOnlyPage && !headerAssembly && subtitle && (
           <div
             style={{
               position: 'absolute',
@@ -707,45 +764,69 @@ function PuzzlePageCanvas({
           </div>
         )}
 
-        {/* Puzzle grid — letter cells anchored at grid.leftPt / grid.topPt */}
-        <div
-          style={{
-            position: 'absolute',
-            left: ptToPx(gridRootLeftPt),
-            top: ptToPx(gridRootTopPt),
-            display: 'block',
-            lineHeight: 0,
-            zIndex: 2,
-          }}
-        >
-          <WordSearchGrid
-            puzzle={puzzle}
-            showSolution={showSolution}
-            cellSize={ptToPx(grid.cellSizePt)}
-            noBoxAroundPuzzle={grid.noBox}
-            borderStrokeThickness={borderThicknessCssPx}
-            borderRadius={borderRadiusCssPx}
-            puzzleColor={grid.letterColor}
-            boxColor={grid.boxColor}
-            solutionStrokeColor={settings.colors.answerPage.solutionFrameColor}
-            solutionStrokeThickness={ptToPx(settings.colors.answerPage.solutionStrokeThickness || 12)}
-            solutionStrokePadding={ptToPx(settings.colors.answerPage.solutionStrokePadding || 0)}
-            solutionFrameStyle={settings.colors.answerPage.solutionFrameStyle}
-            solutionFrameRadius={ptToPx(settings.colors.answerPage.solutionFrameRadius || 4)}
-            solutionHighlightAlpha={settings.colors.answerPage.solutionHighlightAlpha ?? 30}
-            puzzleGridFontSize={ptToPx(grid.fontSizePt)}
-            puzzleGridFontFamily={grid.fontFamily}
-            answerGridFontSize={showSolution ? ptToPx(grid.fontSizePt) : undefined}
-            answerGridFontFamily={showSolution ? grid.fontFamily : undefined}
-            gridBorderPadding={gridBorderPaddingCssPx}
-          />
-        </div>
+        {/* Puzzle grid — only shown on the grid page for split-page puzzles */}
+        {shouldRenderGrid && (
+          <div
+            style={{
+              position: 'absolute',
+              left: ptToPx(gridRootLeftPt),
+              top: ptToPx(gridRootTopPt),
+              display: 'block',
+              lineHeight: 0,
+              zIndex: 2,
+            }}
+          >
+            <WordSearchGrid
+              puzzle={puzzle}
+              showSolution={showSolution}
+              cellSize={ptToPx(grid.cellSizePt)}
+              noBoxAroundPuzzle={grid.noBox}
+              borderStrokeThickness={borderThicknessCssPx}
+              borderRadius={borderRadiusCssPx}
+              puzzleColor={grid.letterColor}
+              letterStrokeColor={grid.letterStrokeColor}
+              letterStrokeThickness={ptToPx(grid.letterStrokeThicknessPt)}
+              boxColor={grid.boxColor}
+              solutionStrokeColor={settings.colors.answerPage.solutionFrameColor}
+              solutionStrokeThickness={ptToPx(settings.colors.answerPage.solutionStrokeThickness || 12)}
+              solutionStrokePadding={ptToPx(settings.colors.answerPage.solutionStrokePadding || 0)}
+              solutionHighlightStrokeColor={
+                settings.colors.answerPage.solutionHighlightStrokeColor || '#000000'
+              }
+              solutionHighlightStrokeThickness={
+                settings.colors.answerPage.solutionHighlightStrokeThickness ?? 0
+              }
+              solutionFrameStyle={settings.colors.answerPage.solutionFrameStyle}
+              solutionFrameRadius={ptToPx(settings.colors.answerPage.solutionFrameRadius || 4)}
+              solutionHighlightAlpha={settings.colors.answerPage.solutionHighlightAlpha ?? 30}
+              puzzleGridFontSize={ptToPx(grid.fontSizePt)}
+              puzzleGridFontFamily={grid.fontFamily}
+              answerGridFontSize={showSolution ? ptToPx(grid.fontSizePt) : undefined}
+              answerGridFontFamily={showSolution ? grid.fontFamily : undefined}
+              gridBorderPadding={gridBorderPaddingCssPx}
+              shapeImageSrc={
+                settings.core.shapeWordSearchEnabled
+                  ? resolveShapeMaskImageSrc(
+                      settings.core,
+                      puzzle.puzzleIndexInDocument ?? 0
+                    )
+                  : undefined
+              }
+              shapeImageShow={Boolean(
+                settings.core.shapeWordSearchEnabled && settings.core.shapeMaskShowImage
+              )}
+              shapeImageOpacity={settings.core.shapeMaskImageOpacity ?? 35}
+              shapeImageFit={settings.core.shapeMaskFit ?? 'contain'}
+            />
+          </div>
+        )}
 
         {/* Word List */}
-        {!showSolution && wordList && (
+        {!showSolution && !isGridOnlyPage && wordList && (
           <WordListPreview layout={layout} ptToPx={ptToPx} />
         )}
 
+        {typeof bookPageIndex === 'number' ? (
         <PageNumberOverlay
           settings={settings}
           bookPageIndex={bookPageIndex}
@@ -753,6 +834,7 @@ function PuzzlePageCanvas({
           pageHeightPt={page.heightPt}
           ptToPx={ptToPx}
         />
+        ) : null}
 
         {canvasHitZones && onCanvasEditTargetChange && (
           <>
@@ -951,15 +1033,10 @@ function TextPageCanvas({
       }}
     >
       {pageBackground.backgroundImage && (
-        <div
-          className="absolute inset-0 pointer-events-none z-0"
-          style={{
-            backgroundImage: `url(${pageBackground.backgroundImage})`,
-            backgroundSize: pageBackground.backgroundImageFit || 'cover',
-            backgroundRepeat: 'no-repeat',
-            backgroundPosition: 'center',
-            opacity: (pageBackground.backgroundImageOpacity ?? 100) / 100,
-          }}
+        <PageBackgroundImage
+          src={pageBackground.backgroundImage}
+          opacity={pageBackground.backgroundImageOpacity}
+          fit={pageBackground.backgroundImageFit}
         />
       )}
 
@@ -1053,8 +1130,8 @@ function TextPageCanvas({
               Click to add text…
             </span>
           )}
+          </div>
         </div>
-      </div>
 
       {typeof bookPageIndex === 'number' && (
         <PageNumberOverlay
@@ -1165,6 +1242,18 @@ function DocumentPageCanvas({
   compiledBook = null,
   onTocCanvasClick,
   crosswordSettings = null,
+  crosswordBatchPuzzles = [],
+  crosswordCanvasEditEnabled = false,
+  crosswordEditTarget = null,
+  crosswordEditHideGuides = false,
+  onCrosswordEditTargetChange,
+  genericPuzzleSettings = null,
+  genericBatchPuzzles = [],
+  genericPuzzleCanvasEditEnabled = false,
+  genericPuzzleEditHideGuides = false,
+  onGenericPuzzleEditTargetChange,
+  murdokuSettings = null,
+  murdokuBatchPuzzles = [],
 }: {
   page: DocumentPage;
   activeDocumentPageId: string;
@@ -1207,6 +1296,18 @@ function DocumentPageCanvas({
   compiledBook?: CompiledBook | null;
   onTocCanvasClick?: () => void;
   crosswordSettings?: CrosswordSettings | null;
+  crosswordBatchPuzzles?: CrosswordPuzzle[];
+  crosswordCanvasEditEnabled?: boolean;
+  crosswordEditTarget?: CrosswordEditTarget | null;
+  crosswordEditHideGuides?: boolean;
+  onCrosswordEditTargetChange?: (target: CrosswordEditTarget) => void;
+  genericPuzzleSettings?: GenericPuzzleSettings | null;
+  genericBatchPuzzles?: import('@/lib/puzzles/types').GenericBatchPuzzle[];
+  genericPuzzleCanvasEditEnabled?: boolean;
+  genericPuzzleEditHideGuides?: boolean;
+  onGenericPuzzleEditTargetChange?: (target: GenericPuzzleEditTarget) => void;
+  murdokuSettings?: MurdokuSettings | null;
+  murdokuBatchPuzzles?: MurdokuPuzzle[];
 }) {
   if (page.moduleType === 'word-search') {
     const pageSettings = page.settings as PuzzleModuleSettings;
@@ -1229,50 +1330,39 @@ function DocumentPageCanvas({
     const puzzleIndexInDoc = page.id === activeDocumentPageId
       ? Math.max(0, Math.min(pagePuzzles.length - 1, currentBatchIndex - Math.max(pageStartIndex, 0)))
       : 0;
-    const resolvedBookPageIndex =
-      (compiledBook && findBookPageIndexForDocument(compiledBook, page.id, puzzleIndexInDoc)) ??
-      computePuzzleBookPageIndex(Math.max(0, pageStartIndex) + puzzleIndexInDoc, includeBlankAfterEachPuzzle);
+    const resolvedBookPageIndex = visibleBookPageIndex(
+      compiledBook,
+      compiledBook
+        ? findBookPageIndexForDocument(compiledBook, page.id, puzzleIndexInDoc)
+        : computePuzzleBookPageIndex(
+            Math.max(0, pageStartIndex) + puzzleIndexInDoc,
+            includeBlankAfterEachPuzzle
+          )
+    );
 
     if (activePreviewTab === 'puzzles') {
       if (previewRangeMode === 'sample') {
-        return activePagePuzzle ? (
-          <PuzzlePageCanvas
-            puzzle={activePagePuzzle}
-            settings={pageWordSearchSettings}
-            titleWords={pageTitleWords}
-            showSolution={showSolution}
-            showMargins={showMargins}
-            showSafetyZone={showSafetyZone}
-            safetyMarginPx={safetyMarginPx}
-            ptToPx={ptToPx}
-            puzzleGridScale={puzzleGridScale}
-            bookHeaderTitleFontSizePt={bookHeaderTitleFontSizePt}
-            bookPageIndex={resolvedBookPageIndex}
-            canvasEditEnabled={canvasEditEnabled}
-            canvasEditTarget={canvasEditTarget}
-            canvasEditHighlightTarget={canvasEditHighlightTarget}
-            canvasEditHideGuides={canvasEditHideGuides}
-            onCanvasEditTargetChange={onCanvasEditTargetChange}
-          />
-        ) : (
-          <PuzzleModulePlaceholderCanvas
-            page={page}
-            wordSearchSettings={pageWordSearchSettings}
-            showMargins={showMargins}
-            showSafetyZone={showSafetyZone}
-            safetyMarginPx={safetyMarginPx}
-            ptToPx={ptToPx}
-          />
-        );
-      }
+        if (!activePagePuzzle) {
+          return (
+            <PuzzleModulePlaceholderCanvas
+              page={page}
+              wordSearchSettings={pageWordSearchSettings}
+              showMargins={showMargins}
+              showSafetyZone={showSafetyZone}
+              safetyMarginPx={safetyMarginPx}
+              ptToPx={ptToPx}
+            />
+          );
+        }
 
-      return (
-        <div className="flex flex-col gap-10 items-center w-full pb-16">
-          {pagePuzzles.length > 0 ? (
-            pagePuzzles.map((puzzle, idx) => (
-              <div key={`${page.id}-${puzzle.puzzleNumber || idx}`} className="w-full">
+        const pageParts = pageWordSearchSettings.core.twoPagePuzzles ? ['clues', 'grid'] : ['clues'];
+
+        return (
+          <div className="flex flex-col gap-10 items-center w-full pb-16">
+            {pageParts.map((pagePart) => (
+              <div key={`${page.id}-${pagePart}`} className="w-full">
                 <PuzzlePageCanvas
-                  puzzle={puzzle}
+                  puzzle={activePagePuzzle}
                   settings={pageWordSearchSettings}
                   titleWords={pageTitleWords}
                   showSolution={showSolution}
@@ -1282,16 +1372,52 @@ function DocumentPageCanvas({
                   ptToPx={ptToPx}
                   puzzleGridScale={puzzleGridScale}
                   bookHeaderTitleFontSizePt={bookHeaderTitleFontSizePt}
-                  bookPageIndex={
-                    (compiledBook && findBookPageIndexForDocument(compiledBook, page.id, idx)) ??
-                    computePuzzleBookPageIndex(
-                      Math.max(0, pageStartIndex) + idx,
-                      includeBlankAfterEachPuzzle
-                    )
-                  }
+                  bookPageIndex={resolvedBookPageIndex}
+                  canvasEditEnabled={canvasEditEnabled}
+                  canvasEditTarget={canvasEditTarget}
+                  canvasEditHighlightTarget={canvasEditHighlightTarget}
+                  canvasEditHideGuides={canvasEditHideGuides}
+                  onCanvasEditTargetChange={onCanvasEditTargetChange}
+                  pagePart={pagePart}
                 />
               </div>
-            ))
+            ))}
+          </div>
+        );
+      }
+
+      return (
+        <div className="flex flex-col gap-10 items-center w-full pb-16">
+          {pagePuzzles.length > 0 ? (
+            pagePuzzles.flatMap((puzzle, idx) => {
+              const parts = pageWordSearchSettings.core.twoPagePuzzles ? ['clues', 'grid'] : ['clues'];
+              return parts.map((pagePart) => (
+                <div key={`${page.id}-${puzzle.puzzleNumber || idx}-${pagePart}`} className="w-full">
+                  <PuzzlePageCanvas
+                    puzzle={puzzle}
+                    settings={pageWordSearchSettings}
+                    titleWords={pageTitleWords}
+                    showSolution={showSolution}
+                    showMargins={showMargins}
+                    showSafetyZone={showSafetyZone}
+                    safetyMarginPx={safetyMarginPx}
+                    ptToPx={ptToPx}
+                    puzzleGridScale={puzzleGridScale}
+                    bookHeaderTitleFontSizePt={bookHeaderTitleFontSizePt}
+                    bookPageIndex={visibleBookPageIndex(
+                      compiledBook,
+                      compiledBook
+                        ? findBookPageIndexForDocument(compiledBook, page.id, idx)
+                        : computePuzzleBookPageIndex(
+                            Math.max(0, pageStartIndex) + idx,
+                            includeBlankAfterEachPuzzle
+                          )
+                    )}
+                    pagePart={pagePart}
+                  />
+                </div>
+              ));
+            })
           ) : (
             <PuzzleModulePlaceholderCanvas
               page={page}
@@ -1315,17 +1441,32 @@ function DocumentPageCanvas({
     for (let i = 0; i < pagePuzzles.length; i += answersPerPage) {
       pageSolutionChunks.push(pagePuzzles.slice(i, i + answersPerPage));
     }
+    const compiledDocSolutionPages = compiledBook
+      ? getCompiledSolutionPagesForDocument(compiledBook, page.id)
+      : compiledSolutionPages ?? [];
     const solutionChunkIndex = Math.min(
       Math.max(0, currentSolutionPageIndex),
-      Math.max(0, (compiledSolutionPages?.length ?? pageSolutionChunks.length) - 1)
+      Math.max(0, (compiledDocSolutionPages.length || pageSolutionChunks.length) - 1)
     );
-    const compiledSolutionPage = compiledSolutionPages?.[solutionChunkIndex];
-    const solutionChunk = compiledSolutionPage?.puzzles ?? pageSolutionChunks[solutionChunkIndex] ?? [];
-    const solutionBookPageIndexForChunk = compiledSolutionPage?.bookPageIndex ?? computeSolutionBookPageIndex(
-      batchPuzzles.length,
-      Math.max(0, Math.floor(pageStartIndex / answersPerPage) + solutionChunkIndex),
-      includeBlankAfterEachPuzzle
-    );
+    const compiledSolutionEntry = compiledDocSolutionPages[solutionChunkIndex];
+    const compiledWsSolution =
+      compiledSolutionEntry && compiledSolutionEntry.kind === 'solution'
+        ? compiledSolutionEntry
+        : undefined;
+    const solutionChunk =
+      compiledWsSolution?.puzzles ?? pageSolutionChunks[solutionChunkIndex] ?? [];
+    const rawSolutionBookPageIndex = compiledBook
+      ? compiledSolutionEntry?.bookPageIndex ??
+        findBookPageIndexForSolution(compiledBook, page.id, solutionChunkIndex) ??
+        compiledBook.pages.length + solutionChunkIndex
+      : computeSolutionBookPageIndex(
+          batchPuzzles.length,
+          Math.max(0, Math.floor(pageStartIndex / answersPerPage) + solutionChunkIndex),
+          includeBlankAfterEachPuzzle
+        );
+    const solutionBookPageIndexForChunk =
+      visibleBookPageIndex(compiledBook, rawSolutionBookPageIndex) ??
+      (compiledBook ? undefined : rawSolutionBookPageIndex);
 
     if (previewRangeMode === 'sample') {
     return (
@@ -1360,10 +1501,16 @@ function DocumentPageCanvas({
               settings={pageWordSearchSettings}
               titleWords={pageTitleWords}
               pageIndex={chunkIdx}
-              bookPageIndex={computeSolutionBookPageIndex(
-                batchPuzzles.length,
-                Math.max(0, Math.floor(pageStartIndex / answersPerPage) + chunkIdx),
-                includeBlankAfterEachPuzzle
+              bookPageIndex={visibleBookPageIndex(
+                compiledBook,
+                compiledDocSolutionPages[chunkIdx]?.bookPageIndex ??
+                  (compiledBook
+                    ? findBookPageIndexForSolution(compiledBook, page.id, chunkIdx)
+                    : computeSolutionBookPageIndex(
+                        batchPuzzles.length,
+                        Math.max(0, Math.floor(pageStartIndex / answersPerPage) + chunkIdx),
+                        includeBlankAfterEachPuzzle
+                      ))
               )}
               showMargins={showMargins}
               showSafetyZone={showSafetyZone}
@@ -1444,7 +1591,15 @@ function DocumentPageCanvas({
             <TocPageCanvas
               key={`${page.id}-toc-${sliceIndex}`}
               page={page}
-              settings={compiledTocPage.settings ?? normalized}
+              settings={{
+                ...normalized,
+                tocPageIndex: compiledTocPage.settings?.tocPageIndex ?? sliceIndex,
+                tocPageCount: compiledTocPage.settings?.tocPageCount ?? tocPages.length,
+                tocTotalEntryCount:
+                  compiledBook?.tocEntries?.length ??
+                  compiledTocPage.settings?.tocTotalEntryCount ??
+                  compiledTocPage.resolvedToc?.length,
+              }}
               wordSearchSettings={wordSearchSettings}
               entries={compiledTocPage.resolvedToc ?? compiledBook?.tocEntries ?? []}
               totalEntryCount={
@@ -1489,30 +1644,284 @@ function DocumentPageCanvas({
 
   if (isPuzzleModuleType(page.moduleType)) {
     const moduleSettings = page.settings as PuzzleModuleSettings;
+    const isGenericModule = isGenericPuzzleModuleType(page.moduleType);
+    const isMurdokuModule = page.moduleType === 'murdoku';
+    // Modules that carry a per-document batch of generated puzzles.
+    const isBatchModule =
+      page.moduleType === 'crossword' || isGenericModule || isMurdokuModule;
+    const pageCrosswordBatch = crosswordBatchPuzzles.filter(
+      (puzzle) =>
+        puzzle.pageId === page.id ||
+        (!puzzle.pageId && page.id === activeDocumentPageId && page.moduleType === 'crossword')
+    );
+    const pageGenericBatch = genericBatchPuzzles.filter(
+      (puzzle) =>
+        puzzle.type === page.moduleType &&
+        (puzzle.pageId === page.id ||
+          (!puzzle.pageId && page.id === activeDocumentPageId && isGenericModule))
+    );
+    const pageMurdokuBatch = murdokuBatchPuzzles.filter(
+      (puzzle) =>
+        puzzle.pageId === page.id ||
+        (!puzzle.pageId && page.id === activeDocumentPageId && isMurdokuModule)
+    );
+    const pageBatch: any[] =
+      page.moduleType === 'crossword'
+        ? pageCrosswordBatch
+        : isMurdokuModule
+          ? pageMurdokuBatch
+          : pageGenericBatch;
+    const pageCwSettings =
+      page.moduleType === 'crossword'
+        ? page.id === activeDocumentPageId
+          ? crosswordSettings
+          : (moduleSettings.crosswordSettings ?? crosswordSettings)
+        : null;
+    const pageMdSettings = isMurdokuModule
+      ? normalizeMurdokuSettings(
+          page.id === activeDocumentPageId
+            ? murdokuSettings ?? moduleSettings.murdokuSettings
+            : moduleSettings.murdokuSettings ?? murdokuSettings ?? getDefaultMurdokuSettings()
+        )
+      : null;
+    const pageGpSettings = isGenericModule
+      ? page.id === activeDocumentPageId
+        ? genericPuzzleSettings
+        : (moduleSettings.genericPuzzleSettings ?? genericPuzzleSettings)
+      : null;
+    const normalizedPageGp = isGenericModule
+      ? normalizeGenericPuzzleSettings(
+          pageGpSettings ?? undefined,
+          page.moduleType as GenericPuzzleModuleType
+        )
+      : null;
+    const batchSolutionsPerPage =
+      page.moduleType === 'crossword'
+        ? normalizeCrosswordSettings(pageCwSettings ?? getDefaultCrosswordSettings()).bookCanvas
+            .answersPerPage || 1
+        : normalizedPageGp
+          ? page.moduleType === 'trivia'
+            ? computeTriviaSolutionsPerPage({
+                answersPerColumn: normalizedPageGp.core.solutionsPerPage || 20,
+                solutionColumns: normalizedPageGp.core.triviaSolutionColumns || 3,
+              })
+            : normalizedPageGp.core.solutionsPerPage || 1
+          : 1;
+    const batchPuzzlesPerPage = normalizedPageGp?.core.puzzlesPerPage || 1;
+    const batchShowSolution = isBatchModule ? activePreviewTab === 'solutions' : showSolution;
+    const murdokuTwoPage =
+      isMurdokuModule && !!pageMdSettings?.core.twoPagePuzzles && !batchShowSolution;
+    const murdokuPagesPerPuzzle = murdokuTwoPage ? 2 : 1;
+    const murdokuVisualCount = Math.max(0, pageBatch.length * murdokuPagesPerPuzzle);
+
+    // Batch pagination uses a document-local index (0..N-1), same as the page flipper.
+    const batchRangeMax = isMurdokuModule && !batchShowSolution
+      ? Math.max(0, murdokuVisualCount - 1)
+      : Math.max(0, pageBatch.length - 1);
+    const batchLocalIndex =
+      page.id === activeDocumentPageId
+        ? Math.max(
+            0,
+            Math.min(batchRangeMax, Math.max(0, currentBatchIndex))
+          )
+        : 0;
+    const murdokuPuzzleIndex = isMurdokuModule
+      ? Math.floor(batchLocalIndex / murdokuPagesPerPuzzle)
+      : batchLocalIndex;
+    const murdokuPagePart: MurdokuPagePart = murdokuTwoPage
+      ? batchLocalIndex % 2 === 0
+        ? 'characters'
+        : 'scene'
+      : pageMdSettings?.core.twoPagePuzzles && batchShowSolution
+        ? 'scene'
+        : 'single';
+
+    const puzzleFromBatch =
+      isBatchModule && !batchShowSolution
+        ? pageBatch.find(
+            (puzzle) =>
+              (puzzle.puzzleIndexInDocument ?? 0) ===
+              (isMurdokuModule ? murdokuPuzzleIndex : batchLocalIndex)
+          ) ??
+          pageBatch[isMurdokuModule ? murdokuPuzzleIndex : batchLocalIndex] ??
+          (page.id === activeDocumentPageId && currentPuzzle?.type === page.moduleType
+            ? currentPuzzle
+            : null)
+        : null;
+
+    const batchSolutionChunk =
+      isBatchModule && batchShowSolution
+        ? (() => {
+            if (page.moduleType === 'trivia') {
+              const triviaPages = packTriviaGamesForSolutionPages(
+                pageBatch as import('@/lib/puzzles/types').TriviaPuzzle[],
+                batchSolutionsPerPage
+              );
+              const games =
+                triviaPages[Math.max(0, currentSolutionPageIndex)] ?? triviaPages[0];
+              if (games && games.length > 0) return games;
+              if (page.id === activeDocumentPageId && currentPuzzle?.type === 'trivia') {
+                return [currentPuzzle as import('@/lib/puzzles/types').TriviaPuzzle];
+              }
+              return [];
+            }
+            const start = Math.max(0, currentSolutionPageIndex) * batchSolutionsPerPage;
+            const chunk = pageBatch.slice(start, start + batchSolutionsPerPage);
+            if (chunk.length > 0) return chunk;
+            if (page.id === activeDocumentPageId && currentPuzzle?.type === page.moduleType) {
+              return [currentPuzzle];
+            }
+            return [];
+          })()
+        : [];
+
+    const hasBatch = isBatchModule && pageBatch.length > 0;
+
   const isActiveGeneratedPuzzle =
     page.id === activeDocumentPageId &&
-    currentPuzzle &&
-    currentPuzzleType === page.moduleType;
+      ((isBatchModule && (!!puzzleFromBatch || batchSolutionChunk.length > 0)) ||
+        (!isBatchModule && currentPuzzle && currentPuzzleType === page.moduleType));
 
-    if (isActiveGeneratedPuzzle) {
-      const pageCw =
-        page.moduleType === 'crossword'
-          ? page.id === activeDocumentPageId
-            ? crosswordSettings
-            : (moduleSettings.crosswordSettings ?? crosswordSettings)
-          : null;
-      return (
+    // Inactive batch docs still preview their first generated puzzle.
+    if (isBatchModule && page.id !== activeDocumentPageId && hasBatch && !batchShowSolution) {
+      const thumb = pageBatch[0];
+      const thumbIndex = thumb.puzzleIndexInDocument ?? 0;
+      const thumbBookPageIndex = visibleBookPageIndex(
+        compiledBook,
+        compiledBook
+          ? findBookPageIndexForDocument(
+              compiledBook,
+              page.id,
+              thumbIndex,
+              isMurdokuModule
+                ? {
+                    murdokuPagePart: pageMdSettings?.core.twoPagePuzzles
+                      ? 'scene'
+                      : 'single',
+                  }
+                : undefined
+            )
+          : normalizePageNumberSettings(wordSearchSettings.typography.pageNumber).enabled
+            ? 0
+            : undefined
+      );
+      return isMurdokuModule ? (
+        <MurdokuPageCanvas
+          puzzle={thumb}
+          settings={pageMdSettings ?? getDefaultMurdokuSettings()}
+          layoutSettings={wordSearchSettings}
+          showSolution={false}
+          showMargins={showMargins}
+          showSafetyZone={showSafetyZone}
+          safetyMarginPx={safetyMarginPx}
+          pagePart={pageMdSettings?.core.twoPagePuzzles ? 'scene' : 'single'}
+          bookPageIndex={thumbBookPageIndex}
+        />
+      ) : (
     <GenericPuzzlePageCanvas
       puzzleType={page.moduleType}
-      puzzle={currentPuzzle}
+          puzzle={thumb}
       settings={wordSearchSettings}
           titleWords={moduleSettings.titleWords ?? titleWords}
-      showSolution={showSolution}
+          showSolution={false}
       showMargins={showMargins}
       showSafetyZone={showSafetyZone}
       safetyMarginPx={safetyMarginPx}
       ptToPx={ptToPx}
-      crosswordSettings={pageCw}
+          crosswordSettings={pageCwSettings}
+          genericSettings={pageGpSettings}
+          puzzleGridScale={puzzleGridScale}
+          puzzleIndex={thumbIndex}
+          bookPageIndex={thumbBookPageIndex}
+          canvasEditEnabled={false}
+        />
+      );
+    }
+
+    // Multi puzzles per page: show the chunk containing the current puzzle.
+    const puzzlePageChunk =
+      isBatchModule && !batchShowSolution && batchPuzzlesPerPage > 1 && pageBatch.length > 0
+        ? (() => {
+            const chunkStart =
+              Math.floor(batchLocalIndex / batchPuzzlesPerPage) * batchPuzzlesPerPage;
+            return pageBatch.slice(chunkStart, chunkStart + batchPuzzlesPerPage);
+          })()
+        : null;
+
+    if (isActiveGeneratedPuzzle) {
+      const puzzleForCanvas = isBatchModule
+        ? batchShowSolution
+          ? batchSolutionChunk[0]
+          : (puzzlePageChunk?.[0] ?? puzzleFromBatch)
+        : currentPuzzle;
+      const puzzleIndex = isBatchModule
+        ? batchShowSolution
+          ? (batchSolutionChunk[0]?.puzzleIndexInDocument ?? 0)
+          : puzzlePageChunk
+            ? (puzzlePageChunk[0]?.puzzleIndexInDocument ?? 0)
+            : (puzzleFromBatch?.puzzleIndexInDocument ?? batchLocalIndex)
+        : 0;
+      const activeBookPageIndex = compiledBook
+        ? batchShowSolution
+          ? findBookPageIndexForSolution(
+              compiledBook,
+              page.id,
+              page.id === activeDocumentPageId ? currentSolutionPageIndex : 0
+            )
+          : findBookPageIndexForDocument(
+              compiledBook,
+              page.id,
+              puzzleIndex,
+              isMurdokuModule ? { murdokuPagePart: murdokuPagePart } : undefined
+            )
+        : normalizePageNumberSettings(wordSearchSettings.typography.pageNumber).enabled
+          ? 0
+          : undefined;
+      const visibleActiveBookPageIndex = visibleBookPageIndex(
+        compiledBook,
+        activeBookPageIndex
+      );
+      return isMurdokuModule ? (
+        <MurdokuPageCanvas
+          puzzle={puzzleForCanvas}
+          settings={pageMdSettings ?? getDefaultMurdokuSettings()}
+          layoutSettings={wordSearchSettings}
+          showSolution={batchShowSolution}
+          showMargins={showMargins}
+          showSafetyZone={showSafetyZone}
+          safetyMarginPx={safetyMarginPx}
+          pagePart={murdokuPagePart}
+          bookPageIndex={visibleActiveBookPageIndex}
+        />
+      ) : (
+    <GenericPuzzlePageCanvas
+      puzzleType={page.moduleType}
+      puzzle={puzzleForCanvas}
+      puzzles={
+        batchShowSolution
+          ? batchSolutionChunk
+          : puzzlePageChunk ?? undefined
+      }
+      settings={wordSearchSettings}
+          titleWords={moduleSettings.titleWords ?? titleWords}
+      showSolution={batchShowSolution}
+      showMargins={showMargins}
+      showSafetyZone={showSafetyZone}
+      safetyMarginPx={safetyMarginPx}
+      ptToPx={ptToPx}
+      crosswordSettings={pageCwSettings}
+      genericSettings={pageGpSettings}
+      puzzleGridScale={puzzleGridScale}
+      puzzleIndex={puzzleIndex}
+      bookPageIndex={visibleActiveBookPageIndex}
+      canvasEditEnabled={
+        (crosswordCanvasEditEnabled || genericPuzzleCanvasEditEnabled) &&
+        page.id === activeDocumentPageId
+      }
+      canvasEditTarget={crosswordEditTarget}
+      canvasEditHideGuides={crosswordEditHideGuides || genericPuzzleEditHideGuides}
+      onCrosswordEditTargetChange={onCrosswordEditTargetChange}
+      onGenericPuzzleEditTargetChange={onGenericPuzzleEditTargetChange}
     />
       );
     }
@@ -1612,7 +2021,13 @@ function CompiledBookPageCanvas({
       return (
         <TocPageCanvas
           page={docPage}
-          settings={tocPage.settings}
+          settings={{
+            ...normalizeTextModuleSettings(docPage, docPage.settings as TextModuleSettings),
+            tocPageIndex: tocPage.settings.tocPageIndex ?? 0,
+            tocPageCount: tocPage.settings.tocPageCount ?? 1,
+            tocTotalEntryCount:
+              tocPage.settings.tocTotalEntryCount ?? tocPage.resolvedToc?.length,
+          }}
           wordSearchSettings={wordSearchSettings}
           entries={tocPage.resolvedToc ?? []}
           totalEntryCount={
@@ -1639,6 +2054,101 @@ function CompiledBookPageCanvas({
         safetyMarginPx={safetyMarginPx}
         ptToPx={ptToPx}
         bookPageIndex={showPageNumber ? compiledPage.bookPageIndex : null}
+      />
+    );
+  }
+
+  // Crossword pages reuse the exact same canvas component as the sample preview,
+  // so all-pages / 3D book / export snapshots match the editing canvas.
+  if (compiledPage.kind === 'crossword' || compiledPage.kind === 'crossword-solution') {
+    const isSolution = compiledPage.kind === 'crossword-solution';
+    const docPage = documentPages.find((doc) => doc.id === compiledPage.sourceDocumentId);
+    const docTitleWords =
+      (docPage?.settings as PuzzleModuleSettings | undefined)?.titleWords ?? titleWords;
+    const cwPuzzles = isSolution ? compiledPage.puzzles : [compiledPage.puzzle];
+
+    return (
+      <GenericPuzzlePageCanvas
+        puzzleType="crossword"
+        puzzle={cwPuzzles[0]}
+        puzzles={isSolution ? cwPuzzles : undefined}
+        settings={wordSearchSettings}
+        titleWords={docTitleWords}
+        showSolution={isSolution}
+        showMargins={showMargins}
+        showSafetyZone={showSafetyZone}
+        safetyMarginPx={safetyMarginPx}
+        ptToPx={ptToPx}
+        crosswordSettings={compiledPage.crosswordSettings}
+        puzzleGridScale={puzzleGridScale}
+        puzzleIndex={
+          isSolution
+            ? (cwPuzzles[0]?.puzzleIndexInDocument ?? 0)
+            : compiledPage.puzzleIndexInDocument
+        }
+        bookPageIndex={showPageNumber ? compiledPage.bookPageIndex : undefined}
+        canvasEditEnabled={false}
+      />
+    );
+  }
+
+  // Sudoku / maze pages reuse the same canvas component as the sample preview.
+  if (
+    compiledPage.kind === 'generic-puzzle' ||
+    compiledPage.kind === 'generic-puzzle-solution'
+  ) {
+    const isSolution = compiledPage.kind === 'generic-puzzle-solution';
+    const docPage = documentPages.find((doc) => doc.id === compiledPage.sourceDocumentId);
+    const docTitleWords =
+      (docPage?.settings as PuzzleModuleSettings | undefined)?.titleWords ?? titleWords;
+    const gpPuzzles = compiledPage.puzzles;
+
+    return (
+      <GenericPuzzlePageCanvas
+        puzzleType={compiledPage.puzzleType}
+        puzzle={gpPuzzles[0]}
+        puzzles={isSolution || gpPuzzles.length > 1 ? gpPuzzles : undefined}
+        settings={wordSearchSettings}
+        titleWords={docTitleWords}
+        showSolution={isSolution}
+        showMargins={showMargins}
+        showSafetyZone={showSafetyZone}
+        safetyMarginPx={safetyMarginPx}
+        ptToPx={ptToPx}
+        genericSettings={compiledPage.genericSettings}
+        puzzleIndex={
+          isSolution
+            ? (gpPuzzles[0]?.puzzleIndexInDocument ?? 0)
+            : compiledPage.puzzleIndexInDocument
+        }
+        bookPageIndex={showPageNumber ? compiledPage.bookPageIndex : undefined}
+        canvasEditEnabled={false}
+      />
+    );
+  }
+
+  if (compiledPage.kind === 'murdoku' || compiledPage.kind === 'murdoku-solution') {
+    const isSolution = compiledPage.kind === 'murdoku-solution';
+    const puzzle = isSolution ? compiledPage.puzzles[0] : compiledPage.puzzle;
+    return (
+      <MurdokuPageCanvas
+        puzzle={puzzle}
+        settings={compiledPage.murdokuSettings}
+        layoutSettings={wordSearchSettings}
+        showSolution={isSolution}
+        showMargins={showMargins}
+        showSafetyZone={showSafetyZone}
+        safetyMarginPx={safetyMarginPx}
+        bookPageIndex={showPageNumber ? compiledPage.bookPageIndex : undefined}
+        pagePart={
+          isSolution
+            ? compiledPage.murdokuSettings.core.twoPagePuzzles
+              ? 'scene'
+              : 'single'
+            : compiledPage.kind === 'murdoku'
+              ? compiledPage.pagePart
+              : 'single'
+        }
       />
     );
   }
@@ -1713,6 +2223,7 @@ function CompiledBookPageCanvas({
         puzzleGridScale={puzzleGridScale}
         bookHeaderTitleFontSizePt={bookHeaderTitleFontSizePt}
         bookPageIndex={showPageNumber ? compiledPage.bookPageIndex : undefined}
+        pagePart={compiledPage.pagePart ?? 'clues'}
       />
     );
   }
@@ -1813,7 +2324,7 @@ function SolutionsPageCanvas({
   settings: WordSearchSettings;
   titleWords: TitleWordsSettings;
   pageIndex: number;
-  bookPageIndex: number;
+  bookPageIndex?: number;
   showMargins: boolean;
   showSafetyZone: boolean;
   safetyMarginPx: number;
@@ -2012,15 +2523,10 @@ function SolutionsPageCanvas({
       }}
     >
       {colors.answerPage.backgroundImage && (
-        <div
-          className="absolute inset-0 pointer-events-none z-0"
-          style={{
-            backgroundImage: `url(${colors.answerPage.backgroundImage})`,
-            backgroundSize: colors.answerPage.backgroundImageFit || 'cover',
-            backgroundRepeat: 'no-repeat',
-            backgroundPosition: 'center',
-            opacity: (colors.answerPage.backgroundImageOpacity ?? 100) / 100,
-          }}
+        <PageBackgroundImage
+          src={colors.answerPage.backgroundImage}
+          opacity={colors.answerPage.backgroundImageOpacity}
+          fit={colors.answerPage.backgroundImageFit}
         />
       )}
 
@@ -2145,6 +2651,7 @@ function SolutionsPageCanvas({
         );
       })}
 
+      {typeof bookPageIndex === 'number' ? (
       <PageNumberOverlay
         settings={settings}
         bookPageIndex={bookPageIndex}
@@ -2152,6 +2659,7 @@ function SolutionsPageCanvas({
         pageHeightPt={pageHeightPt}
         ptToPx={ptToPx}
       />
+      ) : null}
 
       {canvasHitZones && onCanvasEditTargetChange && (
         <>
@@ -2220,10 +2728,14 @@ function SolutionsPageCanvas({
   );
 }
 
-/** Fallback canvas page for non-word-search puzzle categories */
-function GenericPuzzlePageCanvas({
+/**
+ * Canvas page for non-word-search puzzle categories.
+ * Exported so PDF/PPT export can rasterize the identical markup (single source of truth).
+ */
+export function GenericPuzzlePageCanvas({
   puzzleType,
   puzzle,
+  puzzles,
   settings,
   titleWords,
   showSolution,
@@ -2232,9 +2744,22 @@ function GenericPuzzlePageCanvas({
   safetyMarginPx,
   ptToPx,
   crosswordSettings,
+  genericSettings,
+  puzzleGridScale = 70,
+  puzzleIndex = 0,
+  bookPageIndex,
+  canvasEditEnabled = false,
+  canvasEditTarget = null,
+  canvasEditHideGuides = false,
+  onCrosswordEditTargetChange,
+  onGenericPuzzleEditTargetChange,
+  omitBackground = false,
+  hidePageNumber = false,
 }: {
   puzzleType: string;
   puzzle: any;
+  /** When showing multi-per-page solutions (crossword / sudoku / maze). */
+  puzzles?: any[];
   settings: WordSearchSettings;
   titleWords: TitleWordsSettings;
   showSolution: boolean;
@@ -2243,63 +2768,853 @@ function GenericPuzzlePageCanvas({
   safetyMarginPx: number;
   ptToPx: (pt: number) => number;
   crosswordSettings?: CrosswordSettings | null;
+  genericSettings?: GenericPuzzleSettings | null;
+  puzzleGridScale?: number;
+  puzzleIndex?: number;
+  /** Book page index for global page-number overlay (Style settings). */
+  bookPageIndex?: number;
+  canvasEditEnabled?: boolean;
+  canvasEditTarget?: CrosswordEditTarget | null;
+  canvasEditHideGuides?: boolean;
+  onCrosswordEditTargetChange?: (target: CrosswordEditTarget) => void;
+  onGenericPuzzleEditTargetChange?: (target: GenericPuzzleEditTarget) => void;
+  /** Export: skip Style background layers (PPT keeps native slide background). */
+  omitBackground?: boolean;
+  /** Export: skip page-number overlay (PPT draws it as editable text). */
+  hidePageNumber?: boolean;
 }) {
   const { colors, typography } = settings;
-  const cw = puzzleType === 'crossword' ? crosswordSettings ?? getDefaultCrosswordSettings() : null;
+  const cw =
+    puzzleType === 'crossword'
+      ? normalizeCrosswordSettings(crosswordSettings ?? getDefaultCrosswordSettings())
+      : null;
+  const gp = isGenericPuzzleModuleType(puzzleType)
+    ? normalizeGenericPuzzleSettings(
+        genericSettings ?? getDefaultGenericPuzzleSettings(puzzleType),
+        puzzleType
+      )
+    : null;
   const dims = getPageDimensionsInches(settings);
   const pageWidthPt = dims.width * 72;
   const pageHeightPt = dims.height * 72;
   const widthPx = ptToPx(pageWidthPt);
   const heightPx = ptToPx(pageHeightPt);
-  const marginIn = cw?.pageFrameSettings?.enabled
-    ? cw.pageFrameSettings.marginSizeIn
-    : getPageMarginInches(settings);
-  const marginPx = ptToPx(marginIn * 72);
-  const cellSize = cw ? Math.round(28 * (cw.core.puzzleSizePercent / 60)) : 30;
+  // Global Style settings drive the page frame for every puzzle type.
+  const pageFrame = resolvePageFrameSettings(settings);
+  const contentInsetPt = resolveGenericPageContentInsetPt(settings);
+  const marginPx = ptToPx(contentInsetPt);
+  const scaleFactor =
+    (cw
+      ? (showSolution ? cw.core.solutionGridScale : cw.core.puzzleGridScale) || 100
+      : gp
+        ? (showSolution ? gp.core.solutionGridScale : gp.core.puzzleGridScale) || 100
+        : puzzleGridScale || 70) / 100;
+  const answersPerPage = cw
+    ? cw.bookCanvas.answersPerPage || 1
+    : gp
+      ? puzzleType === 'trivia'
+        ? computeTriviaSolutionsPerPage({
+            answersPerColumn: gp.core.solutionsPerPage || 20,
+            solutionColumns: gp.core.triviaSolutionColumns || 3,
+          })
+        : showSolution
+          ? gp.core.solutionsPerPage || 1
+          : gp.core.puzzlesPerPage || 1
+      : 1;
+  const solutionPuzzles =
+    (cw || gp) && (showSolution || (gp && (gp.core.puzzlesPerPage || 1) > 1))
+      ? puzzles && puzzles.length > 0
+        ? puzzles
+        : puzzle
+          ? [puzzle]
+          : []
+      : [];
+  const isTriviaSolution = puzzleType === 'trivia' && showSolution;
+  const multiSolution = !isTriviaSolution && solutionPuzzles.length > 1;
+  const solutionLayout = getSolutionGridLayout(
+    Math.max(answersPerPage, solutionPuzzles.length || 1)
+  );
+  const multiShrink = multiSolution ? (answersPerPage >= 4 ? 0.45 : 0.62) : 1;
+  const cellSize = cw
+    ? crosswordFixedCellCssPx(cw, { showSolution, multiShrink })
+    : 30;
+  // Content area available for a single grid (used to auto-fit sudoku/maze).
+  const contentWidthPx = Math.max(80, widthPx - marginPx * 2);
+  const isTextPuzzleType =
+    puzzleType === 'word-scramble' ||
+    puzzleType === 'cryptogram' ||
+    puzzleType === 'trivia';
+  const contentHeightPx = Math.max(
+    120,
+    heightPx -
+      marginPx * 2 -
+      (multiSolution && isTextPuzzleType ? ptToPx(28) : ptToPx(120))
+  );
+  const solutionGapPx =
+    cw?.typography.solutionToSolutionGapPx ??
+    (puzzleType === 'word-scramble' && multiSolution
+      ? ptToPx(gp?.typography.scrambleSpaceBetweenPuzzles ?? 18)
+      : isTextPuzzleType && multiSolution
+        ? ptToPx(12)
+        : ptToPx(12));
+  const headerAssemblyEnabled =
+    !showSolution && isGlobalHeaderAssemblyEnabled(settings);
+  const solutionTitleReservePx = multiSolution
+    ? ptToPx(
+        Math.max(
+          10,
+          (showSolution
+            ? (cw?.typography.answerTitleFontSize ?? gp?.typography.answerTitleFontSize ?? 18)
+            : (cw?.typography.puzzleTitleFontSize ?? gp?.typography.puzzleTitleFontSize ?? 24)) *
+            (headerAssemblyEnabled ? 1.15 : 0.75)
+        )
+      ) + (headerAssemblyEnabled ? 16 : 12)
+    : 0;
+  /** Equal Width×Height frame for every maze/sudoku on a multi-solution page. */
+  const multiSolutionFramePx = React.useMemo(() => {
+    if (!multiSolution || !gp) return null;
+    if (isTextPuzzleType) return null;
+    const cols = Math.max(1, solutionLayout.columns);
+    const rows = Math.max(1, solutionLayout.rows);
+    const slotW = (contentWidthPx - solutionGapPx * (cols - 1)) / cols;
+    const slotH =
+      (contentHeightPx - solutionGapPx * (rows - 1)) / rows - solutionTitleReservePx;
+    const side = Math.max(40, Math.floor(Math.min(slotW, slotH) * 0.96 * scaleFactor));
+    return side;
+  }, [
+    multiSolution,
+    gp,
+    isTextPuzzleType,
+    solutionLayout.columns,
+    solutionLayout.rows,
+    contentWidthPx,
+    contentHeightPx,
+    solutionGapPx,
+    solutionTitleReservePx,
+    scaleFactor,
+  ]);
+  /**
+   * Word-scramble auto-fit:
+   * - Clamp vertical word gap so content never hits the next title / safe area
+   * - 2-up: scale to fill the page
+   * - 4-up: shrink until each scramble row stays on one line
+   */
+  const scrambleFit = React.useMemo(() => {
+    if (puzzleType !== 'word-scramble' || !gp) return null;
+    const cols = multiSolution ? Math.max(1, solutionLayout.columns) : 1;
+    const rows = multiSolution ? Math.max(1, solutionLayout.rows) : 1;
+    const slotW = Math.max(60, (contentWidthPx - solutionGapPx * (cols - 1)) / cols - 8);
+    const slotH = multiSolution
+      ? (contentHeightPx - solutionGapPx * (rows - 1)) / rows - solutionTitleReservePx
+      : contentHeightPx;
 
-  const renderGrid = () => {
+    const samplePuzzle = (solutionPuzzles[0] ?? puzzle) as
+      | { words?: Array<{ original?: string; scrambled?: string } | string> }
+      | null
+      | undefined;
+    const rawWords = Array.isArray(samplePuzzle?.words) ? samplePuzzle!.words! : [];
+    const wordCount = Math.max(
+      1,
+      rawWords.length > 0 ? rawWords.length : gp.core.wordsPerPuzzle || 10
+    );
+    const longestChars = Math.max(
+      6,
+      ...rawWords.map((w) => {
+        if (typeof w === 'string') return w.replace(/[\s-]/g, '').length;
+        const src = String(w?.original || w?.scrambled || '');
+        return src.replace(/[\s-]/g, '').length;
+      }),
+      8
+    );
+
+    const includeBank = !showSolution && (gp.core.includeWordBank ?? false);
+    const baseFontPt = showSolution
+      ? gp.typography.answerFontSize
+      : gp.typography.puzzleFontSize;
+    let fontPx = ptToPx(baseFontPt ?? 14) * (scaleFactor || 1);
+    const letterEm = gp.typography.scrambleSpaceBetweenLetters ?? 0.12;
+    const requestedWordGapPx = ptToPx(gp.typography.scrambleSpaceBetweenWords ?? 8);
+    const lineFactor = gp.core.answerBlankStyle === 'boxes' ? 1.5 : 1.32;
+    const bankReserve = includeBank ? fontPx * 2.8 : 0;
+    const keepOneLine = multiSolution && answersPerPage >= 4;
+
+    // 4-up: shrink font until longest "N. SCRAMBLE = _____…" fits one line.
+    if (keepOneLine) {
+      const charW = 0.62;
+      const estimateWidth = (fs: number) => {
+        const scrambleW = longestChars * fs * (charW + letterEm * 0.55);
+        const blankW =
+          gp.core.answerBlankStyle === 'boxes'
+            ? longestChars * (fs * 1.1 + Math.max(1, letterEm * fs))
+            : longestChars * fs * (charW + letterEm * 0.55);
+        return fs * 1.6 + scrambleW + fs * 0.9 + blankW;
+      };
+      let guard = 0;
+      while (estimateWidth(fontPx) > slotW && fontPx > 7 && guard < 40) {
+        fontPx *= 0.92;
+        guard += 1;
+      }
+    }
+
+    const lineH = fontPx * lineFactor;
+    const gaps = Math.max(0, wordCount - 1);
+    const fixedH = wordCount * lineH + bankReserve;
+    // Max gap before content would hit the next title / slot bottom (safe area).
+    const maxGapPx =
+      gaps > 0 ? Math.max(0, (slotH * 0.98 - fixedH) / gaps) : requestedWordGapPx;
+    let wordGapPx = Math.min(requestedWordGapPx, maxGapPx);
+
+    // 2-up: if there's leftover room, grow font (and gap a little) to fill.
+    // On solution pages keep fill milder so per-puzzle titles stay visible.
+    if (multiSolution && answersPerPage === 2) {
+      const used = fixedH + gaps * wordGapPx;
+      const maxFill = showSolution ? 1.12 : 1.35;
+      const fillScale = Math.min(maxFill, Math.max(1, (slotH * 0.96) / Math.max(1, used)));
+      fontPx *= fillScale;
+      const lineH2 = fontPx * lineFactor;
+      const fixedH2 = wordCount * lineH2 + (includeBank ? fontPx * 2.8 : 0);
+      const maxGap2 = gaps > 0 ? Math.max(0, (slotH * 0.98 - fixedH2) / gaps) : wordGapPx;
+      wordGapPx = Math.min(Math.max(wordGapPx * fillScale, wordGapPx), maxGap2);
+    }
+
+    // 4-up vertical clamp after width fit.
+    if (keepOneLine) {
+      const used = wordCount * (fontPx * lineFactor) + gaps * wordGapPx + bankReserve;
+      if (used > slotH * 0.98) {
+        const s = (slotH * 0.98) / Math.max(1, used);
+        fontPx *= s;
+        wordGapPx *= s;
+      }
+    }
+
+    return {
+      fontSize: Math.max(7, fontPx),
+      spaceBetweenWordsPx: Math.max(0, wordGapPx),
+      spaceBetweenLettersEm: letterEm,
+      maxWidthPx: slotW,
+      keepRowsOnOneLine: keepOneLine,
+      titleFontSizePt: Math.max(
+        11,
+        (showSolution
+          ? gp.typography.answerTitleFontSize
+          : gp.typography.puzzleTitleFontSize) *
+          (keepOneLine ? 0.7 : showSolution ? 0.9 : 0.75)
+      ),
+    };
+  }, [
+    puzzleType,
+    gp,
+    multiSolution,
+    solutionLayout.columns,
+    solutionLayout.rows,
+    contentWidthPx,
+    contentHeightPx,
+    solutionGapPx,
+    solutionTitleReservePx,
+    solutionPuzzles,
+    puzzle,
+    showSolution,
+    answersPerPage,
+    scaleFactor,
+    ptToPx,
+  ]);
+  const genericCellSize = React.useMemo(() => {
+    if (!gp || (puzzleType !== 'sudoku' && puzzleType !== 'maze')) return 0;
+    if (puzzleType === 'maze' && multiSolutionFramePx) {
+      // Cell size is derived per-puzzle inside MazeDisplay via frameSize.
+      return multiSolutionFramePx;
+    }
+    const sudokuSize =
+      puzzleType === 'sudoku'
+        ? Math.max(
+            4,
+            Number(
+              (puzzle as { size?: number } | undefined)?.size ??
+                puzzle?.grid?.length ??
+                9
+            ) || 9
+          )
+        : 9;
+    const gridCells =
+      puzzleType === 'sudoku'
+        ? sudokuSize
+        : Math.max(puzzle?.grid?.length ?? 21, puzzle?.grid?.[0]?.length ?? 21);
+    const fitBase = multiSolutionFramePx
+      ? multiSolutionFramePx
+      : Math.min(contentWidthPx, contentHeightPx);
+    const fitPx = fitBase / gridCells;
+    return Math.max(3, Math.floor(fitPx * 0.9 * (multiSolutionFramePx ? 1 : scaleFactor * multiShrink)));
+  }, [
+    gp,
+    puzzleType,
+    puzzle,
+    contentWidthPx,
+    contentHeightPx,
+    scaleFactor,
+    multiShrink,
+    multiSolutionFramePx,
+  ]);
+  const puzzleToCluesGapPx = cw
+    ? ptToPx((cw.typography.spaceBetweenPuzzleAndClues || 0.25) * 72)
+    : undefined;
+
+  const renderSingleGrid = (p: any, opts?: { hideClues?: boolean; cellSizeOverride?: number }) => {
     switch (puzzleType) {
       case 'sudoku':
-        return <SudokuGrid puzzle={puzzle} showSolution={showSolution} cellSize={40} />;
+        return (
+          <div className="mx-auto flex justify-center w-fit max-w-full">
+            <SudokuGrid
+              puzzle={p}
+              showSolution={showSolution}
+              cellSize={
+                gp
+                  ? (() => {
+                      const n = Math.max(
+                        4,
+                        Number(p?.size ?? p?.grid?.length ?? 9) || 9
+                      );
+                      if (multiSolutionFramePx) {
+                        return Math.max(3, Math.floor(multiSolutionFramePx / n));
+                      }
+                      return genericCellSize;
+                    })()
+                  : 40
+              }
+              gridColor={gp?.colors.gridColor ?? '#1f2937'}
+              difficultyPlacement={
+                showSolution
+                  ? 'none'
+                  : (gp?.core.sudokuDifficultyPlacement ??
+                    (gp?.core.showDifficultyLabel === false ? 'none' : 'bottom'))
+              }
+              fontSizePt={
+                gp
+                  ? (showSolution
+                      ? gp.typography.answerFontSize
+                      : gp.typography.puzzleFontSize) ?? 14
+                  : undefined
+              }
+              lineThicknessPercent={
+                showSolution
+                  ? (gp?.core.sudokuSolutionLineThickness ?? 100)
+                  : (gp?.core.sudokuPuzzleLineThickness ?? 100)
+              }
+            />
+          </div>
+        );
       case 'crossword':
         return (
           <CrosswordGrid
-            puzzle={puzzle}
+            puzzle={p}
             showSolution={showSolution}
-            cellSize={cellSize}
+            cellSize={opts?.cellSizeOverride ?? cellSize}
             crosswordSettings={cw}
+            puzzleToCluesGapPx={puzzleToCluesGapPx}
+            hideClues={opts?.hideClues || showSolution}
           />
         );
-      case 'maze':
-        return <MazeDisplay puzzle={puzzle} showSolution={showSolution} cellSize={16} />;
+      case 'maze': {
+        const isShapeMaze = gp?.core.mazeShape === 'custom_image' || Boolean(gp?.core.shapeMazeEnabled);
+        const mazeShapeImageSrc = isShapeMaze && gp ? resolveShapeMaskImageSrc(gp.core, p?.puzzleIndexInDocument ?? puzzleIndex ?? 0) : undefined;
+        return (
+          <div className="mx-auto flex justify-center w-fit max-w-full">
+            <MazeDisplay
+              puzzle={p}
+              showSolution={showSolution}
+              cellSize={gp ? (multiSolutionFramePx ? 8 : genericCellSize) : 16}
+              frameSize={
+                puzzleType === 'maze' && multiSolutionFramePx
+                  ? multiSolutionFramePx
+                  : undefined
+              }
+              wallColor={gp?.colors.gridColor ?? '#1f2937'}
+              solutionPathColor={gp?.colors.solutionPathColor ?? '#e11d48'}
+              solutionPathThickness={gp?.core.mazeSolutionPathThickness ?? 34}
+              solutionPathStyle={gp?.core.mazeSolutionPathStyle ?? 'solid'}
+              wallThickness={gp?.core.mazeWallThickness ?? 45}
+              markerStyle={gp?.core.mazeMarkerStyle ?? 'arrow'}
+              startImage={gp?.core.mazeStartImage}
+              endImage={gp?.core.mazeEndImage}
+              shapeImageSrc={mazeShapeImageSrc}
+              showShapeImage={gp?.core.shapeMaskShowImage}
+              shapeImageFit={gp?.core.shapeMaskFit}
+              shapeImageOpacity={(gp?.core.shapeMaskImageOpacity ?? 35) / 100}
+            />
+          </div>
+        );
+      }
       case 'cryptogram':
-        return <CryptogramDisplay puzzle={puzzle} showSolution={showSolution} />;
+        return (
+          <CryptogramDisplay
+            puzzle={p}
+            showSolution={showSolution}
+            cipherFormat={gp?.core.cryptogramFormat ?? 'lines'}
+            letterCase={gp?.core.letterCase ?? 'upper'}
+            showLetterHints={!showSolution && (gp?.core.showLetterHints ?? true)}
+            answerKeyLines={gp?.core.cryptogramAnswerKeyLines ?? 2}
+            solutionOnlyAnswers={gp?.core.cryptogramSolutionOnlyAnswers ?? false}
+            fontSize={ptToPx(
+              (showSolution
+                ? gp?.typography.answerFontSize
+                : gp?.typography.puzzleFontSize) ?? 14
+            ) * (scaleFactor * multiShrink)}
+            fontFamily={
+              showSolution
+                ? (gp?.typography.answerFontFamily ?? gp?.typography.puzzleFontFamily ?? 'Arial')
+                : (gp?.typography.puzzleFontFamily ?? 'Arial')
+            }
+            answerFontSize={
+              ptToPx(gp?.typography.answerFontSize ?? 16) * (scaleFactor * multiShrink)
+            }
+            answerFontFamily={gp?.typography.answerFontFamily ?? 'Arial'}
+            answerKeyFontSizePx={ptToPx(18) * (scaleFactor * multiShrink)}
+            answerKeyFontFamily={gp?.typography.answerKeyFontFamily ?? 'Arial'}
+            answerKeyGapPx={ptToPx(
+              (gp?.typography.spaceBetweenAnswerKeyAndPuzzle ?? 0.25) * 72
+            )}
+            puzzleLineGapPx={ptToPx(gp?.typography.spaceBetweenPuzzleLines ?? 10)}
+            textColor={gp?.colors.gridColor ?? '#1f2937'}
+            maxWidthPx={contentWidthPx}
+          />
+        );
       case 'word-scramble':
-        return <WordScrambleDisplay puzzle={puzzle} showSolution={showSolution} />;
+        return (
+          <WordScrambleDisplay
+            puzzle={p}
+            showSolution={showSolution}
+            letterCase={gp?.core.letterCase ?? 'upper'}
+            afterScrambled={gp?.core.afterScrambled ?? 'equal'}
+            answerBlankStyle={gp?.core.answerBlankStyle ?? 'underline'}
+            includeWordBank={!showSolution && (gp?.core.includeWordBank ?? false)}
+            wordBankTitle={gp?.core.wordBankTitle ?? 'Word Bank'}
+            fontSize={
+              scrambleFit?.fontSize ??
+              Math.max(
+                10,
+                ptToPx(
+                  (showSolution
+                    ? gp?.typography.answerFontSize
+                    : gp?.typography.puzzleFontSize) ?? 14
+                ) * (scaleFactor || 1)
+              )
+            }
+            fontFamily={
+              showSolution
+                ? (gp?.typography.answerFontFamily ?? gp?.typography.puzzleFontFamily ?? 'Arial')
+                : (gp?.typography.puzzleFontFamily ?? 'Arial')
+            }
+            textColor={gp?.colors.gridColor ?? '#1f2937'}
+            maxWidthPx={scrambleFit?.maxWidthPx ?? contentWidthPx}
+            spaceBetweenWordsPx={
+              scrambleFit?.spaceBetweenWordsPx ??
+              ptToPx(gp?.typography.scrambleSpaceBetweenWords ?? 8)
+            }
+            spaceBetweenLettersEm={
+              scrambleFit?.spaceBetweenLettersEm ??
+              gp?.typography.scrambleSpaceBetweenLetters ??
+              0.12
+            }
+            keepRowsOnOneLine={scrambleFit?.keepRowsOnOneLine ?? false}
+          />
+        );
+      case 'trivia': {
+        const triviaGames =
+          showSolution && solutionPuzzles.length > 0
+            ? (solutionPuzzles as import('@/lib/puzzles/types').TriviaPuzzle[])
+            : [p as import('@/lib/puzzles/types').TriviaPuzzle];
+        const startNum = gp?.core.puzzlesStartingNumber ?? 1;
+        const solutionSections = showSolution
+          ? triviaGames.map((game, gi) => ({
+              label: formatTriviaSolutionHeading(game, gi, startNum),
+              answers: (game.questions ?? []).map((q) => resolveTriviaAnswerLabel(q)),
+            }))
+          : undefined;
+        return (
+          <TriviaDisplay
+            puzzle={p}
+            showSolution={showSolution}
+            layoutFormat={gp?.core.triviaLayoutFormat ?? 'single-column'}
+            checkboxStyle={gp?.core.triviaCheckboxStyle ?? 'circle'}
+            suggestionsColumns={gp?.core.triviaSuggestionsColumns ?? 'single'}
+            fontSize={
+              Math.max(
+                10,
+                ptToPx(
+                  (showSolution
+                    ? gp?.typography.answerFontSize
+                    : gp?.typography.puzzleFontSize) ?? 14
+                ) *
+                  (scaleFactor || 1)
+              )
+            }
+            fontFamily={
+              showSolution
+                ? (gp?.typography.answerFontFamily ??
+                    gp?.typography.puzzleFontFamily ??
+                    'Arial')
+                : (gp?.typography.puzzleFontFamily ?? 'Arial')
+            }
+            textColor={gp?.colors.gridColor ?? '#1f2937'}
+            maxWidthPx={contentWidthPx}
+            questionGapPx={ptToPx(
+              showSolution
+                ? (gp?.typography.triviaSolutionSpaceBetween ?? 12)
+                : (gp?.typography.triviaSpaceBetweenQuestions ?? 18)
+            )}
+            suggestionGapPx={ptToPx(gp?.typography.triviaSpaceBetweenSuggestions ?? 6)}
+            afterQuestionGapPx={ptToPx(gp?.typography.triviaSpaceAfterQuestion ?? 8)}
+            solutionColumns={gp?.core.triviaSolutionColumns ?? 3}
+            answersPerColumn={gp?.core.solutionsPerPage ?? 20}
+            solutionSections={solutionSections}
+            puzzlesStartingNumber={startNum}
+          />
+        );
+      }
       case 'word-match':
-        return <WordMatchDisplay puzzle={puzzle} showSolution={showSolution} />;
+        return <WordMatchDisplay puzzle={p} showSolution={showSolution} />;
       case 'dot-to-dot':
-        return <DotToDotDisplay puzzle={puzzle} showSolution={showSolution} />;
+        return <DotToDotDisplay puzzle={p} showSolution={showSolution} />;
       default:
         return <div className="text-gray-400">Preview not supported for {puzzleType}</div>;
     }
   };
 
-  const titleText = cw
-    ? cw.typography.selectTitleOption === 'different-titles'
-      ? (cw.typography.differentTitles.split('\n').map((t) => t.trim()).filter(Boolean)[0] ||
-          cw.typography.titleText ||
+  const resolveTitleForIndex = (idx: number, forSolution: boolean) => {
+    if (gp) {
+      const puzzleForTitle =
+        puzzleType === 'sudoku'
+          ? solutionPuzzles.find((p) => (p?.puzzleIndexInDocument ?? -1) === idx) ??
+            (Array.isArray(puzzles)
+              ? puzzles.find((p) => (p?.puzzleIndexInDocument ?? -1) === idx)
+              : null) ??
+            (puzzle?.puzzleIndexInDocument === idx || puzzleIndex === idx ? puzzle : null) ??
+            puzzle
+          : null;
+      const gpTitle = resolveGenericPuzzleTitle({
+        typography: gp.typography,
+        puzzleIndex: idx,
+        puzzlesStartingNumber: gp.core.puzzlesStartingNumber,
+        fallback:
           titleWords.title ||
-          'Crossword')
-      : cw.typography.titleText || titleWords.title || 'Crossword'
+          getGenericModuleDefaultTitle(puzzleType as GenericPuzzleModuleType),
+        difficulty:
+          puzzleType === 'sudoku'
+            ? (puzzleForTitle as { difficulty?: string } | null)?.difficulty
+            : undefined,
+        difficultyPlacement:
+          puzzleType === 'sudoku' ? gp.core.sudokuDifficultyPlacement : undefined,
+      });
+      if (forSolution) {
+        return resolveGenericSolutionTitle({
+          typography: gp.typography,
+          puzzleTitle: gpTitle,
+          puzzleIndex: idx,
+          puzzlesStartingNumber: gp.core.puzzlesStartingNumber,
+        });
+      }
+      return gpTitle;
+    }
+    if (!cw) return titleWords.title || puzzleType.toUpperCase();
+    const puzzleTitle = resolveCrosswordPuzzleTitle({
+      typography: cw.typography,
+      puzzleIndex: idx,
+      puzzlesStartingNumber: cw.core.puzzlesStartingNumber,
+      fallback: titleWords.title || 'Crossword',
+    });
+    if (forSolution) {
+      return resolveCrosswordSolutionTitle({
+        typography: cw.typography,
+        puzzleTitle,
+        puzzleIndex: idx,
+        puzzlesStartingNumber: cw.core.puzzlesStartingNumber,
+        fallbackTitle: titleWords.title || 'Crossword',
+      });
+    }
+    return puzzleTitle;
+  };
+
+  const puzzleTitle = cw || gp
+    ? resolveTitleForIndex(puzzleIndex, false)
     : titleWords.title || puzzleType.toUpperCase();
 
-  const titleColor = cw?.colors.titleColor ?? colors.puzzlePage.titleColor ?? '#333333';
-  const titleFont = cw?.typography.puzzleTitleFontFamily ?? typography.puzzleTitleFontFamily ?? 'Roboto';
-  const titleSize = cw?.typography.puzzleTitleFontSize ?? typography.puzzleTitleFontSize ?? 24;
-  const bgColor = cw?.colors.backgroundColor ?? colors.puzzlePage.backgroundColor ?? '#ffffff';
-  const titleStartAtPx = cw ? ptToPx(cw.typography.titleStartAt * 72) : marginPx;
-  const titleGapPx = cw ? ptToPx(cw.typography.spaceBetweenTitleAndPuzzle * 72) : undefined;
+  const titleText = cw || gp
+    ? multiSolution || isTriviaSolution
+      ? null
+      : showSolution
+        ? resolveTitleForIndex(puzzleIndex, true)
+        : puzzleTitle
+    : puzzleTitle;
+
+  const subtitleText = cw && !showSolution ? resolveCrosswordSubtitle(cw.typography, puzzleIndex, settings.typography) : null;
+
+  // Crossword / generic solutions use Layout → Answer Page title styling (same as
+  // Word Search solution titles) — never Header Assembly colors (often white).
+  const isCwSolution = !!cw && showSolution;
+  const isGpSolution = !!gp && showSolution;
+  const isSolutionPage = isCwSolution || isGpSolution;
+  const rawSolutionTitleColor =
+    colors.answerPage.titleColor ||
+    gp?.colors.titleColor ||
+    cw?.colors.titleColor ||
+    colors.puzzlePage.titleColor ||
+    '#1f2937';
+  // Header Assembly often uses light text on dark shapes — that color must not
+  // carry onto white solution pages or titles vanish (esp. word scramble).
+  const solutionTitleLooksLight = /^#(?:fff(?:fff)?|f5f5f5|fafafa|ffffff)$/i.test(
+    rawSolutionTitleColor.trim()
+  );
+  const titleColor = isSolutionPage
+    ? solutionTitleLooksLight
+      ? '#1f2937'
+      : rawSolutionTitleColor
+    : cw?.colors.titleColor ?? gp?.colors.titleColor ?? colors.puzzlePage.titleColor ?? '#333333';
+  const subtitleColor =
+    colors.puzzlePage.subtitleColor ||
+    cw?.colors.subtitleColor ||
+    '#6b7280';
+  const subtitleFontSizePt =
+    settings.typography.subtitleFontSize ||
+    cw?.typography.subtitleFontSize ||
+    14;
+  const subtitleFontFamily =
+    settings.typography.subtitleFontFamily ||
+    cw?.typography.subtitleFontFamily ||
+    settings.typography.puzzleTitleFontFamily ||
+    cw?.typography.puzzleTitleFontFamily ||
+    'Arial';
+  const subtitleToTitleGapPt =
+    settings.typography.subtitleToTitleGap != null
+      ? settings.typography.subtitleToTitleGap
+      : cw?.typography.subtitleToTitleGap != null
+        ? (cw.typography.subtitleToTitleGap <= 2 ? cw.typography.subtitleToTitleGap * 72 : cw.typography.subtitleToTitleGap)
+        : 10;
+  const subtitleToPuzzleGapPt =
+    settings.typography.subtitleToPuzzleGap != null
+      ? settings.typography.subtitleToPuzzleGap
+      : cw?.typography.subtitleToPuzzleGap != null
+        ? (cw.typography.subtitleToPuzzleGap <= 2 ? cw.typography.subtitleToPuzzleGap * 72 : cw.typography.subtitleToPuzzleGap)
+        : 10.8;
+  const subtitleBoxMarginPt =
+    settings.typography.subtitleBoxMargin != null
+      ? settings.typography.subtitleBoxMargin
+      : cw?.typography.subtitleBoxMargin != null
+        ? (cw.typography.subtitleBoxMargin <= 2 ? cw.typography.subtitleBoxMargin * 72 : cw.typography.subtitleBoxMargin)
+        : 0;
+  const subtitleMaxWidthPercent =
+    settings.typography.subtitleMaxWidthPercent ??
+    cw?.typography.subtitleMaxWidthPercent ??
+    100;
+  const titleFont = isSolutionPage
+    ? colors.answerPage.answerTitleFontFamily ||
+      gp?.typography.puzzleTitleFontFamily ||
+      cw?.typography.puzzleTitleFontFamily ||
+      typography.puzzleTitleFontFamily ||
+      'Arial'
+    : cw?.typography.puzzleTitleFontFamily ??
+      gp?.typography.puzzleTitleFontFamily ??
+      typography.puzzleTitleFontFamily ??
+      'Roboto';
+  const titleSize = isCwSolution
+    ? Math.max(
+        10,
+        colors.answerPage.answerTitleFontSize ||
+          cw?.typography.answerTitleFontSize ||
+          20
+      )
+    : isGpSolution
+      ? Math.max(10, gp!.typography.answerTitleFontSize || 18)
+      : (cw?.typography.puzzleTitleFontSize ??
+          gp?.typography.puzzleTitleFontSize ??
+          typography.puzzleTitleFontSize ??
+          24);
+  const pageBg = resolveGenericPageSurfaceColors(
+    settings,
+    showSolution,
+    cw?.colors.backgroundColor ?? gp?.colors.backgroundColor
+  );
+  const bgColor = omitBackground ? 'transparent' : pageBg.backgroundColor;
+  const showPageBackgroundImage = !omitBackground && !!pageBg.backgroundImage;
+  const titleStartAtPx = cw
+    ? ptToPx(cw.typography.titleStartAt * 72)
+    : gp
+      ? ptToPx(gp.typography.titleStartAt * 72)
+      : marginPx;
+  const titleGapPx = cw
+    ? showSolution
+      ? cw.typography.titleToAnswerGapPx ??
+        ptToPx((cw.typography.spaceBetweenTitleAndAnswer ?? 0.3) * 72)
+      : ptToPx(
+          cw.typography.includeFunFacts && subtitleText
+            ? (settings.typography.subtitleToPuzzleGap ?? (cw.typography.subtitleToPuzzleGap <= 2 ? cw.typography.subtitleToPuzzleGap * 72 : cw.typography.subtitleToPuzzleGap))
+            : (cw.typography.spaceBetweenTitleAndPuzzle ?? 0.3) * 72
+        )
+    : gp
+      ? ptToPx((gp.typography.spaceBetweenTitleAndPuzzle ?? 0) * 72)
+      : undefined;
+  const subtitleToPuzzleGapPx =
+    subtitleText && !showSolution
+      ? ptToPx(subtitleToPuzzleGapPt)
+      : undefined;
+
+  // Match Word Search: no persistent blue “active” overlay — hover outline only.
+  const showCrosswordHits =
+    puzzleType === 'crossword' &&
+    canvasEditEnabled &&
+    !!onCrosswordEditTargetChange;
+  const showGenericHits =
+    puzzleType !== 'crossword' &&
+    canvasEditEnabled &&
+    !!onGenericPuzzleEditTargetChange;
+
+  const titleAlign: 'left' | 'center' | 'right' = isSolutionPage
+    ? colors.answerPage.answerTitleAlignment || 'center'
+    : gp?.typography.puzzleTitleAlign === 'left'
+      ? 'left'
+      : 'center';
+
+  // Full-page header only for single-puzzle pages; multi-per-page uses
+  // Header Assembly on each puzzle title block instead.
+  // Trivia solutions use in-content "Trivia #N" headings instead.
+  // Crossword / generic solutions never use Header Assembly (Word Search style).
+  const usePageHeaderAssembly =
+    headerAssemblyEnabled && !multiSolution && !isTriviaSolution && !showSolution;
+
+  const headerTitleParts =
+    usePageHeaderAssembly && gp
+      ? resolveGenericPuzzleTitleParts({
+          typography: gp.typography,
+          puzzleIndex,
+          puzzlesStartingNumber: gp.core.puzzlesStartingNumber,
+          fallback:
+            titleWords.title ||
+            getGenericModuleDefaultTitle(puzzleType as GenericPuzzleModuleType),
+        })
+      : usePageHeaderAssembly && cw
+        ? (() => {
+            const number = cw.core.puzzlesStartingNumber + puzzleIndex;
+            const style = cw.typography.puzzleNumberingStyle;
+            const combined = resolveCrosswordPuzzleTitle({
+              typography: cw.typography,
+              puzzleIndex,
+              puzzlesStartingNumber: cw.core.puzzlesStartingNumber,
+              fallback: titleWords.title || 'Crossword',
+            });
+            const numberText =
+              style === 'prefix' ? String(number) : style === 'suffix' ? `#${number}` : '';
+            // Only strip auto-added numbering — keep digits typed into custom titles
+            // (e.g. "1. title" with Puzzle Numbering Style = None).
+            const titleOnly =
+              style === 'prefix'
+                ? combined.replace(new RegExp(`^${number}\\.\\s*`), '')
+                : style === 'suffix'
+                  ? combined.replace(new RegExp(`\\s*#${number}$`), '')
+                  : combined;
+            return {
+              titleText: titleOnly || combined,
+              numberText,
+              showNumber: numberText.length > 0,
+              combined,
+            };
+          })()
+        : null;
+
+  const headerAssembly = usePageHeaderAssembly
+    ? buildGenericHeaderAssembly({
+        settings,
+        pageWidthPt,
+        titleText: headerTitleParts
+          ? headerTitleParts.titleText
+          : titleText || puzzleTitle || '',
+        numberText: headerTitleParts?.numberText || '',
+        titleFontSizePt: titleSize,
+        titleColor,
+        subtitleText: subtitleText || '',
+        subtitleFontSizePt,
+        subtitleColor,
+        subtitleFontFamily,
+        subtitleToTitleGapPt,
+        subtitleBoxMarginPt,
+        subtitleMaxWidthPercent,
+      })
+    : null;
+
+  const multiHeaderSettings =
+    headerAssemblyEnabled && multiSolution && !showSolution
+      ? getHeaderAssemblySettings(settings)
+      : null;
+  const multiHeaderTitleSizePt = Math.max(
+    9,
+    scrambleFit?.titleFontSizePt ?? titleSize * (answersPerPage >= 4 ? 0.55 : 0.7)
+  );
+  const multiHeaderWidthPt = Math.max(
+    48,
+    ((contentWidthPx - solutionGapPx * (Math.max(1, solutionLayout.columns) - 1)) /
+      Math.max(1, solutionLayout.columns)) *
+      (72 / 96)
+  );
+
+  const rawContentTopPx = headerAssembly
+    ? ptToPx(headerAssembly.topPt + headerAssembly.heightPt) + (subtitleText ? ptToPx(subtitleToPuzzleGapPt) : (titleGapPx ?? ptToPx(12)))
+    : isSolutionPage
+      ? marginPx + ptToPx(6)
+      : multiSolution && isTextPuzzleType
+        ? marginPx + ptToPx(6)
+        : Number.isFinite(titleStartAtPx)
+          ? titleStartAtPx
+          : marginPx;
+  // If Header Assembly geometry lands off-page (bad units / huge offset), fall back
+  // so text puzzles stay under the title instead of docking at the bottom.
+  const midPagePx = heightPx * 0.5;
+  const contentTopPx = Math.max(
+    marginPx,
+    Number.isFinite(rawContentTopPx) && rawContentTopPx < midPagePx
+      ? rawContentTopPx
+      : Number.isFinite(titleStartAtPx)
+        ? titleStartAtPx
+        : marginPx
+  );
+
+  const isTextPuzzle =
+    puzzleType === 'word-scramble' ||
+    puzzleType === 'cryptogram' ||
+    puzzleType === 'trivia';
+
+  // Maze / sudoku: always centre grids horizontally (1-up and multi-up).
+  const isSudokuOrMaze = puzzleType === 'sudoku' || puzzleType === 'maze';
+  // Maze / sudoku 1-up: title→grid gap packs under the title (0 = flush).
+  const centerSingleGrid = !multiSolution && isSudokuOrMaze;
+  const contentAreaHeightPx = Math.max(0, heightPx - contentTopPx - marginPx);
+  const titleBlockBudgetPx =
+    centerSingleGrid && !headerAssembly && titleText
+      ? ptToPx(titleSize) * 1.25 + (titleGapPx ?? 0)
+      : 0;
+  const singleGridBudgetPx = centerSingleGrid
+    ? Math.max(64, contentAreaHeightPx - titleBlockBudgetPx)
+    : 0;
+
+  const crosswordPuzzlePage = puzzleType === 'crossword' && !showSolution && !multiSolution;
+  const crosswordPageNumberZoneTopPx = crosswordPuzzlePage
+    ? ptToPx(resolveCrosswordPageNumberZoneTopPt(pageWidthPt, pageHeightPt, settings))
+    : null;
+  const crosswordGridCols = Math.max(1, puzzle?.grid?.[0]?.length ?? 0);
+  const crosswordGridRows = Math.max(0, puzzle?.grid?.length ?? 0);
+  const crosswordTitleBlockPx = crosswordPuzzlePage
+    ? (!headerAssembly && titleText ? ptToPx(titleSize) * 1.2 + (titleGapPx ?? 0) : 0) +
+      (!headerAssembly && subtitleText
+        ? ptToPx(cw?.typography.subtitleFontSize ?? 12) * 1.3 + (subtitleToPuzzleGapPx ?? 0)
+        : 0) +
+      4
+    : 0;
+  const crosswordCellPx =
+    crosswordPuzzlePage && crosswordGridRows > 0 && crosswordPageNumberZoneTopPx != null
+      ? Math.min(
+          cellSize,
+          contentWidthPx / Math.max(1, crosswordGridCols),
+          Math.max(8, crosswordPageNumberZoneTopPx - contentTopPx - crosswordTitleBlockPx) /
+            crosswordGridRows
+        )
+      : cellSize;
+  const crosswordGridHeightPx = crosswordPuzzlePage ? crosswordGridRows * crosswordCellPx : 0;
 
   return (
     <div
@@ -2312,34 +3627,20 @@ function GenericPuzzlePageCanvas({
         overflow: 'hidden',
       }}
     >
-      {/* Background Image Layer */}
-      {!cw && colors.puzzlePage.backgroundImage && (
-        <div
-          className="absolute inset-0 pointer-events-none z-0"
-          style={{
-            backgroundImage: `url(${colors.puzzlePage.backgroundImage})`,
-            backgroundSize: colors.puzzlePage.backgroundImageFit || 'cover',
-            backgroundRepeat: 'no-repeat',
-            backgroundPosition: 'center',
-            opacity: (colors.puzzlePage.backgroundImageOpacity ?? 100) / 100,
-          }}
+      {showPageBackgroundImage && pageBg.backgroundImage ? (
+        <PageBackgroundImage
+          src={pageBg.backgroundImage}
+          opacity={pageBg.backgroundImageOpacity}
+          fit={pageBg.backgroundImageFit}
         />
-      )}
-      {/* Page container frame */}
-      {cw?.pageFrameSettings ? (
+      ) : null}
+      {!omitBackground ? (
         <PageFrameOverlay
-          frame={cw.pageFrameSettings}
-          pageBackgroundColor={bgColor}
-          hasBackgroundImage={false}
+          frame={pageFrame}
+          pageBackgroundColor={bgColor === 'transparent' ? '#ffffff' : bgColor}
+          hasBackgroundImage={showPageBackgroundImage}
         />
-      ) : (
-        <PageFrameOverlay
-          frame={resolvePageFrameSettings(settings)}
-          pageBackgroundColor={colors.puzzlePage.backgroundColor || '#ffffff'}
-          hasBackgroundImage={!!colors.puzzlePage.backgroundImage}
-        />
-      )}
-      {/* Margins */}
+      ) : null}
       {showMargins && (
         <div
           className="absolute border border-dashed border-blue-400 pointer-events-none z-50 opacity-40"
@@ -2351,8 +3652,6 @@ function GenericPuzzlePageCanvas({
           }}
         />
       )}
-
-      {/* KDP Safe Zone */}
       {showSafetyZone && (
         <div
           className="absolute border border-dashed border-black pointer-events-none z-50 opacity-40"
@@ -2365,38 +3664,500 @@ function GenericPuzzlePageCanvas({
         />
       )}
 
-      {/* Content */}
+      {headerAssembly ? (
+        <div
+          style={{
+            position: 'absolute',
+            top: ptToPx(headerAssembly.topPt),
+            left: ptToPx(headerAssembly.leftPt),
+            width: ptToPx(headerAssembly.widthPt),
+            maxWidth: ptToPx(headerAssembly.widthPt),
+            overflow: 'hidden',
+            zIndex: 2,
+          }}
+        >
+          <HeaderAssemblyBar
+            parts={headerAssembly.parts}
+            settings={headerAssembly.settings}
+            headerWidthPt={headerAssembly.widthPt}
+            titleFontSizePt={headerAssembly.titleFontSizePt}
+            subtitleFontSizePt={headerAssembly.subtitleFontSizePt}
+            subtitleLines={headerAssembly.subtitleLines}
+            titleColor={headerAssembly.titleColor}
+            subtitleColor={headerAssembly.subtitleColor}
+            fontFamily={headerAssembly.fontFamily}
+            subtitleFontFamily={headerAssembly.subtitleFontFamily}
+            subtitleTextWidthPt={headerAssembly.subtitleTextWidthPt}
+            ptToPx={ptToPx}
+          />
+        </div>
+      ) : null}
+
       <div
         className="absolute flex flex-col items-center"
         style={{
           left: marginPx,
-          top: titleStartAtPx,
+          top: contentTopPx,
           right: marginPx,
-          bottom: marginPx,
-          zIndex: 2,
-          justifyContent: cw ? 'flex-start' : 'center',
+          bottom:
+            crosswordPageNumberZoneTopPx != null
+              ? Math.max(0, heightPx - crosswordPageNumberZoneTopPx)
+              : marginPx,
+          zIndex: 20,
+          // Maze/sudoku 1-up: centre the title+grid block on the page while
+          // keeping title→grid gap (including 0 = flush).
+          justifyContent: centerSingleGrid
+            ? 'center'
+            : cw || gp
+              ? 'flex-start'
+              : 'center',
+          minHeight: 0,
+          overflow: 'hidden',
         }}
       >
+        {centerSingleGrid ? (
+          <div
+            className="flex flex-col items-center w-full min-h-0"
+            style={{ maxHeight: '100%' }}
+          >
+            {!headerAssembly && titleText ? (
+              <h2
+                className="font-bold relative w-full shrink-0"
+                style={{
+                  fontSize: ptToPx(titleSize),
+                  color: titleColor,
+                  fontFamily: titleFont,
+                  marginBottom: titleGapPx ?? 0,
+                  textAlign: titleAlign,
+                  lineHeight: 1.2,
+                }}
+              >
+                {titleText}
+              </h2>
+            ) : null}
+            {!headerAssembly && subtitleText ? (
+              <p
+                className="text-center shrink-0"
+                style={{
+                  fontSize: ptToPx(subtitleFontSizePt),
+                  fontFamily: subtitleFontFamily,
+                  color: subtitleColor,
+                  marginTop: ptToPx(subtitleToTitleGapPt),
+                  marginBottom: ptToPx(subtitleToPuzzleGapPt),
+                  paddingLeft: ptToPx(subtitleBoxMarginPt),
+                  paddingRight: ptToPx(subtitleBoxMarginPt),
+                  maxWidth: `${subtitleMaxWidthPercent}%`,
+                  lineHeight: 1.25,
+                  whiteSpace: 'pre-wrap',
+                }}
+              >
+                {subtitleText}
+              </p>
+            ) : null}
+            <div
+              className="w-full min-w-0 overflow-hidden"
+              style={{
+                height: singleGridBudgetPx,
+                maxHeight: singleGridBudgetPx,
+              }}
+            >
+              {puzzle ? (
+                <FitToSafeArea originX="center" originY="top">
+                  {renderSingleGrid(puzzle, { hideClues: showSolution })}
+                </FitToSafeArea>
+              ) : (
+                <div className="text-slate-500 text-sm">Generate puzzles to preview.</div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
+        {!headerAssembly && titleText ? (
         <h2
-          className="font-bold text-center"
+            className="font-bold relative w-full"
           style={{
-            fontSize: ptToPx(titleSize),
-            color: titleColor,
-            fontFamily: titleFont,
-            marginBottom: titleGapPx ?? undefined,
+              flexShrink: 0,
+              minHeight: ptToPx(titleSize) * 1.2,
+              fontSize: ptToPx(titleSize),
+              color: titleColor,
+              fontFamily: titleFont,
+              marginBottom: titleGapPx ?? undefined,
+              textAlign: titleAlign,
+              fontWeight: 700,
+              zIndex: 2,
           }}
         >
           {titleText}
         </h2>
-        <div className="flex-1 flex items-center justify-center overflow-auto max-w-full max-h-full">
-          {renderGrid()}
-        </div>
+        ) : null}
+        {!headerAssembly && subtitleText ? (
+          <p
+            className="text-center shrink-0"
+            style={{
+              fontSize: ptToPx(subtitleFontSizePt),
+              fontFamily: subtitleFontFamily,
+              color: subtitleColor,
+              marginTop: ptToPx(subtitleToTitleGapPt),
+              marginBottom: ptToPx(subtitleToPuzzleGapPt),
+              paddingLeft: ptToPx(subtitleBoxMarginPt),
+              paddingRight: ptToPx(subtitleBoxMarginPt),
+              maxWidth: `${subtitleMaxWidthPercent}%`,
+              lineHeight: 1.25,
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            {subtitleText}
+          </p>
+        ) : null}
+
+        {multiSolution ? (
+          <div
+            className="flex-1 w-full max-h-full overflow-hidden"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: `repeat(${solutionLayout.columns}, minmax(0, 1fr))`,
+              gridTemplateRows: `repeat(${solutionLayout.rows}, minmax(0, 1fr))`,
+              gap: solutionGapPx,
+              padding: Math.max(
+                0,
+                (cw?.typography.solutionPageMarginPx ?? 40) - 40
+              ),
+              alignItems: isTextPuzzle ? 'stretch' : 'center',
+              justifyItems: isTextPuzzle ? 'stretch' : 'center',
+              boxSizing: 'border-box',
+            }}
+          >
+            {solutionPuzzles.map((sp, i) => {
+              const idx = sp.puzzleIndexInDocument ?? puzzleIndex + i;
+              const blockTitle = resolveTitleForIndex(idx, showSolution);
+              const blockTitleSizePt = isSolutionPage
+                ? Math.max(11, isCwSolution ? titleSize : scrambleFit?.titleFontSizePt ?? titleSize)
+                : scrambleFit?.titleFontSizePt ?? Math.max(10, titleSize * 0.75);
+              const blockHeaderParts = multiHeaderSettings
+                ? gp
+                  ? resolveGenericPuzzleTitleParts({
+                      typography: gp.typography,
+                      puzzleIndex: idx,
+                      puzzlesStartingNumber: gp.core.puzzlesStartingNumber,
+                      fallback:
+                        titleWords.title ||
+                        getGenericModuleDefaultTitle(
+                          puzzleType as GenericPuzzleModuleType
+                        ),
+                      difficulty:
+                        puzzleType === 'sudoku'
+                          ? (sp as { difficulty?: string })?.difficulty
+                          : undefined,
+                      difficultyPlacement:
+                        puzzleType === 'sudoku'
+                          ? gp.core.sudokuDifficultyPlacement
+                          : undefined,
+                    })
+                  : cw
+                    ? (() => {
+                        const number = cw.core.puzzlesStartingNumber + idx;
+                        const style = cw.typography.puzzleNumberingStyle;
+                        const combined = resolveCrosswordPuzzleTitle({
+                          typography: cw.typography,
+                          puzzleIndex: idx,
+                          puzzlesStartingNumber: cw.core.puzzlesStartingNumber,
+                          fallback: titleWords.title || 'Crossword',
+                        });
+                        const numberText =
+                          style === 'prefix'
+                            ? String(number)
+                            : style === 'suffix'
+                              ? `#${number}`
+                              : '';
+                        // Keep custom title numbers when numbering style is None.
+                        const titleOnly =
+                          style === 'prefix'
+                            ? combined.replace(new RegExp(`^${number}\\.\\s*`), '')
+                            : style === 'suffix'
+                              ? combined.replace(new RegExp(`\\s*#${number}$`), '')
+                              : combined;
+                        return {
+                          titleText: titleOnly || combined,
+                          numberText,
+                          showNumber: numberText.length > 0,
+                          combined,
+                        };
+                      })()
+                    : null
+                : null;
+
+              return (
+                <div
+                  key={`cw-sol-${idx}-${i}`}
+                  className={
+                    isTextPuzzle
+                      ? 'flex flex-col items-center justify-start w-full h-full min-w-0 min-h-0 overflow-hidden px-1'
+                      : 'flex flex-col items-center justify-start w-full h-full min-w-0 min-h-0 overflow-hidden'
+                  }
+                >
+                  {multiHeaderSettings && blockHeaderParts ? (
+                    <div
+                      className="shrink-0 mb-1 w-full"
+                      style={{
+                        maxWidth: '100%',
+                        alignSelf: titleAlign === 'left' ? 'stretch' : 'center',
+                      }}
+                    >
+                      <HeaderAssemblyBar
+                        parts={{
+                          numberText: blockHeaderParts.numberText,
+                          titleText: blockHeaderParts.titleText,
+                          subtitleText: '',
+                          showNumber: blockHeaderParts.showNumber,
+                        }}
+                        settings={multiHeaderSettings}
+                        headerWidthPt={multiHeaderWidthPt}
+                        titleFontSizePt={multiHeaderTitleSizePt}
+                        subtitleFontSizePt={Math.max(8, multiHeaderTitleSizePt * 0.65)}
+                        subtitleLines={[]}
+                        titleColor={titleColor}
+                        subtitleColor={subtitleColor}
+                        fontFamily={titleFont}
+                        subtitleFontFamily={titleFont}
+                        subtitleTextWidthPt={multiHeaderWidthPt}
+                        ptToPx={ptToPx}
+                      />
+                    </div>
+                  ) : blockTitle ? (
+                    <h3
+                      className="font-bold mb-1 w-full"
+                      style={{
+                        flexShrink: 0,
+                        minHeight: ptToPx(blockTitleSizePt) * 1.25,
+                        fontSize: ptToPx(blockTitleSizePt),
+                        color: titleColor,
+                        fontFamily: titleFont,
+                        lineHeight: 1.2,
+                        textAlign: titleAlign,
+                        fontWeight: 700,
+                        position: 'relative',
+                        zIndex: 2,
+                      }}
+                    >
+                      {blockTitle}
+                    </h3>
+                  ) : null}
+                  <div
+                    className={
+                      isTextPuzzle
+                        ? 'flex-1 flex items-start justify-center w-full min-w-0 min-h-0 overflow-hidden'
+                        : 'flex-1 flex items-center justify-center min-w-0 min-h-0 overflow-hidden w-full'
+                    }
+                  >
+                    <FitToSafeArea
+                      originX="center"
+                      originY="top"
+                      fillWidth={isTextPuzzle}
+                    >
+                      {renderSingleGrid(sp, { hideClues: true, cellSizeOverride: cellSize })}
+                    </FitToSafeArea>
+                  </div>
+    </div>
+  );
+            })}
+          </div>
+        ) : puzzleType === 'crossword' && !showSolution && puzzle ? (
+          <div
+            className="flex flex-col w-full min-w-0 min-h-0 flex-1 overflow-hidden pt-1"
+            style={{ width: '100%', alignSelf: 'stretch' }}
+          >
+            <div
+              className="shrink-0 w-full flex justify-center overflow-hidden"
+              style={{ height: crosswordGridHeightPx }}
+            >
+              {renderSingleGrid(puzzle, { hideClues: true, cellSizeOverride: crosswordCellPx })}
+            </div>
+            <div
+              className="w-full min-w-0 min-h-0 flex-1 overflow-hidden"
+              style={{
+                marginTop: puzzleToCluesGapPx ?? 0,
+              }}
+            >
+              <CrosswordClueLists
+                puzzle={puzzle}
+                crosswordSettings={cw}
+                fillHeight
+              />
+            </div>
+          </div>
+        ) : (
+          <div
+            className="flex-1 flex items-start justify-center w-full min-w-0 min-h-0 overflow-hidden pt-1"
+            style={{
+              width: '100%',
+              alignSelf: 'stretch',
+            }}
+          >
+            {puzzle ? (
+              <FitToSafeArea
+                originX={
+                  puzzleType === 'trivia' && showSolution ? 'left' : 'center'
+                }
+                originY="top"
+                fillWidth={
+                  puzzleType === 'word-scramble' ||
+                  puzzleType === 'cryptogram' ||
+                  puzzleType === 'trivia'
+                }
+              >
+                {renderSingleGrid(puzzle, { hideClues: showSolution })}
+              </FitToSafeArea>
+            ) : (
+              <div className="text-slate-500 text-sm">Generate puzzles to preview.</div>
+            )}
+          </div>
+        )}
+          </>
+        )}
       </div>
+
+      {showCrosswordHits ? (
+        <>
+          <CanvasHitZone
+            active={false}
+            hideGuides={canvasEditHideGuides}
+            label="Background"
+            onSelect={() => onCrosswordEditTargetChange?.('page-frame')}
+            style={{ position: 'absolute', inset: 0, zIndex: 15 }}
+          />
+          <CanvasHitZone
+            active={false}
+            hideGuides={canvasEditHideGuides}
+            label={showSolution ? 'Solutions' : 'Title'}
+            onSelect={() =>
+              onCrosswordEditTargetChange?.(showSolution ? 'solutions' : 'title')
+            }
+            style={{
+              position: 'absolute',
+              top: titleStartAtPx,
+              left: marginPx,
+              right: marginPx,
+              height: ptToPx(titleSize) + 16,
+              zIndex: 25,
+            }}
+          />
+          <CanvasHitZone
+            active={false}
+            hideGuides={canvasEditHideGuides}
+            label={showSolution ? 'Solution Grid' : 'Grid'}
+            onSelect={() =>
+              onCrosswordEditTargetChange?.(showSolution ? 'solutions' : 'numbering')
+            }
+            style={{
+              position: 'absolute',
+              top: titleStartAtPx + ptToPx(titleSize) + (titleGapPx ?? 12) + 24,
+              left: marginPx,
+              right: marginPx,
+              height: crosswordPuzzlePage
+                ? crosswordGridHeightPx
+                : undefined,
+              bottom: crosswordPuzzlePage
+                ? undefined
+                : showSolution
+                  ? marginPx
+                  : heightPx * 0.42,
+              zIndex: 25,
+            }}
+          />
+          {!showSolution ? (
+            <CanvasHitZone
+              active={false}
+              hideGuides={canvasEditHideGuides}
+              label="Clues"
+              onSelect={() => onCrosswordEditTargetChange?.('clues')}
+              style={{
+                position: 'absolute',
+                left: marginPx,
+                right: marginPx,
+                top: crosswordPuzzlePage
+                  ? titleStartAtPx +
+                    ptToPx(titleSize) +
+                    (titleGapPx ?? 12) +
+                    24 +
+                    crosswordGridHeightPx +
+                    (puzzleToCluesGapPx ?? 0)
+                  : undefined,
+                bottom:
+                  crosswordPageNumberZoneTopPx != null
+                    ? Math.max(0, heightPx - crosswordPageNumberZoneTopPx)
+                    : marginPx,
+                height: crosswordPuzzlePage ? undefined : heightPx * 0.38,
+                zIndex: 25,
+              }}
+            />
+          ) : null}
+        </>
+      ) : null}
+
+      {showGenericHits ? (
+        <>
+          <CanvasHitZone
+            active={false}
+            hideGuides={canvasEditHideGuides}
+            label="Background"
+            onSelect={() => onGenericPuzzleEditTargetChange?.('page-frame')}
+            style={{ position: 'absolute', inset: 0, zIndex: 15 }}
+          />
+          <CanvasHitZone
+            active={false}
+            hideGuides={canvasEditHideGuides}
+            label="Title"
+            onSelect={() => onGenericPuzzleEditTargetChange?.('title')}
+            style={{
+              position: 'absolute',
+              top: headerAssembly ? ptToPx(headerAssembly.topPt) : titleStartAtPx,
+              left: marginPx,
+              right: marginPx,
+              height: headerAssembly
+                ? ptToPx(headerAssembly.heightPt)
+                : ptToPx(titleSize) + 16,
+              zIndex: 25,
+            }}
+          />
+        </>
+      ) : null}
+
+      {typeof bookPageIndex === 'number' && !hidePageNumber ? (
+        <PageNumberOverlay
+          settings={settings}
+          bookPageIndex={bookPageIndex}
+          pageWidthPt={pageWidthPt}
+          pageHeightPt={pageHeightPt}
+          ptToPx={ptToPx}
+        />
+      ) : null}
     </div>
   );
 }
 
+function compiledSolutionPuzzles(
+  page: CompiledPage
+): { puzzleIndexInDocument?: number; id?: string }[] {
+  if (!isCompiledSolutionKind(page.kind)) return [];
+  if ('puzzles' in page && Array.isArray(page.puzzles)) {
+    return page.puzzles as { puzzleIndexInDocument?: number; id?: string }[];
+  }
+  return [];
+}
+
 export function PreviewCanvas() {
+  const {
+    setPanelProps: setCanvasEditPanelProps,
+    setCrosswordPanelProps,
+    setGenericPuzzlePanelProps,
+    selectedTextBlockId,
+    textPageEditTarget,
+    textPageBlockChromeVisible,
+    selectTextBlock,
+    changeTextPageEditTarget,
+    hideTextBlockChrome,
+    setTocEntries,
+  } = useCanvasEditPanel();
   const {
     currentPuzzle,
     currentPuzzleType,
@@ -2405,7 +4166,13 @@ export function PreviewCanvas() {
     wordSearchSettings,
     crosswordSettings,
     updateCrosswordSettings,
+    genericPuzzleSettings,
+    updateGenericPuzzleSettings,
+    murdokuSettings,
     batchPuzzles,
+    crosswordBatchPuzzles,
+    genericBatchPuzzles,
+    murdokuBatchPuzzles,
     currentBatchIndex,
     setCurrentBatchIndex,
     previewZoom,
@@ -2419,6 +4186,10 @@ export function PreviewCanvas() {
     setPagePuzzleGridScale,
     clearPagePuzzleGridScale,
     clearAllPagePuzzleGridScales,
+    pageCrosswordOverrides,
+    setPageCrosswordOverrides,
+    pageGenericOverrides,
+    setPageGenericOverrides,
     titleToAnswerGap,
     solutionToSolutionGap,
     pageMargin,
@@ -2431,11 +4202,14 @@ export function PreviewCanvas() {
     documentPages,
     activeDocumentPageId,
     setActiveDocumentPageId,
+    bookSettings,
     insertDocumentPage,
     insertSeparatorTitlePageAfter,
     removeCompiledBookPage,
     removeDocumentPage,
+    duplicateDocumentPage,
     reorderDocumentPages,
+    updateDocumentPage,
     puzzleGenerationVersion,
     updateWordSearchSettings,
     setTitleWords,
@@ -2447,14 +4221,21 @@ export function PreviewCanvas() {
     regeneratePuzzleAtIndex,
     persistPagePuzzleSettings,
     updateActiveTextModuleSettings,
-    applyTextSettingsToDocumentPages,
     canUndo,
     canRedo,
     undo,
     redo,
+    projectName,
   } = useApp();
+  const { showBusy, updateBusy, hideBusy } = useOptionalAppBusy();
 
   const [showMargins, setShowMargins] = useState(true);
+  const [previewShowBothPages, setPreviewShowBothPages] = useState(false);
+  const [aiAppendOpen, setAiAppendOpen] = useState(false);
+  const [aiInsertPosition, setAiInsertPosition] = useState<{
+    side: 'before' | 'after';
+    referenceId: string;
+  }>({ side: 'after', referenceId: '' });
   const [showSafetyZone, setShowSafetyZone] = useState(true);
   const [canvasEditTabs, setCanvasEditTabs] = useState<CanvasEditTab[]>([]);
   const [activeCanvasEditTabId, setActiveCanvasEditTabId] = useState<string | null>(null);
@@ -2463,13 +4244,26 @@ export function PreviewCanvas() {
   const [canvasEditRangeError, setCanvasEditRangeError] = useState<string | null>(null);
   const [applyToAllConfirmOpen, setApplyToAllConfirmOpen] = useState(false);
   const [preserveEditedPagesOnApply, setPreserveEditedPagesOnApply] = useState(false);
-  const [textPageEditTarget, setTextPageEditTarget] = useState<TextPageEditTarget>('page-elements');
   const [textPageEditPanelOpen, setTextPageEditPanelOpen] = useState(true);
-  const [selectedTextBlockId, setSelectedTextBlockId] = useState<string | null>(null);
-  const [textPageBlockChromeVisible, setTextPageBlockChromeVisible] = useState(true);
-  const [crosswordEditTarget, setCrosswordEditTarget] = useState<CrosswordEditTarget>('title');
-  const [crosswordEditPanelOpen, setCrosswordEditPanelOpen] = useState(true);
+  const [crosswordEditTarget, setCrosswordEditTarget] = useState<CrosswordEditTarget | null>(null);
+  const [crosswordEditPanelOpen, setCrosswordEditPanelOpen] = useState(false);
+  const [crosswordDraft, setCrosswordDraft] = useState<CrosswordSettings | null>(null);
+  const [crosswordDraftBaseline, setCrosswordDraftBaseline] = useState<CrosswordSettings | null>(
+    null
+  );
+  const [crosswordRangeError, setCrosswordRangeError] = useState<string | null>(null);
+  /** Which unsaved dialog flow is active when leaving with edits. */
+  const [unsavedDialogKind, setUnsavedDialogKind] = useState<
+    'word-search' | 'crossword' | 'generic'
+  >('word-search');
   const pendingCanvasEditLeaveRef = useRef<(() => void) | null>(null);
+  const crosswordUnsavedRef = useRef(false);
+  const genericPuzzleUnsavedRef = useRef(false);
+  const handleCrosswordCommitPageRef = useRef<() => void>(() => {});
+  const handleCrosswordCommitAllRef = useRef<() => void>(() => {});
+  const handleCrosswordEditCloseRef = useRef<() => void>(() => {});
+  const handleGenericPuzzleCommitAllRef = useRef<() => void>(() => {});
+  const handleGenericPuzzleEditCloseRef = useRef<() => void>(() => {});
   const pendingCanvasEditTabCloseIdRef = useRef<string | null>(null);
   const initializedTitlePageDocIdRef = useRef<string | null>(null);
   const applyToAllPendingLeaveRef = useRef(false);
@@ -2484,6 +4278,11 @@ export function PreviewCanvas() {
   const puzzlePageRefs = useRef<(HTMLDivElement | null)[]>([]);
   const solutionPageRefs = useRef<(HTMLDivElement | null)[]>([]);
   const compiledPageRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const previewViewportRef = useRef<HTMLDivElement | null>(null);
+  const [spacePanActive, setSpacePanActive] = useState(false);
+  const [handDragActive, setHandDragActive] = useState(false);
+  const [handDragOrigin, setHandDragOrigin] = useState<{ x: number; y: number } | null>(null);
+  const [handScrollOrigin, setHandScrollOrigin] = useState<{ left: number; top: number } | null>(null);
 
   // Calculate total puzzle count from all word-search pages
   const totalPuzzleCountFromPages = useMemo(() => {
@@ -2505,7 +4304,11 @@ export function PreviewCanvas() {
   };
 
   const handleSolutionPageNavigation = (value: string) => {
-    const pageNum = Math.max(1, Math.min(solutionPages.length || 1, Number(value)));
+    const maxPages =
+      activeDocIsBatchModule
+        ? crosswordSolutionPageCount
+        : solutionPages.length || 1;
+    const pageNum = Math.max(1, Math.min(maxPages, Number(value)));
     setCurrentSolutionPageIndex(pageNum - 1);
     setSolutionPageInputValue(pageNum.toString());
   };
@@ -2523,10 +4326,58 @@ export function PreviewCanvas() {
   const { widthPx, heightPx, safetyMarginPx, includeBleed } = useCanvasDimensions(wordSearchSettings);
   const safetyMarginPt = includeBleed ? 27 : 18;
   const ptToPx = useMemo(() => (pt: number) => pt * (96 / 72), []);
+  const activeDocumentPage = useMemo(
+    () => documentPages.find((page) => page.id === activeDocumentPageId) ?? documentPages[0],
+    [documentPages, activeDocumentPageId]
+  );
 
   const documentPagesForBook = useMemo(() => {
+    const isSampleMode = previewRangeMode === 'sample' && !previewShowBothPages;
     const activeWordSearchSettings = canvasEditSession?.draft ?? wordSearchSettings;
-    return documentPages.map((page) => {
+
+    if (isSampleMode && activeDocumentPage) {
+      let activePageLive = activeDocumentPage;
+      if (activeDocumentPage.moduleType === 'word-search') {
+        activePageLive = {
+          ...activeDocumentPage,
+          settings: {
+            ...(activeDocumentPage.settings as PuzzleModuleSettings),
+            titleWords: canvasEditSession?.draftTitleWords ?? titleWords,
+            wordSearchSettings: activeWordSearchSettings,
+          },
+        };
+      } else if (activeDocumentPage.moduleType === 'crossword') {
+        activePageLive = {
+          ...activeDocumentPage,
+          settings: {
+            ...(activeDocumentPage.settings as PuzzleModuleSettings),
+            titleWords,
+            crosswordSettings,
+          },
+        };
+      } else if (isGenericPuzzleModuleType(activeDocumentPage.moduleType)) {
+        activePageLive = {
+          ...activeDocumentPage,
+          settings: {
+            ...(activeDocumentPage.settings as PuzzleModuleSettings),
+            titleWords,
+            genericPuzzleSettings,
+          },
+        };
+      } else if (activeDocumentPage.moduleType === 'murdoku') {
+        activePageLive = {
+          ...activeDocumentPage,
+          settings: {
+            ...(activeDocumentPage.settings as PuzzleModuleSettings),
+            titleWords,
+            murdokuSettings,
+          },
+        };
+      }
+      return [activePageLive];
+    }
+
+    const liveMerged = documentPages.map((page) => {
       if (page.id === activeDocumentPageId && page.moduleType === 'word-search') {
         const settings = page.settings as PuzzleModuleSettings;
         return {
@@ -2538,13 +4389,56 @@ export function PreviewCanvas() {
           },
         };
       }
+      if (page.id === activeDocumentPageId && page.moduleType === 'crossword') {
+        const settings = page.settings as PuzzleModuleSettings;
+        return {
+          ...page,
+          settings: {
+            ...settings,
+            titleWords,
+            crosswordSettings,
+          },
+        };
+      }
+      if (
+        page.id === activeDocumentPageId &&
+        isGenericPuzzleModuleType(page.moduleType)
+      ) {
+        const settings = page.settings as PuzzleModuleSettings;
+        return {
+          ...page,
+          settings: {
+            ...settings,
+            titleWords,
+            genericPuzzleSettings,
+          },
+        };
+      }
+      if (page.id === activeDocumentPageId && page.moduleType === 'murdoku') {
+        const settings = page.settings as PuzzleModuleSettings;
+        return {
+          ...page,
+          settings: {
+            ...settings,
+            titleWords,
+            murdokuSettings,
+          },
+        };
+      }
       return page;
     });
+    return overlayBookLayoutOnAllDocuments(liveMerged, wordSearchSettings);
   }, [
     documentPages,
     activeDocumentPageId,
+    activeDocumentPage,
+    previewRangeMode,
+    previewShowBothPages,
     titleWords,
     wordSearchSettings,
+    crosswordSettings,
+    genericPuzzleSettings,
+    murdokuSettings,
     canvasEditSession?.draft,
     canvasEditSession?.draftTitleWords,
   ]);
@@ -2556,20 +4450,59 @@ export function PreviewCanvas() {
 
   const compiledBook = useMemo(() => {
     if (documentPages.length === 0) return null;
-    const puzzleMap = groupPuzzlesByDocument(batchPuzzles, documentPagesForBook);
-    return compileBook(documentPagesForBook, puzzleMap, {
+    const isSampleMode = previewRangeMode === 'sample' && !previewShowBothPages;
+    const docsToCompile = isSampleMode && activeDocumentPage
+      ? [activeDocumentPage]
+      : documentPagesForBook;
+    const puzzleMap = groupPuzzlesByDocument(batchPuzzles, docsToCompile);
+    const crosswordMap = groupCrosswordPuzzlesByDocument(
+      crosswordBatchPuzzles,
+      docsToCompile
+    );
+    const genericMap = groupGenericPuzzlesByDocument(
+      genericBatchPuzzles,
+      docsToCompile
+    );
+    const murdokuMap = groupMurdokuPuzzlesByDocument(
+      murdokuBatchPuzzles,
+      docsToCompile
+    );
+    return compileBook(docsToCompile, puzzleMap, {
       includeSolutions: true,
       pageNumberSettings: pageNumberSettingsForBook,
+      crosswordPuzzlesByDocumentId: crosswordMap,
+      crosswordPageOverrides: pageCrosswordOverrides,
+      genericPuzzlesByDocumentId: genericMap,
+      genericPageOverrides: pageGenericOverrides,
+      murdokuPuzzlesByDocumentId: murdokuMap,
+      mixPuzzles: isSampleMode ? false : Boolean(bookSettings.mixPuzzles),
+      chapterTopics: bookSettings.chapterTopics,
     });
-  }, [documentPages.length, documentPagesForBook, batchPuzzles, pageNumberSettingsForBook]);
+  }, [
+    documentPages.length,
+    documentPagesForBook,
+    previewRangeMode,
+    previewShowBothPages,
+    activeDocumentPage,
+    batchPuzzles,
+    crosswordBatchPuzzles,
+    genericBatchPuzzles,
+    murdokuBatchPuzzles,
+    pageCrosswordOverrides,
+    pageGenericOverrides,
+    pageNumberSettingsForBook,
+    bookSettings.mixPuzzles,
+    bookSettings.chapterTopics,
+  ]);
 
   const compiledBookPagesForPreview = useMemo(() => {
     if (!compiledBook) return [];
+    if (previewShowBothPages) return compiledBook.pages;
     if (activePreviewTab === 'solutions') {
-      return compiledBook.pages.filter((page) => page.kind === 'solution');
+      return compiledBook.pages.filter((page) => isCompiledSolutionKind(page.kind));
     }
-    return compiledBook.pages.filter((page) => page.kind !== 'solution');
-  }, [compiledBook, activePreviewTab]);
+    return compiledBook.pages.filter((page) => !isCompiledSolutionKind(page.kind));
+  }, [compiledBook, activePreviewTab, previewShowBothPages]);
 
   const bookSolutionPreviewEntries = useMemo(() => {
     if (!compiledBook) return [];
@@ -2588,11 +4521,100 @@ export function PreviewCanvas() {
 
   const compiledSolutionPagesForActiveDoc = useMemo(
     () =>
+      compiledBook
+        ? (getCompiledSolutionPagesForDocument(
+            compiledBook,
+            activeDocumentPageId
+          ).filter((page): page is CompiledSolutionPage => page.kind === 'solution'))
+        : [],
+    [compiledBook, activeDocumentPageId]
+  );
+
+  const activeDocCompiledSolutionPages = useMemo(
+    () =>
       compiledBook?.pages.filter(
-        (page): page is CompiledSolutionPage =>
-          page.kind === 'solution' && page.sourceDocumentId === activeDocumentPageId
+        (page) =>
+          isCompiledSolutionKind(page.kind) && page.sourceDocumentId === activeDocumentPageId
       ) ?? [],
     [compiledBook, activeDocumentPageId]
+  );
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'Space') return;
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      const tag = target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) {
+        return;
+      }
+      // Always set active and prevent default on every keydown (including repeats)
+      setSpacePanActive(true);
+      // Add body class so cursor updates immediately (no render delay)
+      try {
+        document.body.classList.add('gp-space-pan-active');
+      } catch (e) {}
+      event.preventDefault();
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code !== 'Space') return;
+      setSpacePanActive(false);
+      // Remove body class added on keydown
+      try {
+        document.body.classList.remove('gp-space-pan-active');
+      } catch (e) {}
+      setHandDragActive(false);
+      setHandDragOrigin(null);
+      setHandScrollOrigin(null);
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, []);
+
+  const handleViewportPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!spacePanActive || event.button !== 0) return;
+      const viewport = previewViewportRef.current;
+      if (!viewport) return;
+      viewport.setPointerCapture(event.pointerId);
+      setHandDragActive(true);
+      setHandDragOrigin({ x: event.clientX, y: event.clientY });
+      setHandScrollOrigin({ left: viewport.scrollLeft, top: viewport.scrollTop });
+      event.preventDefault();
+    },
+    [spacePanActive]
+  );
+
+  const handleViewportPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!spacePanActive || !handDragActive || !handDragOrigin || !handScrollOrigin) return;
+      const viewport = previewViewportRef.current;
+      if (!viewport) return;
+      const dx = event.clientX - handDragOrigin.x;
+      const dy = event.clientY - handDragOrigin.y;
+      viewport.scrollLeft = handScrollOrigin.left - dx;
+      viewport.scrollTop = handScrollOrigin.top - dy;
+    },
+    [spacePanActive, handDragActive, handDragOrigin, handScrollOrigin]
+  );
+
+  const handleViewportPointerUp = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!spacePanActive) return;
+      const viewport = previewViewportRef.current;
+      if (!viewport) return;
+      viewport.releasePointerCapture(event.pointerId);
+      setHandDragActive(false);
+      setHandDragOrigin(null);
+      setHandScrollOrigin(null);
+    },
+    [spacePanActive]
   );
 
   // Group solution puzzles into pages based on answersPerPage (or compiled book order)
@@ -2637,9 +4659,15 @@ export function PreviewCanvas() {
   const includeBlankAfterEachPuzzle =
     !!wordSearchSettings.bookCanvas.includePageBetweenPuzzleAndSolutions;
 
-  const hasPuzzles = currentPuzzleType === 'word-search' ? batchPuzzles.length > 0 : !!currentPuzzle;
+  const hasPuzzles =
+    currentPuzzleType === 'word-search'
+      ? batchPuzzles.length > 0
+      : currentPuzzleType === 'crossword'
+        ? crosswordBatchPuzzles.length > 0 || currentPuzzle?.type === 'crossword'
+        : currentPuzzleType === 'murdoku'
+          ? murdokuBatchPuzzles.length > 0 || currentPuzzle?.type === 'murdoku'
+          : !!currentPuzzle;
   const hasPreviewPages = documentPages.length > 0;
-  const activeDocumentPage = documentPages.find((page) => page.id === activeDocumentPageId) ?? documentPages[0];
   const activeDocumentIndex = documentPages.findIndex((page) => page.id === activeDocumentPageId);
   const activeDocumentPuzzleStartIndex = batchPuzzles.findIndex(
     (puzzle) => puzzle.pageId === activeDocumentPageId
@@ -2647,32 +4675,349 @@ export function PreviewCanvas() {
   const activeDocumentPuzzleCount = batchPuzzles.filter(
     (puzzle) => puzzle.pageId === activeDocumentPageId
   ).length;
+  const activeCrosswordPuzzleCountRaw = crosswordBatchPuzzles.filter(
+    (puzzle) => puzzle.pageId === activeDocumentPageId
+  ).length;
+  const activeCrosswordPuzzleStartIndex = crosswordBatchPuzzles.findIndex(
+    (puzzle) => puzzle.pageId === activeDocumentPageId
+  );
+  const activeGenericPuzzleCount = genericBatchPuzzles.filter(
+    (puzzle) => puzzle.pageId === activeDocumentPageId
+  ).length;
+  const activeMurdokuPuzzleCount = murdokuBatchPuzzles.filter(
+    (puzzle) => puzzle.pageId === activeDocumentPageId
+  ).length;
+  const activeDocIsGenericModule =
+    !!activeDocumentPage && isGenericPuzzleModuleType(activeDocumentPage.moduleType);
+  const activeDocIsCrosswordModule = activeDocumentPage
+    ? activeDocumentPage.moduleType === 'crossword'
+    : false;
+  const activeDocIsMurdokuModule = activeDocumentPage
+    ? activeDocumentPage.moduleType === 'murdoku'
+    : false;
+  const activeDocIsBatchModule =
+    activeDocIsCrosswordModule || activeDocIsGenericModule || activeDocIsMurdokuModule;
+  // Unified per-document batch count: crossword and sudoku/maze docs paginate identically.
+  const murdokuTwoPage = !!murdokuSettings?.core?.twoPagePuzzles;
+  const activeCrosswordPuzzleCount = activeDocIsGenericModule
+    ? activeGenericPuzzleCount
+    : activeDocIsMurdokuModule
+      ? activeMurdokuPuzzleCount * (murdokuTwoPage ? 2 : 1)
+      : activeCrosswordPuzzleCountRaw;
+  const genericPuzzlesPerPage = Math.max(
+    1,
+    activeDocIsGenericModule ? genericPuzzleSettings?.core?.puzzlesPerPage || 1 : 1
+  );
+  /** Puzzle-tab page count for generic modules (multi puzzles per page). */
+  const genericPuzzlePageCount = Math.max(
+    1,
+    Math.ceil(Math.max(0, activeGenericPuzzleCount) / genericPuzzlesPerPage)
+  );
+  const batchPuzzlePageCount =
+    activeDocIsGenericModule && genericPuzzlesPerPage > 1
+      ? genericPuzzlePageCount
+      : activeCrosswordPuzzleCount;
+  const batchPuzzlePageNumber =
+    activeDocIsGenericModule && genericPuzzlesPerPage > 1
+      ? Math.floor(Math.max(0, currentBatchIndex) / genericPuzzlesPerPage) + 1
+      : currentBatchIndex + 1;
+
+  const crosswordSolutionPageCount = useMemo(() => {
+    if (activeDocIsGenericModule && activeDocumentPage?.moduleType === 'trivia') {
+      const answersPerPage = computeTriviaSolutionsPerPage({
+        answersPerColumn: genericPuzzleSettings?.core?.solutionsPerPage || 20,
+        solutionColumns: genericPuzzleSettings?.core?.triviaSolutionColumns || 3,
+      });
+      const pages = packTriviaGamesForSolutionPages(
+        (genericBatchPuzzles as import('@/lib/puzzles/types').TriviaPuzzle[]) || [],
+        answersPerPage
+      );
+      return Math.max(1, pages.length || 1);
+    }
+    const answersPerPage = activeDocIsGenericModule
+      ? genericPuzzleSettings?.core?.solutionsPerPage || 1
+      : activeDocIsMurdokuModule
+        ? murdokuSettings?.bookCanvas?.answersPerPage || 1
+        : crosswordSettings?.bookCanvas?.answersPerPage || 1;
+    const count = activeDocIsMurdokuModule
+      ? activeMurdokuPuzzleCount
+      : activeDocIsBatchModule
+        ? activeCrosswordPuzzleCount
+        : crosswordBatchPuzzles.length;
+    return Math.max(1, Math.ceil(Math.max(0, count) / Math.max(1, answersPerPage)));
+  }, [
+    crosswordSettings?.bookCanvas?.answersPerPage,
+    murdokuSettings?.bookCanvas?.answersPerPage,
+    genericPuzzleSettings?.core?.solutionsPerPage,
+    genericPuzzleSettings?.core?.triviaSolutionColumns,
+    genericPuzzleSettings?.core?.questionsPerPage,
+    genericPuzzleSettings?.typography?.answerFontSize,
+    genericPuzzleSettings?.typography?.puzzleFontSize,
+    genericPuzzleSettings?.typography?.triviaSolutionSpaceBetween,
+    activeDocIsGenericModule,
+    activeDocumentPage?.moduleType,
+    activeDocIsBatchModule,
+    activeDocIsMurdokuModule,
+    activeCrosswordPuzzleCount,
+    activeMurdokuPuzzleCount,
+    crosswordBatchPuzzles.length,
+    genericBatchPuzzles,
+    murdokuBatchPuzzles,
+  ]);
 
   // Current solution page index navigation state
   const [currentSolutionPageIndex, setCurrentSolutionPageIndex] = useState(0);
 
-  useEffect(() => {
-    if (!hasPreviewPages || activeDocumentPage?.moduleType !== 'word-search') return;
-    if (activeDocumentPuzzleCount <= 0 || activeDocumentPuzzleStartIndex < 0) return;
+  const activePuzzleLocalIndex = useMemo(() => {
+    if (
+      activeDocumentPage?.moduleType === 'word-search' &&
+      activeDocumentPuzzleStartIndex >= 0
+    ) {
+      return Math.max(0, currentBatchIndex - activeDocumentPuzzleStartIndex);
+    }
+    if (activeDocIsMurdokuModule && murdokuTwoPage) {
+      return Math.floor(Math.max(0, currentBatchIndex) / 2);
+    }
+    return Math.max(0, currentBatchIndex);
+  }, [
+    activeDocumentPage?.moduleType,
+    activeDocumentPuzzleStartIndex,
+    currentBatchIndex,
+    activeDocIsMurdokuModule,
+    murdokuTwoPage,
+  ]);
 
-    setCurrentBatchIndex((idx) => {
-      const first = activeDocumentPuzzleStartIndex;
-      const last = activeDocumentPuzzleStartIndex + activeDocumentPuzzleCount - 1;
-      if (idx < first || idx > last) return first;
-      return idx;
-    });
+  const solutionsPerPreviewPage = useMemo(() => {
+    if (activeDocumentPage?.moduleType === 'word-search') {
+      return Math.max(
+        1,
+        (canvasEditSession?.draft ?? wordSearchSettings).bookCanvas.answersPerPage || 1
+      );
+    }
+    if (activeDocumentPage?.moduleType === 'trivia') {
+      return Math.max(
+        1,
+        computeTriviaSolutionsPerPage({
+          answersPerColumn: genericPuzzleSettings?.core?.solutionsPerPage || 20,
+          solutionColumns: genericPuzzleSettings?.core?.triviaSolutionColumns || 3,
+        })
+      );
+    }
+    if (activeDocIsGenericModule) {
+      return Math.max(1, genericPuzzleSettings?.core?.solutionsPerPage || 1);
+    }
+    if (activeDocIsMurdokuModule) {
+      return Math.max(1, murdokuSettings?.bookCanvas?.answersPerPage || 1);
+    }
+    if (activeDocIsCrosswordModule) {
+      return Math.max(1, crosswordSettings?.bookCanvas?.answersPerPage || 1);
+    }
+    return 1;
+  }, [
+    activeDocumentPage?.moduleType,
+    canvasEditSession?.draft,
+    wordSearchSettings,
+    genericPuzzleSettings?.core?.solutionsPerPage,
+    genericPuzzleSettings?.core?.triviaSolutionColumns,
+    activeDocIsGenericModule,
+    activeDocIsMurdokuModule,
+    murdokuSettings?.bookCanvas?.answersPerPage,
+    activeDocIsCrosswordModule,
+    crosswordSettings?.bookCanvas?.answersPerPage,
+  ]);
+
+  const previewSolutionPageCount = useMemo(() => {
+    if (activeDocIsBatchModule) return Math.max(1, crosswordSolutionPageCount);
+    return Math.max(
+      1,
+      solutionPages.length || compiledSolutionPagesForActiveDoc.length || 1
+    );
+  }, [
+    activeDocIsBatchModule,
+    crosswordSolutionPageCount,
+    solutionPages.length,
+    compiledSolutionPagesForActiveDoc.length,
+  ]);
+
+  const matchingSolutionPageIndex = useMemo(() => {
+    const max = Math.max(0, previewSolutionPageCount - 1);
+    const currentPuzzleId =
+      activeDocumentPage?.moduleType === 'word-search'
+        ? batchPuzzles[currentBatchIndex]?.id
+        : undefined;
+    const compiledIdx = activeDocCompiledSolutionPages.findIndex((page) =>
+      compiledSolutionPuzzles(page).some(
+        (puzzle) =>
+          puzzle.puzzleIndexInDocument === activePuzzleLocalIndex ||
+          (!!currentPuzzleId && puzzle.id === currentPuzzleId)
+      )
+    );
+    if (compiledIdx >= 0) return compiledIdx;
+    const chunkIdx =
+      activeDocCompiledSolutionPages.length > 0
+        ? -1
+        : solutionPages.findIndex((chunk) =>
+            chunk.some(
+              (puzzle) =>
+                (puzzle.puzzleIndexInDocument ?? -1) === activePuzzleLocalIndex ||
+                (!!currentPuzzleId && puzzle.id === currentPuzzleId)
+            )
+          );
+    if (chunkIdx >= 0) return Math.min(max, chunkIdx);
+    return Math.max(
+      0,
+      Math.min(max, Math.floor(activePuzzleLocalIndex / solutionsPerPreviewPage))
+    );
+  }, [
+    previewSolutionPageCount,
+    batchPuzzles,
+    currentBatchIndex,
+    activeDocumentPage?.moduleType,
+    activeDocCompiledSolutionPages,
+    activePuzzleLocalIndex,
+    solutionPages,
+    solutionsPerPreviewPage,
+  ]);
+
+  const matchingBatchIndexFromSolution = useMemo(() => {
+    const compiledPage = activeDocCompiledSolutionPages[currentSolutionPageIndex];
+    const compiledPuzzles = compiledPage ? compiledSolutionPuzzles(compiledPage) : [];
+    const chunk =
+      activeDocCompiledSolutionPages.length > 0
+        ? []
+        : solutionPages[currentSolutionPageIndex] ?? [];
+    const onThisPage =
+      compiledPuzzles.some(
+        (puzzle) => puzzle.puzzleIndexInDocument === activePuzzleLocalIndex
+      ) ||
+      chunk.some(
+        (puzzle) => (puzzle.puzzleIndexInDocument ?? -1) === activePuzzleLocalIndex
+      );
+    if (onThisPage) return currentBatchIndex;
+
+    const firstLocal =
+      compiledPuzzles[0]?.puzzleIndexInDocument ??
+      chunk[0]?.puzzleIndexInDocument ??
+      currentSolutionPageIndex * solutionsPerPreviewPage;
+
+    if (
+      activeDocumentPage?.moduleType === 'word-search' &&
+      activeDocumentPuzzleStartIndex >= 0
+    ) {
+      const last =
+        activeDocumentPuzzleStartIndex + Math.max(0, activeDocumentPuzzleCount - 1);
+      return Math.max(
+        activeDocumentPuzzleStartIndex,
+        Math.min(last, activeDocumentPuzzleStartIndex + firstLocal)
+      );
+    }
+    if (activeDocIsMurdokuModule && murdokuTwoPage) {
+      const part = currentBatchIndex % 2;
+      const visual = firstLocal * 2 + part;
+      return Math.max(0, Math.min(Math.max(0, activeCrosswordPuzzleCount - 1), visual));
+    }
+    if (activeDocIsGenericModule && genericPuzzlesPerPage > 1) {
+      const pageStart =
+        Math.floor(firstLocal / genericPuzzlesPerPage) * genericPuzzlesPerPage;
+      return Math.max(
+        0,
+        Math.min(Math.max(0, activeCrosswordPuzzleCount - 1), pageStart)
+      );
+    }
+    const maxBatch = activeDocIsBatchModule
+      ? activeCrosswordPuzzleCount
+      : batchPuzzles.length;
+    return Math.max(0, Math.min(Math.max(0, maxBatch - 1), firstLocal));
+  }, [
+    activeDocCompiledSolutionPages,
+    currentSolutionPageIndex,
+    solutionPages,
+    activePuzzleLocalIndex,
+    currentBatchIndex,
+    solutionsPerPreviewPage,
+    activeDocumentPage?.moduleType,
+    activeDocumentPuzzleStartIndex,
+    activeDocumentPuzzleCount,
+    activeDocIsMurdokuModule,
+    murdokuTwoPage,
+    activeCrosswordPuzzleCount,
+    activeDocIsGenericModule,
+    genericPuzzlesPerPage,
+    activeDocIsBatchModule,
+    batchPuzzles.length,
+  ]);
+
+  useEffect(() => {
+    if (!hasPreviewPages) return;
+    if (activeDocumentPage?.moduleType === 'word-search') {
+      if (activeDocumentPuzzleCount <= 0 || activeDocumentPuzzleStartIndex < 0) return;
+      setCurrentBatchIndex((idx) => {
+        const first = activeDocumentPuzzleStartIndex;
+        const last = activeDocumentPuzzleStartIndex + activeDocumentPuzzleCount - 1;
+        if (idx < first || idx > last) return first;
+        return idx;
+      });
+      return;
+    }
+    if (activeDocIsBatchModule) {
+      if (activeCrosswordPuzzleCount <= 0) return;
+      setCurrentBatchIndex((idx) => {
+        if (idx < 0 || idx >= activeCrosswordPuzzleCount) return 0;
+        if (activeDocIsGenericModule && genericPuzzlesPerPage > 1) {
+          return Math.floor(idx / genericPuzzlesPerPage) * genericPuzzlesPerPage;
+        }
+        return idx;
+      });
+    }
   }, [
     activeDocumentPageId,
     activeDocumentPuzzleStartIndex,
     activeDocumentPuzzleCount,
+    activeCrosswordPuzzleCount,
     activeDocumentPage?.moduleType,
     hasPreviewPages,
     setCurrentBatchIndex,
+    activeDocIsBatchModule,
+    activeDocIsGenericModule,
+    genericPuzzlesPerPage,
   ]);
 
   useEffect(() => {
     setCurrentSolutionPageIndex(0);
+    // Per-page crossword overrides are cleared by generatePuzzle itself when the
+    // user opts to drop customizations (clearPageCustomizations) — mirroring the
+    // word-search flow — so a generation bump must NOT wipe them here.
   }, [puzzleGenerationVersion]);
+
+  useEffect(() => {
+    setCurrentSolutionPageIndex((idx) =>
+      Math.min(idx, Math.max(0, crosswordSolutionPageCount - 1))
+    );
+  }, [crosswordSolutionPageCount, crosswordSettings?.bookCanvas?.answersPerPage]);
+
+  // Keep the solution page aligned with the active puzzle (and vice versa).
+  useEffect(() => {
+    if (!previewShowBothPages && activePreviewTab !== 'puzzles') return;
+    if (matchingSolutionPageIndex >= 0) {
+      setCurrentSolutionPageIndex((prev) =>
+        prev === matchingSolutionPageIndex ? prev : matchingSolutionPageIndex
+      );
+    }
+  }, [matchingSolutionPageIndex, previewShowBothPages, activePreviewTab]);
+
+  useEffect(() => {
+    if (previewShowBothPages || activePreviewTab !== 'solutions') return;
+    if (matchingBatchIndexFromSolution >= 0) {
+      setCurrentBatchIndex((prev) =>
+        prev === matchingBatchIndexFromSolution ? prev : matchingBatchIndexFromSolution
+      );
+    }
+  }, [
+    matchingBatchIndexFromSolution,
+    previewShowBothPages,
+    activePreviewTab,
+    setCurrentBatchIndex,
+  ]);
 
   // Keep input values in sync when navigation happens via buttons
   useEffect(() => {
@@ -2684,8 +5029,19 @@ export function PreviewCanvas() {
       setBatchPageInputValue((currentBatchIndex - activeDocumentPuzzleStartIndex + 1).toString());
       return;
     }
+    if (hasPreviewPages && activeDocIsBatchModule) {
+      setBatchPageInputValue(String(batchPuzzlePageNumber));
+      return;
+    }
     setBatchPageInputValue((currentBatchIndex + 1).toString());
-  }, [currentBatchIndex, hasPreviewPages, activeDocumentPage?.moduleType, activeDocumentPuzzleStartIndex]);
+  }, [
+    currentBatchIndex,
+    hasPreviewPages,
+    activeDocumentPage?.moduleType,
+    activeDocumentPuzzleStartIndex,
+    activeDocIsBatchModule,
+    batchPuzzlePageNumber,
+  ]);
 
   useEffect(() => {
     setSolutionPageInputValue((currentSolutionPageIndex + 1).toString());
@@ -2741,13 +5097,16 @@ export function PreviewCanvas() {
   }, [batchPuzzles, currentBatchIndex, activePreviewTab, currentPuzzleType, wordSearchSettings, titleWords, puzzleGridScale, solutionPages, pageMargin, safetyMarginPt, bookHeaderTitleFontSizePt]);
 
   const showPaginationBar = hasPreviewPages || hasPuzzles;
+  const previewUsesPuzzlePagination =
+    previewShowBothPages || activePreviewTab === 'puzzles';
   const showPuzzleBatchPagination =
-    activePreviewTab === 'puzzles' &&
+    previewUsesPuzzlePagination &&
     (hasPreviewPages
-      ? activeDocumentPage?.moduleType === 'word-search' && activeDocumentPuzzleCount > 0
+      ? (activeDocumentPage?.moduleType === 'word-search' && activeDocumentPuzzleCount > 0) ||
+        (activeDocIsBatchModule && activeCrosswordPuzzleCount > 0)
       : hasPuzzles);
   const showDocumentPagination =
-    hasPreviewPages && activePreviewTab === 'puzzles' && !showPuzzleBatchPagination;
+    hasPreviewPages && previewUsesPuzzlePagination && !showPuzzleBatchPagination;
   const canGoPrevDocument = activeDocumentIndex > 0;
   const canGoNextDocument = activeDocumentIndex >= 0 && activeDocumentIndex < documentPages.length - 1;
   const goToPrevDocument = () => {
@@ -2767,9 +5126,16 @@ export function PreviewCanvas() {
 
   const canvasEditEnabled =
     previewRangeMode === 'sample' &&
+    !previewShowBothPages &&
     !showSolution &&
     (activePreviewTab === 'puzzles' || activePreviewTab === 'solutions') &&
     activeDocumentPage?.moduleType === 'word-search';
+
+  const crosswordCanvasEditEnabled =
+    previewRangeMode === 'sample' &&
+    !previewShowBothPages &&
+    (activePreviewTab === 'puzzles' || activePreviewTab === 'solutions') &&
+    activeDocIsCrosswordModule;
 
   const activeTextSettings =
     activeDocumentPage &&
@@ -2795,7 +5161,10 @@ export function PreviewCanvas() {
     if (!showPuzzleSolutionTabs && activePreviewTab === 'solutions') {
       setActivePreviewTab('puzzles');
     }
-  }, [showPuzzleSolutionTabs, activePreviewTab, setActivePreviewTab]);
+    if (!showPuzzleSolutionTabs && previewShowBothPages) {
+      setPreviewShowBothPages(false);
+    }
+  }, [showPuzzleSolutionTabs, activePreviewTab, previewShowBothPages, setActivePreviewTab]);
 
   const handleTextSettingsChange = useCallback(
     (
@@ -2809,22 +5178,21 @@ export function PreviewCanvas() {
     [updateActiveTextModuleSettings]
   );
 
-  const handleTextEditTargetChange = useCallback((target: TextPageEditTarget) => {
-    setTextPageEditTarget(target);
-    setTextPageEditPanelOpen(true);
-    setTextPageBlockChromeVisible(false);
-  }, []);
+  const handleTextEditTargetChange = useCallback(
+    (target: TextPageEditTarget) => {
+      changeTextPageEditTarget(target);
+      setTextPageEditPanelOpen(true);
+    },
+    [changeTextPageEditTarget]
+  );
 
-  const handleSelectTextBlock = useCallback((blockId: string, options?: { showChrome?: boolean }) => {
-    setSelectedTextBlockId(blockId);
-    setTextPageBlockChromeVisible(options?.showChrome !== false);
-    setTextPageEditTarget('page-elements');
-    setTextPageEditPanelOpen(true);
-  }, []);
-
-  const handleHideTextBlockChrome = useCallback(() => {
-    setTextPageBlockChromeVisible(false);
-  }, []);
+  const handleSelectTextBlock = useCallback(
+    (blockId: string, options?: { showChrome?: boolean }) => {
+      selectTextBlock(blockId, options);
+      setTextPageEditPanelOpen(true);
+    },
+    [selectTextBlock]
+  );
 
   const handleTocCanvasClick = useCallback(() => {
     setTextPageEditPanelOpen(true);
@@ -2832,13 +5200,17 @@ export function PreviewCanvas() {
 
   const handleCanvasBackgroundClick = useCallback(() => {
     if (textPageBlockChromeVisible && selectedTextBlockId) {
-      setTextPageBlockChromeVisible(false);
-      setTextPageEditTarget('page-elements');
+      hideTextBlockChrome();
       return;
     }
-    setTextPageEditTarget('page-frame');
+    changeTextPageEditTarget('page-frame');
     setTextPageEditPanelOpen(true);
-  }, [textPageBlockChromeVisible, selectedTextBlockId]);
+  }, [
+    textPageBlockChromeVisible,
+    selectedTextBlockId,
+    hideTextBlockChrome,
+    changeTextPageEditTarget,
+  ]);
 
   const handleDeleteTextBlock = useCallback(
     (blockId: string) => {
@@ -2864,13 +5236,14 @@ export function PreviewCanvas() {
       const remaining = blocks.filter((entry) => entry.id !== blockId);
       const nextId =
         remaining.find((entry) => entry.kind === 'title')?.id ?? remaining[0]?.id ?? null;
-      setSelectedTextBlockId(nextId);
+      selectTextBlock(nextId ?? '', { showChrome: false });
     },
     [
       activeDocumentPage,
       activeTextSettings,
       wordSearchSettings,
       updateActiveTextModuleSettings,
+      selectTextBlock,
     ]
   );
 
@@ -2927,27 +5300,47 @@ export function PreviewCanvas() {
       wordSearchSettings
     );
 
-    // Persist an explicit empty blocks array so the page stays clean (no auto title/subtitle boxes).
-    if (!Array.isArray(activeTextSettings.blocks)) {
-      updateActiveTextModuleSettings({ blocks: [] }, { recordHistory: false });
+    const isBlankSpecial = isSpecialBlankTitlePage(activeDocumentPage);
+    const storedBlocks = activeTextSettings.blocks;
+    const needsDefaultLayout =
+      !isBlankSpecial &&
+      (!Array.isArray(storedBlocks) || storedBlocks.length === 0) &&
+      initializedTitlePageDocIdRef.current !== activeDocumentPageId;
+
+    let nextBlocks = Array.isArray(storedBlocks) ? storedBlocks : blocks;
+    if (isBlankSpecial && !Array.isArray(storedBlocks)) {
+      nextBlocks = [];
+    } else if (needsDefaultLayout) {
+      nextBlocks = createDefaultTitlePageBlocks(
+        activeDocumentPage.name,
+        activeTextSettings,
+        wordSearchSettings
+      );
     }
 
     // Fix white-on-white text inherited from puzzle title color.
     const needsBlackPageColor =
       !activeTextSettings.textColor || isNearWhiteCssColor(activeTextSettings.textColor);
-    const normalizedBlocks = (activeTextSettings.blocks ?? []).map((block) =>
+    const normalizedBlocks = nextBlocks.map((block) =>
       block.textColor && isNearWhiteCssColor(block.textColor)
         ? { ...block, textColor: '#000000' }
         : block
     );
+    const persistLayout = isBlankSpecial
+      ? !Array.isArray(storedBlocks)
+      : needsDefaultLayout;
     const blocksNeedBlack = normalizedBlocks.some(
-      (block, idx) => block !== (activeTextSettings.blocks ?? [])[idx]
+      (block, idx) => block !== nextBlocks[idx]
     );
-    if (needsBlackPageColor || blocksNeedBlack) {
+    if (persistLayout || needsBlackPageColor || blocksNeedBlack) {
       updateActiveTextModuleSettings(
         {
+          ...(persistLayout
+            ? syncLegacyFieldsFromBlocks(normalizedBlocks)
+            : blocksNeedBlack
+              ? { blocks: normalizedBlocks }
+              : {}),
           ...(needsBlackPageColor ? { textColor: '#000000' } : {}),
-          ...(blocksNeedBlack ? { blocks: normalizedBlocks } : {}),
         },
         { recordHistory: false }
       );
@@ -2962,9 +5355,10 @@ export function PreviewCanvas() {
     initializedTitlePageDocIdRef.current = activeDocumentPageId;
 
     const titleBlockId =
-      blocks.find((block) => block.kind === 'title')?.id ?? blocks[0]?.id ?? null;
-    setTextPageEditTarget('page-elements');
-    setSelectedTextBlockId(titleBlockId);
+      normalizedBlocks.find((block) => block.kind === 'title')?.id ??
+      normalizedBlocks[0]?.id ??
+      null;
+    selectTextBlock(titleBlockId ?? '', { showChrome: true });
   }, [
     activeDocumentPageId,
     activeDocumentPage?.moduleType,
@@ -2973,6 +5367,7 @@ export function PreviewCanvas() {
     textPageEditEnabled,
     wordSearchSettings,
     updateActiveTextModuleSettings,
+    selectTextBlock,
   ]);
 
   const getSettingsForBatchIndex = useCallback(
@@ -3048,7 +5443,7 @@ export function PreviewCanvas() {
     batchPuzzles,
     puzzleGridScale,
     pagePuzzleGridScales,
-    titleWords,
+          titleWords,
   ]);
 
   const canvasEditPanelTabs = useMemo(
@@ -3160,16 +5555,20 @@ export function PreviewCanvas() {
 
   const guardCanvasEditLeave = useCallback(
     (action: () => void) => {
-      if (!hasCanvasEditPanelOpen) {
+      const wsUnsaved =
+        hasCanvasEditPanelOpen &&
+        anyCanvasEditTabHasUnsavedEdits(canvasEditSession, canvasEditTabs);
+      const cwUnsaved = crosswordUnsavedRef.current;
+      const genericUnsaved = genericPuzzleUnsavedRef.current;
+
+      if (!wsUnsaved && !cwUnsaved && !genericUnsaved) {
         action();
         return;
       }
-      if (!anyCanvasEditTabHasUnsavedEdits(canvasEditSession, canvasEditTabs)) {
-        action();
-        return;
-      }
+
       pendingCanvasEditLeaveRef.current = action;
       pendingCanvasEditTabCloseIdRef.current = null;
+      setUnsavedDialogKind(wsUnsaved ? 'word-search' : cwUnsaved ? 'crossword' : 'generic');
       setCanvasEditUnsavedDialogOpen(true);
     },
     [hasCanvasEditPanelOpen, canvasEditSession, canvasEditTabs]
@@ -3198,7 +5597,7 @@ export function PreviewCanvas() {
     });
   }, [guardCanvasEditLeave, closeCanvasEditPanel]);
 
-  const handleCanvasEditCommitPage = useCallback(() => {
+  const handleCanvasEditCommitPage = useCallback(async () => {
     if (
       !editSession ||
       canvasEditTabs.length === 0 ||
@@ -3210,7 +5609,7 @@ export function PreviewCanvas() {
     const commitPageIndex = currentBatchIndex;
     const puzzle = batchPuzzles[commitPageIndex] ?? null;
     const bookTextUpdates = buildGlobalBookTextUpdatesForPageCommit(
-      wordSearchSettings,
+          wordSearchSettings,
       editSession.draft,
       puzzle
     );
@@ -3264,14 +5663,14 @@ export function PreviewCanvas() {
 
     if (shouldRegeneratePuzzleOnPageCommit(editSession)) {
       const commitPuzzle = batchPuzzles[commitPageIndex];
-      const wordsPerPuzzle = Math.max(1, editSession.draft.wordList.wordsPerPuzzle);
+      const wordsPerPuzzle = getEffectiveWordsPerPuzzle(editSession.draft.wordList);
       const words = getWordsForPuzzlePage(
         commitPuzzle,
         editSession.draftTitleWords,
         wordsPerPuzzle,
         'titleWords'
       );
-      const regenerated = regeneratePuzzleAtIndex(commitPageIndex, words, {
+      const regenerated = await regeneratePuzzleAtIndex(commitPageIndex, words, {
         lettersAcross: editSession.draft.core.lettersAcross,
         lettersDown: editSession.draft.core.lettersDown,
         settings: editSession.draft,
@@ -3295,7 +5694,7 @@ export function PreviewCanvas() {
     currentBatchIndex,
     batchPuzzles,
     wordSearchSettings,
-    puzzleGridScale,
+          puzzleGridScale,
     updateWordSearchSettings,
     updatePageOverride,
     setPagePuzzleGridScale,
@@ -3308,7 +5707,7 @@ export function PreviewCanvas() {
   ]);
 
   const handleCanvasEditCommitRange = useCallback(
-    (rangeInput: string) => {
+    async (rangeInput: string) => {
       if (!editSession || canvasEditTabs.length === 0) {
         return;
       }
@@ -3333,13 +5732,7 @@ export function PreviewCanvas() {
       );
 
       let mergedGlobalSettings = wordSearchSettings;
-      const answersPerPageUpdates = buildGlobalAnswersPerPageUpdate(
-        wordSearchSettings,
-        editSession.draft
-      );
-      if (answersPerPageUpdates) {
-        mergedGlobalSettings = patchWordSearchSettings(wordSearchSettings, answersPerPageUpdates);
-      }
+      // answersPerPage is book-wide — only change it via "Apply to all pages", not range.
 
       for (const batchIndex of batchIndices) {
         const puzzle = batchPuzzles[batchIndex] ?? null;
@@ -3374,24 +5767,14 @@ export function PreviewCanvas() {
         JSON.stringify(mergedGlobalSettings.typography) !==
           JSON.stringify(wordSearchSettings.typography) ||
         mergedGlobalSettings.wordList.aiTheme !== wordSearchSettings.wordList.aiTheme;
-      const answersPerPageChanged =
-        mergedGlobalSettings.bookCanvas.answersPerPage !==
-        wordSearchSettings.bookCanvas.answersPerPage;
 
-      if (bookTextChanged || answersPerPageChanged) {
+      if (bookTextChanged) {
         updateWordSearchSettings({
-          ...(bookTextChanged
-            ? {
-                typography: mergedGlobalSettings.typography,
-                wordList: {
-                  ...wordSearchSettings.wordList,
-                  aiTheme: mergedGlobalSettings.wordList.aiTheme,
-                },
-              }
-            : {}),
-          ...(answersPerPageChanged
-            ? { bookCanvas: mergedGlobalSettings.bookCanvas }
-            : {}),
+          typography: mergedGlobalSettings.typography,
+          wordList: {
+            ...wordSearchSettings.wordList,
+            aiTheme: mergedGlobalSettings.wordList.aiTheme,
+          },
         });
         if (activeDocumentPageId) {
           persistPagePuzzleSettings(
@@ -3417,7 +5800,7 @@ export function PreviewCanvas() {
 
       if (shouldRegeneratePuzzleOnPageCommit(editSession)) {
         let currentPuzzle: WordSearchPuzzle | null = batchPuzzles[currentBatchIndex] ?? null;
-        const wordsPerPuzzle = Math.max(1, editSession.draft.wordList.wordsPerPuzzle);
+        const wordsPerPuzzle = getEffectiveWordsPerPuzzle(editSession.draft.wordList);
 
         for (const batchIndex of batchIndices) {
           const commitPuzzle = batchPuzzles[batchIndex];
@@ -3427,7 +5810,7 @@ export function PreviewCanvas() {
             wordsPerPuzzle,
             'titleWords'
           );
-          const regenerated = regeneratePuzzleAtIndex(batchIndex, words, {
+          const regenerated = await regeneratePuzzleAtIndex(batchIndex, words, {
             lettersAcross: editSession.draft.core.lettersAcross,
             lettersDown: editSession.draft.core.lettersDown,
             settings: editSession.draft,
@@ -3453,8 +5836,8 @@ export function PreviewCanvas() {
       activeDocumentPuzzleCount,
       activeDocumentPuzzleStartIndex,
       batchPuzzles,
-      wordSearchSettings,
-      puzzleGridScale,
+          wordSearchSettings,
+          puzzleGridScale,
       currentBatchIndex,
       updateWordSearchSettings,
       updatePageOverride,
@@ -3469,7 +5852,7 @@ export function PreviewCanvas() {
   );
 
   const handleCanvasEditCommitAll = useCallback(
-    (preserveEditedPages = false) => {
+    async (preserveEditedPages = false) => {
       if (!editSession || !canvasEditTarget) return;
 
       const commitPageIndex = currentBatchIndex;
@@ -3478,7 +5861,7 @@ export function PreviewCanvas() {
         editSession,
         wordSearchSettings,
         puzzleGridScale,
-        pageOverrides,
+          pageOverrides,
         pagePuzzleGridScales
       );
       if (!canApply) return;
@@ -3549,7 +5932,7 @@ export function PreviewCanvas() {
           if (preserveEditedPages && keepEdited.has(i)) {
             continue;
           }
-          const regenerated = regeneratePuzzleAtIndex(i, undefined, {
+          const regenerated = await regeneratePuzzleAtIndex(i, undefined, {
             lettersAcross: mergedGlobalSettings.core.lettersAcross,
             lettersDown: mergedGlobalSettings.core.lettersDown,
             settings: mergedGlobalSettings,
@@ -3658,6 +6041,20 @@ export function PreviewCanvas() {
   ]);
 
   const handleCanvasEditUnsavedCommitPage = useCallback(() => {
+    if (unsavedDialogKind === 'crossword') {
+      handleCrosswordCommitPageRef.current();
+      setCanvasEditUnsavedDialogOpen(false);
+      handleCrosswordEditCloseRef.current();
+      runPendingCanvasEditLeave();
+      return;
+    }
+    if (unsavedDialogKind === 'generic') {
+      handleGenericPuzzleCommitAllRef.current();
+      setCanvasEditUnsavedDialogOpen(false);
+      handleGenericPuzzleEditCloseRef.current();
+      runPendingCanvasEditLeave();
+      return;
+    }
     handleCanvasEditCommitPage();
     setCanvasEditUnsavedDialogOpen(false);
     const tabCloseId = pendingCanvasEditTabCloseIdRef.current;
@@ -3668,17 +6065,41 @@ export function PreviewCanvas() {
       return;
     }
     runPendingCanvasEditLeave();
-  }, [handleCanvasEditCommitPage, removeCanvasEditTab, runPendingCanvasEditLeave]);
+  }, [
+    unsavedDialogKind,
+    handleCanvasEditCommitPage,
+    removeCanvasEditTab,
+    runPendingCanvasEditLeave,
+  ]);
 
   const handleCanvasEditUnsavedCommitAll = useCallback(() => {
+    if (unsavedDialogKind === 'crossword') {
+      handleCrosswordCommitAllRef.current();
+      setCanvasEditUnsavedDialogOpen(false);
+      handleCrosswordEditCloseRef.current();
+      runPendingCanvasEditLeave();
+      return;
+    }
+    if (unsavedDialogKind === 'generic') {
+      handleGenericPuzzleCommitAllRef.current();
+      setCanvasEditUnsavedDialogOpen(false);
+      handleGenericPuzzleEditCloseRef.current();
+      runPendingCanvasEditLeave();
+      return;
+    }
     requestCanvasEditCommitAll(true);
-  }, [requestCanvasEditCommitAll]);
+  }, [unsavedDialogKind, requestCanvasEditCommitAll, runPendingCanvasEditLeave]);
 
   const handleCanvasEditUnsavedDiscard = useCallback(() => {
     setCanvasEditUnsavedDialogOpen(false);
     pendingCanvasEditTabCloseIdRef.current = null;
+    if (unsavedDialogKind === 'crossword') {
+      handleCrosswordEditCloseRef.current();
+    } else if (unsavedDialogKind === 'generic') {
+      handleGenericPuzzleEditCloseRef.current();
+    }
     runPendingCanvasEditLeave();
-  }, [runPendingCanvasEditLeave]);
+  }, [unsavedDialogKind, runPendingCanvasEditLeave]);
 
   const openAllCanvasEditTabs = useCallback(
     (previewTab: 'puzzles' | 'solutions', activeTarget?: CanvasEditTarget) => {
@@ -3686,17 +6107,13 @@ export function PreviewCanvas() {
       const desiredActiveTarget = activeTarget ?? targets[0];
       const desiredActiveTabId = makeCanvasEditTabId(desiredActiveTarget, previewTab);
 
-      const allTabsPresent =
-        targets.length === canvasEditTabs.length &&
-        canvasEditTabs.every((tab) => tab.previewTab === previewTab) &&
-        targets.every((target) =>
-          canvasEditTabs.some((tab) => tab.id === makeCanvasEditTabId(target, previewTab))
-        );
-
-      if (allTabsPresent) {
-        if (activeCanvasEditTabId !== desiredActiveTabId) {
-          setActiveCanvasEditTabId(desiredActiveTabId);
-        }
+      // Single-target mode: only keep the clicked element’s controls open (no multi-tab bar).
+      const existing = canvasEditTabs.find((tab) => tab.id === desiredActiveTabId);
+      if (
+        existing &&
+        canvasEditTabs.length === 1 &&
+        activeCanvasEditTabId === desiredActiveTabId
+      ) {
         return;
       }
 
@@ -3706,14 +6123,14 @@ export function PreviewCanvas() {
       }
       const snapshot = createSnapshotFromSession(session);
 
-      setCanvasEditTabs(
-        targets.map((target) => ({
-          id: makeCanvasEditTabId(target, previewTab),
-          target,
+      setCanvasEditTabs([
+        {
+          id: desiredActiveTabId,
+          target: desiredActiveTarget,
           previewTab,
           snapshot,
-        }))
-      );
+        },
+      ]);
       setActiveCanvasEditTabId(desiredActiveTabId);
     },
     [
@@ -3757,16 +6174,49 @@ export function PreviewCanvas() {
     }
     if (prevAutoOpenPreviewTabRef.current === activePreviewTab) return;
     prevAutoOpenPreviewTabRef.current = activePreviewTab;
-    openAllCanvasEditTabsRef.current(activePreviewTab);
+    // Do not auto-open multi-target tabs; keep panel closed until the user clicks an element.
   }, [canvasEditEnabled, activePreviewTab]);
 
   const handlePreviewRangeModeChange = useCallback(
     (mode: 'sample' | 'all' | 'flipbook') => {
       const apply = () => {
-        setPreviewRangeMode(mode);
-        if (mode !== 'sample') {
-          closeCanvasEditPanel();
+        const busyLabel =
+          mode === 'all'
+            ? 'Opening all pages preview…'
+            : mode === 'flipbook'
+              ? 'Opening 3D book preview…'
+              : null;
+        let stopSoft: (() => void) | null = null;
+        if (busyLabel) {
+          showBusy(busyLabel, 6);
+          // Soft progress while React mounts the heavy preview tree.
+          let value = 6;
+          const id = window.setInterval(() => {
+            value = Math.min(92, value + (mode === 'all' ? 5 : 8));
+            updateBusy({ progress: value });
+            if (value >= 92) window.clearInterval(id);
+          }, 70);
+          stopSoft = () => {
+            window.clearInterval(id);
+            updateBusy({ progress: 100 });
+          };
         }
+        // Let the overlay paint before the heavy all-pages / flipbook render.
+        window.requestAnimationFrame(() => {
+          window.setTimeout(() => {
+            try {
+              setPreviewRangeMode(mode);
+              if (mode !== 'sample') {
+                closeCanvasEditPanel();
+              }
+    } finally {
+              if (busyLabel) {
+                stopSoft?.();
+                window.setTimeout(() => hideBusy(), mode === 'all' ? 450 : 280);
+              }
+            }
+          }, 30);
+        });
       };
       if (hasCanvasEditPanelOpen && mode !== 'sample') {
         guardCanvasEditLeave(apply);
@@ -3774,7 +6224,15 @@ export function PreviewCanvas() {
         apply();
       }
     },
-    [hasCanvasEditPanelOpen, guardCanvasEditLeave, closeCanvasEditPanel, setPreviewRangeMode]
+    [
+      hasCanvasEditPanelOpen,
+      guardCanvasEditLeave,
+      closeCanvasEditPanel,
+      setPreviewRangeMode,
+      showBusy,
+      updateBusy,
+      hideBusy,
+    ]
   );
 
   const handleCanvasEditUnsavedDialogOpenChange = useCallback((open: boolean) => {
@@ -3787,13 +6245,53 @@ export function PreviewCanvas() {
 
   const guardedSetActivePreviewTab = useCallback(
     (tab: 'puzzles' | 'solutions') => {
-      if (tab === activePreviewTab) return;
+      if (tab === activePreviewTab && !previewShowBothPages) return;
       guardCanvasEditLeave(() => {
+        if (tab === 'solutions') {
+          setCurrentSolutionPageIndex(matchingSolutionPageIndex);
+        } else {
+          setCurrentBatchIndex(matchingBatchIndexFromSolution);
+        }
+        setPreviewShowBothPages(false);
         setActivePreviewTab(tab);
-        openAllCanvasEditTabs(tab);
+        // Edit controls stay closed until the user clicks an element on the new page.
+        closeCanvasEditPanel();
       });
     },
-    [activePreviewTab, guardCanvasEditLeave, setActivePreviewTab, openAllCanvasEditTabs]
+    [
+      activePreviewTab,
+      previewShowBothPages,
+      matchingSolutionPageIndex,
+      matchingBatchIndexFromSolution,
+      guardCanvasEditLeave,
+      setActivePreviewTab,
+      setCurrentBatchIndex,
+      closeCanvasEditPanel,
+    ]
+  );
+
+  const handlePreviewShowBothChange = useCallback(
+    (checked: boolean) => {
+      guardCanvasEditLeave(() => {
+        if (checked) {
+          if (activePreviewTab === 'solutions') {
+            setCurrentBatchIndex(matchingBatchIndexFromSolution);
+          } else {
+            setCurrentSolutionPageIndex(matchingSolutionPageIndex);
+          }
+          closeCanvasEditPanel();
+        }
+        setPreviewShowBothPages(checked);
+      });
+    },
+    [
+      guardCanvasEditLeave,
+      closeCanvasEditPanel,
+      activePreviewTab,
+      matchingBatchIndexFromSolution,
+      matchingSolutionPageIndex,
+      setCurrentBatchIndex,
+    ]
   );
 
   const guardedSetActiveDocumentPageId = useCallback(
@@ -3894,9 +6392,9 @@ export function PreviewCanvas() {
   const canvasEditCanApplyToAllPages = editSession
     ? canApplyCanvasEditsToAllPages(
         editSession,
-        wordSearchSettings,
-        puzzleGridScale,
-        pageOverrides,
+          wordSearchSettings,
+          puzzleGridScale,
+          pageOverrides,
         pagePuzzleGridScales
       )
     : false;
@@ -3945,6 +6443,392 @@ export function PreviewCanvas() {
     ]
   );
 
+  // Host Edit controls in Document · This tab (sidebar) instead of floating over the canvas.
+  useEffect(() => {
+    if (canvasEditEnabled && hasCanvasEditPanelOpen && editSession && canvasEditTarget) {
+      setCanvasEditPanelProps({
+        target: canvasEditTarget,
+        pageKind: activePreviewTab === 'solutions' ? 'solution' : 'puzzle',
+        pageIndex: currentBatchIndex,
+        currentPuzzle: batchPuzzles[currentBatchIndex] ?? null,
+        draftSettings: editSession.draft,
+        onDraftSettingsChange: handleCanvasEditDraftSettingsChange,
+        draftPuzzleGridScale: editSession.draftPuzzleGridScale,
+        onDraftPuzzleGridScaleChange: handleCanvasEditDraftGridScaleChange,
+        draftTitleWords: editSession.draftTitleWords,
+        onDraftTitleWordsChange: handleCanvasEditDraftTitleWordsChange,
+        onCommitPage: handleCanvasEditCommitPage,
+        onCommitAll: () => requestCanvasEditCommitAll(false),
+        onCommitRange: handleCanvasEditCommitRange,
+        onCancel: handleCanvasEditCancel,
+        hasUnsavedChanges: !!canvasEditHasUnsavedChanges,
+        canApplyToAllPages: canvasEditCanApplyToAllPages,
+        documentPuzzleCount: activeDocumentPuzzleCount,
+        rangeError: canvasEditRangeError,
+        canApplyToSelectedPages,
+        // Single-element mode: no multi-tab bar in the sidebar.
+        editTabs: undefined,
+        activeEditTabId: null,
+        onEditTabSelect: undefined,
+        onEditTabClose: undefined,
+      });
+      return;
+    }
+    setCanvasEditPanelProps(null);
+  }, [
+    canvasEditEnabled,
+    hasCanvasEditPanelOpen,
+    editSession,
+    canvasEditTarget,
+    activePreviewTab,
+    currentBatchIndex,
+    batchPuzzles,
+    handleCanvasEditDraftSettingsChange,
+    handleCanvasEditDraftGridScaleChange,
+    handleCanvasEditDraftTitleWordsChange,
+    handleCanvasEditCommitPage,
+    requestCanvasEditCommitAll,
+    handleCanvasEditCommitRange,
+    handleCanvasEditCancel,
+    canvasEditHasUnsavedChanges,
+    canvasEditCanApplyToAllPages,
+    activeDocumentPuzzleCount,
+    canvasEditRangeError,
+    canApplyToSelectedPages,
+    canvasEditPanelTabs,
+    activeCanvasEditTabId,
+    handleCanvasEditTabSelect,
+    handleCanvasEditTabClose,
+    setCanvasEditPanelProps,
+  ]);
+
+  useEffect(() => {
+    return () => setCanvasEditPanelProps(null);
+  }, [setCanvasEditPanelProps]);
+
+  const handleCrosswordEditTargetChange = useCallback((target: CrosswordEditTarget) => {
+    setCrosswordEditTarget(target);
+    setCrosswordEditPanelOpen(true);
+    setCrosswordDraft((prev) => prev ?? normalizeCrosswordSettings(crosswordSettings));
+    setCrosswordDraftBaseline((prev) => prev ?? normalizeCrosswordSettings(crosswordSettings));
+  }, [crosswordSettings]);
+
+  const handleCrosswordEditClose = useCallback(() => {
+    setCrosswordEditPanelOpen(false);
+    setCrosswordEditTarget(null);
+    setCrosswordDraft(null);
+    setCrosswordDraftBaseline(null);
+    setCrosswordRangeError(null);
+  }, []);
+  handleCrosswordEditCloseRef.current = handleCrosswordEditClose;
+
+  const handleCrosswordDraftSettingsChange = useCallback(
+    (updates: Partial<CrosswordSettings>) => {
+      setCrosswordDraft((prev) => {
+        const base = prev ?? normalizeCrosswordSettings(crosswordSettings);
+        return normalizeCrosswordSettings({
+          ...base,
+          ...updates,
+          core: updates.core ? { ...base.core, ...updates.core } : base.core,
+          typography: updates.typography
+            ? { ...base.typography, ...updates.typography }
+            : base.typography,
+          colors: updates.colors ? { ...base.colors, ...updates.colors } : base.colors,
+          bookCanvas: updates.bookCanvas
+            ? { ...base.bookCanvas, ...updates.bookCanvas }
+            : base.bookCanvas,
+          pageFrameSettings: updates.pageFrameSettings
+            ? { ...(base.pageFrameSettings ?? {}), ...updates.pageFrameSettings }
+            : base.pageFrameSettings,
+        });
+      });
+    },
+    [crosswordSettings]
+  );
+
+  const crosswordHasUnsavedChanges = useMemo(() => {
+    if (!crosswordDraft || !crosswordDraftBaseline) return false;
+    return JSON.stringify(crosswordDraft) !== JSON.stringify(crosswordDraftBaseline);
+  }, [crosswordDraft, crosswordDraftBaseline]);
+
+  crosswordUnsavedRef.current = crosswordEditPanelOpen && crosswordHasUnsavedChanges;
+
+  const handleCrosswordCommitPage = useCallback(() => {
+    if (!crosswordDraft || !crosswordHasUnsavedChanges) return;
+    const index = currentBatchIndex;
+    setPageCrosswordOverrides((prev) => {
+      const next = new Map(prev);
+      next.set(index, crosswordDraft);
+      return next;
+    });
+    setCrosswordDraftBaseline(crosswordDraft);
+    setCrosswordRangeError(null);
+  }, [crosswordDraft, crosswordHasUnsavedChanges, currentBatchIndex]);
+  handleCrosswordCommitPageRef.current = handleCrosswordCommitPage;
+
+  const handleCrosswordCommitAll = useCallback(() => {
+    if (!crosswordDraft) return;
+    updateCrosswordSettings(crosswordDraft);
+    setPageCrosswordOverrides(new Map());
+    setCrosswordDraftBaseline(crosswordDraft);
+    setCrosswordRangeError(null);
+  }, [crosswordDraft, updateCrosswordSettings]);
+  handleCrosswordCommitAllRef.current = handleCrosswordCommitAll;
+
+  const handleCrosswordCommitRange = useCallback(
+    (rangeInput: string) => {
+      if (!crosswordDraft) return;
+      if (activeCrosswordPuzzleCount < 1) {
+        setCrosswordRangeError('No puzzles available in this document.');
+        return;
+      }
+      const pages = parsePageRangeSelection(rangeInput, activeCrosswordPuzzleCount);
+      if (!pages) {
+        setCrosswordRangeError(
+          `Enter a valid range between 1 and ${activeCrosswordPuzzleCount} (e.g. 1-4, 7-10, 12).`
+        );
+        return;
+      }
+      setCrosswordRangeError(null);
+      setPageCrosswordOverrides((prev) => {
+        const next = new Map(prev);
+        for (const page of pages) {
+          next.set(page - 1, crosswordDraft);
+        }
+        return next;
+      });
+      setCrosswordDraftBaseline(crosswordDraft);
+    },
+    [crosswordDraft, activeCrosswordPuzzleCount]
+  );
+
+  const canApplyCrosswordToSelectedPages = useCallback(
+    (rangeInput: string) => {
+      if (!rangeInput.trim()) return false;
+      if (crosswordHasUnsavedChanges) return true;
+      if (activeCrosswordPuzzleCount < 1) return false;
+      const pages = parsePageRangeSelection(rangeInput, activeCrosswordPuzzleCount);
+      return pages !== null;
+    },
+    [crosswordHasUnsavedChanges, activeCrosswordPuzzleCount]
+  );
+
+  const previewCrosswordSettings = useMemo(() => {
+    if (crosswordEditPanelOpen && crosswordDraft) {
+      return crosswordDraft;
+    }
+    const base = normalizeCrosswordSettings(crosswordSettings);
+    const override = pageCrosswordOverrides.get(currentBatchIndex);
+    if (!override) return base;
+    return normalizeCrosswordSettings({
+      ...base,
+      ...override,
+      core: override.core ? { ...base.core, ...override.core } : base.core,
+      typography: override.typography
+        ? { ...base.typography, ...override.typography }
+        : base.typography,
+      colors: override.colors ? { ...base.colors, ...override.colors } : base.colors,
+      bookCanvas: override.bookCanvas
+        ? { ...base.bookCanvas, ...override.bookCanvas }
+        : base.bookCanvas,
+      pageFrameSettings: override.pageFrameSettings
+        ? { ...(base.pageFrameSettings ?? {}), ...override.pageFrameSettings }
+        : base.pageFrameSettings,
+    });
+  }, [
+    crosswordEditPanelOpen,
+    crosswordDraft,
+    crosswordSettings,
+    pageCrosswordOverrides,
+    currentBatchIndex,
+  ]);
+
+  // Sudoku/maze: live settings + per-page override for the current page.
+  const previewGenericSettings = useMemo(() => {
+    const override = pageGenericOverrides.get(currentBatchIndex);
+    if (!override) return genericPuzzleSettings;
+    return {
+      core: override.core
+        ? { ...genericPuzzleSettings.core, ...override.core }
+        : genericPuzzleSettings.core,
+      typography: override.typography
+        ? { ...genericPuzzleSettings.typography, ...override.typography }
+        : genericPuzzleSettings.typography,
+      colors: override.colors
+        ? { ...genericPuzzleSettings.colors, ...override.colors }
+        : genericPuzzleSettings.colors,
+    };
+  }, [genericPuzzleSettings, pageGenericOverrides, currentBatchIndex]);
+
+  useEffect(() => {
+    if (
+      crosswordCanvasEditEnabled &&
+      crosswordEditPanelOpen &&
+      crosswordDraft
+    ) {
+      setCrosswordPanelProps({
+        settings: crosswordDraft,
+        activeTarget: crosswordEditTarget ?? 'title',
+        onTargetChange: handleCrosswordEditTargetChange,
+        onSettingsChange: handleCrosswordDraftSettingsChange,
+        onClose: () => guardCanvasEditLeave(() => handleCrosswordEditClose()),
+        onCommitPage: handleCrosswordCommitPage,
+        onCommitAll: handleCrosswordCommitAll,
+        onCommitRange: handleCrosswordCommitRange,
+        hasUnsavedChanges: crosswordHasUnsavedChanges,
+        canApplyToAllPages:
+          crosswordHasUnsavedChanges || pageCrosswordOverrides.size > 0,
+        documentPuzzleCount: activeCrosswordPuzzleCount,
+        rangeError: crosswordRangeError,
+        canApplyToSelectedPages: canApplyCrosswordToSelectedPages,
+      });
+      return;
+    }
+    setCrosswordPanelProps(null);
+  }, [
+    crosswordCanvasEditEnabled,
+    crosswordEditPanelOpen,
+    crosswordDraft,
+    crosswordEditTarget,
+    handleCrosswordEditTargetChange,
+    handleCrosswordDraftSettingsChange,
+    handleCrosswordEditClose,
+    handleCrosswordCommitPage,
+    handleCrosswordCommitAll,
+    handleCrosswordCommitRange,
+    crosswordHasUnsavedChanges,
+    pageCrosswordOverrides.size,
+    activeCrosswordPuzzleCount,
+    crosswordRangeError,
+    canApplyCrosswordToSelectedPages,
+    setCrosswordPanelProps,
+    guardCanvasEditLeave,
+  ]);
+
+  useEffect(() => {
+    return () => setCrosswordPanelProps(null);
+  }, [setCrosswordPanelProps]);
+
+  // ---- Generic puzzle (sudoku, cryptogram, maze, …) canvas edit ----
+  const [genericPuzzleEditOpen, setGenericPuzzleEditOpen] = useState(false);
+  const [genericPuzzleEditTarget, setGenericPuzzleEditTarget] =
+    useState<GenericPuzzleEditTarget | null>(null);
+  const [genericTitleDraft, setGenericTitleDraft] = useState<string | null>(null);
+  const [genericTitleBaseline, setGenericTitleBaseline] = useState<string | null>(null);
+
+  const genericPuzzleEditEnabled =
+    previewRangeMode === 'sample' &&
+    !previewShowBothPages &&
+    !!activeDocumentPage &&
+    isPuzzleModuleType(activeDocumentPage.moduleType) &&
+    activeDocumentPage.moduleType !== 'word-search' &&
+    activeDocumentPage.moduleType !== 'crossword';
+
+  const genericPuzzleHasUnsavedChanges = useMemo(() => {
+    if (genericTitleDraft == null || genericTitleBaseline == null) return false;
+    return genericTitleDraft !== genericTitleBaseline;
+  }, [genericTitleDraft, genericTitleBaseline]);
+
+  genericPuzzleUnsavedRef.current = genericPuzzleEditOpen && genericPuzzleHasUnsavedChanges;
+
+  const handleGenericPuzzleEditClose = useCallback(() => {
+    setGenericPuzzleEditOpen(false);
+    setGenericPuzzleEditTarget(null);
+    setGenericTitleDraft(null);
+    setGenericTitleBaseline(null);
+  }, []);
+  handleGenericPuzzleEditCloseRef.current = handleGenericPuzzleEditClose;
+
+  const handleGenericPuzzleCommitAll = useCallback(() => {
+    if (genericTitleDraft == null) return;
+    setTitleWords({ ...titleWords, title: genericTitleDraft });
+    setGenericTitleBaseline(genericTitleDraft);
+  }, [genericTitleDraft, setTitleWords, titleWords]);
+  handleGenericPuzzleCommitAllRef.current = handleGenericPuzzleCommitAll;
+
+  const handleGenericPuzzleEditTargetChange = useCallback(
+    (target: GenericPuzzleEditTarget) => {
+      setGenericPuzzleEditTarget(target);
+      setGenericPuzzleEditOpen(true);
+      setGenericTitleDraft((prev) => prev ?? (titleWords.title || ''));
+      setGenericTitleBaseline((prev) => prev ?? (titleWords.title || ''));
+    },
+    [titleWords.title]
+  );
+
+  useEffect(() => {
+    if (genericPuzzleEditEnabled && genericPuzzleEditOpen && genericTitleDraft != null) {
+      const label =
+        activeDocumentPage?.moduleType
+          ?.split('-')
+          .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+          .join(' ') ?? 'Puzzle';
+      setGenericPuzzlePanelProps({
+        puzzleTypeLabel: label,
+        titleText: genericTitleDraft,
+        onTitleTextChange: setGenericTitleDraft,
+        activeTarget: genericPuzzleEditTarget ?? 'title',
+        onTargetChange: handleGenericPuzzleEditTargetChange,
+        onClose: () => guardCanvasEditLeave(() => handleGenericPuzzleEditClose()),
+        onCommitPage: handleGenericPuzzleCommitAll,
+        onCommitAll: handleGenericPuzzleCommitAll,
+        hasUnsavedChanges: genericPuzzleHasUnsavedChanges,
+        canApplyToAllPages: genericPuzzleHasUnsavedChanges,
+        documentPuzzleCount: 1,
+      });
+      return;
+    }
+    setGenericPuzzlePanelProps(null);
+  }, [
+    genericPuzzleEditEnabled,
+    genericPuzzleEditOpen,
+    genericTitleDraft,
+    genericPuzzleEditTarget,
+    activeDocumentPage?.moduleType,
+    handleGenericPuzzleEditTargetChange,
+    handleGenericPuzzleEditClose,
+    handleGenericPuzzleCommitAll,
+    genericPuzzleHasUnsavedChanges,
+    guardCanvasEditLeave,
+    setGenericPuzzlePanelProps,
+  ]);
+
+  useEffect(() => {
+    return () => setGenericPuzzlePanelProps(null);
+  }, [setGenericPuzzlePanelProps]);
+
+  useEffect(() => {
+    if (!genericPuzzleEditEnabled && genericPuzzleEditOpen) {
+      handleGenericPuzzleEditClose();
+      setGenericPuzzlePanelProps(null);
+    }
+  }, [
+    genericPuzzleEditEnabled,
+    genericPuzzleEditOpen,
+    handleGenericPuzzleEditClose,
+    setGenericPuzzlePanelProps,
+  ]);
+
+  useEffect(() => {
+    if (!crosswordCanvasEditEnabled && crosswordEditPanelOpen) {
+      handleCrosswordEditClose();
+      setCrosswordPanelProps(null);
+    }
+  }, [
+    crosswordCanvasEditEnabled,
+    crosswordEditPanelOpen,
+    handleCrosswordEditClose,
+    setCrosswordPanelProps,
+  ]);
+
+  useEffect(() => {
+    if (activeDocumentPage?.moduleType !== 'table-of-contents') {
+      setTocEntries([]);
+      return;
+    }
+    setTocEntries(compiledBook?.tocEntries ?? []);
+  }, [activeDocumentPage?.moduleType, compiledBook?.tocEntries, setTocEntries]);
+
   const guardedInsertDocumentPage = useCallback(
     (type: InsertableDocumentKind, position: 'before' | 'after', referenceId: string) => {
       guardCanvasEditLeave(() => insertDocumentPage(type, position, referenceId));
@@ -3952,9 +6836,23 @@ export function PreviewCanvas() {
     [guardCanvasEditLeave, insertDocumentPage]
   );
 
-  const suppressCanvasGuides = canvasEditEnabled && hasCanvasEditPanelOpen;
+  const guardedInsertDocumentWithAi = useCallback(
+    (position: 'before' | 'after', referenceId: string) => {
+      guardCanvasEditLeave(() => {
+        setAiInsertPosition({ side: position, referenceId });
+        setAiAppendOpen(true);
+      });
+    },
+    [guardCanvasEditLeave]
+  );
+
+  const suppressCanvasGuides =
+    (canvasEditEnabled && hasCanvasEditPanelOpen) ||
+    (crosswordCanvasEditEnabled && crosswordEditPanelOpen) ||
+    (genericPuzzleEditEnabled && genericPuzzleEditOpen);
   const canvasEditHighlightTarget = hasCanvasEditPanelOpen ? null : canvasEditTarget;
   const canvasEditHideGuides = hasCanvasEditPanelOpen;
+  const crosswordEditHideGuides = crosswordEditPanelOpen;
   const textEditHideGuides = textPageEditEnabled && textPageEditPanelOpen;
   const displayShowMargins = showMargins && !suppressCanvasGuides;
   const displayShowSafetyZone = showSafetyZone && !suppressCanvasGuides;
@@ -4004,8 +6902,8 @@ export function PreviewCanvas() {
       compiledBook,
       compiledBookPagesForPreview,
       documentPagesForBook,
-      titleWords,
-      wordSearchSettings,
+          titleWords,
+          wordSearchSettings,
       batchPuzzles,
       getSettingsForBatchIndex,
       pagePuzzleGridScales,
@@ -4013,9 +6911,9 @@ export function PreviewCanvas() {
       displayShowSafetyZone,
       safetyMarginPx,
       ptToPx,
-      puzzleGridScale,
-      titleToAnswerGap,
-      solutionToSolutionGap,
+          puzzleGridScale,
+          titleToAnswerGap,
+          solutionToSolutionGap,
       pageMargin,
     ]
   );
@@ -4133,36 +7031,73 @@ export function PreviewCanvas() {
     setPagePendingRemove(null);
   }, [pagePendingRemove, removeCompiledBookPage]);
 
-  const sampleInsertAnchor = useMemo((): CompiledPage | null => {
-    if (!compiledBook || !activeDocumentPage || activePreviewTab === 'solutions') return null;
+  const renderSampleDocumentPageCanvas = (tab: 'puzzles' | 'solutions') =>
+    activeDocumentPage ? (
+      <DocumentPageCanvas
+        page={activeDocumentPage}
+        activeDocumentPageId={activeDocumentPageId}
+        currentPuzzleType={currentPuzzleType}
+        currentPuzzle={currentPuzzle}
+        batchPuzzles={batchPuzzles}
+        currentBatchIndex={currentBatchIndex}
+        activePreviewTab={tab}
+        previewRangeMode={previewRangeMode}
+        wordSearchSettings={previewWordSearchSettings}
+        titleWords={previewTitleWords}
+        showSolution={showSolution}
+        showMargins={displayShowMargins}
+        showSafetyZone={displayShowSafetyZone}
+        safetyMarginPx={safetyMarginPx}
+        ptToPx={ptToPx}
+        puzzleGridScale={previewPuzzleGridScale}
+        titleToAnswerGap={titleToAnswerGap}
+        solutionToSolutionGap={solutionToSolutionGap}
+        pageMargin={pageMargin}
+        bookHeaderTitleFontSizePt={headerTitleFontSizeForSample}
+        currentSolutionPageIndex={currentSolutionPageIndex}
+        compiledSolutionPages={compiledSolutionPagesForActiveDoc}
+        canvasEditEnabled={canvasEditEnabled}
+        canvasEditTarget={canvasEditTarget}
+        canvasEditHighlightTarget={canvasEditHighlightTarget}
+        canvasEditHideGuides={canvasEditHideGuides}
+        onCanvasEditTargetChange={handleCanvasEditTargetChange}
+        textEditEnabled={textPageEditEnabled}
+        textEditTarget={textPageEditTarget}
+        textEditHideGuides={textEditHideGuides}
+        onTextEditTargetChange={handleTextEditTargetChange}
+        onTextSettingsChange={handleTextSettingsChange}
+        selectedTextBlockId={selectedTextBlockId}
+        showTextBlockChrome={textPageBlockChromeVisible}
+        onSelectTextBlock={handleSelectTextBlock}
+        onCanvasBackgroundClick={handleCanvasBackgroundClick}
+        onDeleteTextBlock={handleDeleteTextBlock}
+        canvasScale={previewZoom / 100}
+        compiledBook={compiledBook}
+        onTocCanvasClick={handleTocCanvasClick}
+        crosswordSettings={previewCrosswordSettings}
+        crosswordBatchPuzzles={crosswordBatchPuzzles}
+        genericPuzzleSettings={previewGenericSettings}
+        genericBatchPuzzles={genericBatchPuzzles}
+        murdokuSettings={murdokuSettings}
+        murdokuBatchPuzzles={murdokuBatchPuzzles}
+        crosswordCanvasEditEnabled={crosswordCanvasEditEnabled}
+        crosswordEditTarget={crosswordEditTarget}
+        crosswordEditHideGuides={crosswordEditHideGuides}
+        onCrosswordEditTargetChange={handleCrosswordEditTargetChange}
+        genericPuzzleCanvasEditEnabled={genericPuzzleEditEnabled}
+        genericPuzzleEditHideGuides={genericPuzzleEditOpen}
+        onGenericPuzzleEditTargetChange={handleGenericPuzzleEditTargetChange}
+      />
+    ) : null;
 
-    if (activeDocumentPage.moduleType === 'word-search') {
-      const docStart = batchPuzzles.findIndex((puzzle) => puzzle.pageId === activeDocumentPageId);
-      if (docStart < 0) return null;
-      const puzzleIndexInDocument = currentBatchIndex - docStart;
-      return (
-        compiledBook.pages.find(
-          (page): page is Extract<CompiledPage, { kind: 'puzzle' }> =>
-            page.kind === 'puzzle' &&
-            page.sourceDocumentId === activeDocumentPageId &&
-            page.puzzleIndexInDocument === puzzleIndexInDocument
-        ) ?? null
-      );
-    }
-
-    return (
-      compiledBook.pages.find(
-        (page) => page.kind === 'text' && page.sourceDocumentId === activeDocumentPageId
-      ) ?? null
-    );
-  }, [
-    compiledBook,
-    activeDocumentPage,
-    activePreviewTab,
-    batchPuzzles,
-    activeDocumentPageId,
-    currentBatchIndex,
-  ]);
+  const renderShowBothCheckbox = () => (
+    <Checkbox
+      compact
+      label="Show both"
+      checked={previewShowBothPages}
+      onCheckedChange={handlePreviewShowBothChange}
+    />
+  );
 
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 bg-slate-50 relative">
@@ -4226,15 +7161,18 @@ export function PreviewCanvas() {
         {/* LEFT SIDE: Interactive Canvas Preview Area */}
         <div className={cn('preview-canvas-column flex-1 flex flex-col min-h-0 overflow-hidden', !isFlipbookPreview && 'bg-slate-100')}>
 
-          {/* Document tabs — thin bar above canvas toolbar */}
-          {!isFlipbookPreview && (
+          {/* Document tabs — hidden in all-pages & flipbook preview */}
+          {!isLockedPreview && (
             <CanvasDocumentTabsBar
               documentPages={documentPages}
               activeDocumentPageId={activeDocumentPageId}
               onSelect={guardedSetActiveDocumentPageId}
               onRemove={removeDocumentPage}
+              onDuplicate={duplicateDocumentPage}
+              onRename={(id, name) => updateDocumentPage(id, { name })}
               onReorder={reorderDocumentPages}
               onInsert={guardedInsertDocumentPage}
+              onUseAi={guardedInsertDocumentWithAi}
               canUndo={canUndo}
               canRedo={canRedo}
               onUndo={undo}
@@ -4244,15 +7182,21 @@ export function PreviewCanvas() {
 
           {/* Top Canvas Toolbar */}
           {!isFlipbookPreview && (
-          <div className={cn('preview-top-toolbar', hasPreviewPages ? 'bg-white' : 'bg-white/80 backdrop-blur-md')}>
+          <div className={cn('preview-top-toolbar', hasPreviewPages ? 'bg-white' : 'bg-white/80 backdrop-blur-md', isAllPagesPreview && 'preview-top-toolbar--all-pages')}>
             <div className="preview-top-toolbar__primary">
               <div className="preview-top-toolbar__title">
                 <Layout className="w-4 h-4 text-slate-500 shrink-0" />
                 <span className="hidden sm:inline text-xs font-bold text-slate-700 uppercase tracking-wider truncate">
-                  Canvas Workspace
+                  {isAllPagesPreview ? 'All Pages Preview' : 'Canvas Workspace'}
                 </span>
+                {isAllPagesPreview && (
+                  <span className="sm:hidden text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    All Pages
+                  </span>
+                )}
               </div>
 
+              {!isAllPagesPreview && (
               <div className="preview-top-toolbar__guides preview-top-toolbar__guides--mobile">
                 <Checkbox compact label="Margins" checked={showMargins} onCheckedChange={setShowMargins} />
                 <Checkbox
@@ -4262,17 +7206,32 @@ export function PreviewCanvas() {
                   onCheckedChange={setShowSafetyZone}
                 />
               </div>
+              )}
+
+              {isAllPagesPreview && (
+                    <button
+                      type="button"
+                  className="preview-all-pages-close"
+                  title="Close all pages preview"
+                  aria-label="Close all pages preview and return to single page"
+                  onClick={() => handlePreviewRangeModeChange('sample')}
+                >
+                  <X className="h-4 w-4" strokeWidth={2.5} />
+                  <span className="preview-all-pages-close__label">Close</span>
+                </button>
+              )}
             </div>
 
             <div className="preview-top-toolbar__controls">
               {showPuzzleSolutionTabs && (
+              <div className="preview-puzzle-solution-controls">
               <div className="preview-segmented">
                     <button
                       type="button"
                   onClick={() => guardedSetActivePreviewTab('puzzles')}
                   className={cn(
                     'preview-segmented__btn',
-                    activePreviewTab === 'puzzles'
+                    !previewShowBothPages && activePreviewTab === 'puzzles'
                       ? 'preview-segmented__btn--active'
                       : 'preview-segmented__btn--inactive'
                   )}
@@ -4284,14 +7243,16 @@ export function PreviewCanvas() {
                   onClick={() => guardedSetActivePreviewTab('solutions')}
                   className={cn(
                     'preview-segmented__btn',
-                    activePreviewTab === 'solutions'
+                    !previewShowBothPages && activePreviewTab === 'solutions'
                       ? 'preview-segmented__btn--active'
                       : 'preview-segmented__btn--inactive'
                   )}
                     >
                       Solutions Page
                     </button>
-                </div>
+                  </div>
+                  {renderShowBothCheckbox()}
+                  </div>
               )}
 
               <div className="preview-segmented">
@@ -4325,8 +7286,23 @@ export function PreviewCanvas() {
             </div>
 
             <div className="preview-top-toolbar__guides preview-top-toolbar__guides--desktop">
-              <Checkbox compact label="Margins" checked={showMargins} onCheckedChange={setShowMargins} />
-              <Checkbox compact label="KDP Bleed Safe Zone" checked={showSafetyZone} onCheckedChange={setShowSafetyZone} />
+              {!isAllPagesPreview ? (
+                <>
+                  <Checkbox compact label="Margins" checked={showMargins} onCheckedChange={setShowMargins} />
+                  <Checkbox compact label="KDP Bleed Safe Zone" checked={showSafetyZone} onCheckedChange={setShowSafetyZone} />
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="preview-all-pages-close"
+                  title="Close all pages preview"
+                  aria-label="Close all pages preview and return to single page"
+                  onClick={() => handlePreviewRangeModeChange('sample')}
+                >
+                  <X className="h-4 w-4" strokeWidth={2.5} />
+                  <span className="preview-all-pages-close__label">Close</span>
+                </button>
+              )}
             </div>
           </div>
           )}
@@ -4338,13 +7314,14 @@ export function PreviewCanvas() {
               {showPuzzleSolutionTabs && (
               <div className="flex flex-col gap-1">
                 <span className="preview-compact-toolbar__label">Active Tab</span>
+                <div className="preview-puzzle-solution-controls">
                 <div className="preview-segmented w-full">
                   <button
                     type="button"
                     onClick={() => guardedSetActivePreviewTab('puzzles')}
                     className={cn(
                       'preview-segmented__btn flex-1 text-center',
-                      activePreviewTab === 'puzzles'
+                      !previewShowBothPages && activePreviewTab === 'puzzles'
                         ? 'preview-segmented__btn--active'
                         : 'preview-segmented__btn--inactive'
                     )}
@@ -4356,13 +7333,15 @@ export function PreviewCanvas() {
                     onClick={() => guardedSetActivePreviewTab('solutions')}
                     className={cn(
                       'preview-segmented__btn flex-1 text-center',
-                      activePreviewTab === 'solutions'
+                      !previewShowBothPages && activePreviewTab === 'solutions'
                         ? 'preview-segmented__btn--active'
                         : 'preview-segmented__btn--inactive'
                     )}
                   >
                     Solutions
                   </button>
+                </div>
+                {renderShowBothCheckbox()}
                 </div>
               </div>
               )}
@@ -4445,8 +7424,15 @@ export function PreviewCanvas() {
               'preview-viewport',
               isFlipbookPreview && 'preview-viewport--flipbook',
               isAllPagesPreview && 'preview-viewport--all-pages',
-              textPageEditEnabled && 'preview-viewport--text-edit'
+              textPageEditEnabled && 'preview-viewport--text-edit',
+              spacePanActive && 'preview-viewport--hand-tool',
+              handDragActive && 'preview-viewport--hand-tool--dragging'
             )}
+            ref={previewViewportRef}
+            onPointerDown={handleViewportPointerDown}
+            onPointerMove={handleViewportPointerMove}
+            onPointerUp={handleViewportPointerUp}
+            onPointerCancel={handleViewportPointerUp}
           >
             {canvasEditEnabled && !hasCanvasEditPanelOpen && (
               <span className="canvas-edit-hint">
@@ -4455,97 +7441,29 @@ export function PreviewCanvas() {
                   : 'Click an area to edit · drag panel header to move · minimize to preview'}
               </span>
             )}
-            {textPageEditEnabled &&
-              textPageEditPanelOpen &&
-              activeTextSettings &&
-              activeDocumentPage &&
-              activeDocumentPage.moduleType === 'table-of-contents' && (
-              <TocContextualControls
-                pageName={activeDocumentPage.name}
-                settings={activeTextSettings}
-                globalSettings={wordSearchSettings}
-                documentPages={documentPages}
-                tocEntries={compiledBook?.tocEntries ?? []}
-                onSettingsChange={handleTextSettingsChange}
-                onClose={() => setTextPageEditPanelOpen(false)}
-              />
-            )}
-            {textPageEditEnabled &&
-              textPageEditPanelOpen &&
-              activeTextSettings &&
-              activeDocumentPage &&
-              activeDocumentPage.moduleType !== 'table-of-contents' && (
-              <TextPageContextualControls
-                pageName={activeDocumentPage.name}
-                settings={activeTextSettings}
-                globalSettings={wordSearchSettings}
-                activeTarget={textPageEditTarget}
-                selectedBlockId={selectedTextBlockId}
-                onTargetChange={handleTextEditTargetChange}
-                onSelectBlock={(blockId, options) =>
-                  handleSelectTextBlock(blockId, { showChrome: options?.showChrome ?? false })
-                }
-                onSettingsChange={handleTextSettingsChange}
-                documentPages={documentPages}
-                activePageId={activeDocumentPage.id}
-                onApplySeparatorLayouts={applyTextSettingsToDocumentPages}
-                onClose={() => setTextPageEditPanelOpen(false)}
-                onHideBlockChrome={handleHideTextBlockChrome}
-              />
-            )}
-            {textPageEditEnabled && !textPageEditPanelOpen && (
+            {textPageEditEnabled && (
               <span className="canvas-edit-hint">
                 {activeDocumentPage?.moduleType === 'table-of-contents'
-                  ? 'Click the table of contents to open styling controls · click any text to edit'
-                  : 'Drag elements to move · click text to edit · use panel to add more'}
+                  ? 'Edit controls are open in Document · This tab'
+                  : activeDocumentPage?.moduleType === 'title-page'
+                    ? 'Drag elements to move · click text to edit · use Document · This tab'
+                    : 'Edit this page in Document · This tab'}
               </span>
             )}
-            {canvasEditEnabled && hasCanvasEditPanelOpen && editSession && canvasEditTarget && (
-              <CanvasContextualControls
-                target={canvasEditTarget}
-                pageKind={activePreviewTab === 'solutions' ? 'solution' : 'puzzle'}
-                pageIndex={currentBatchIndex}
-                currentPuzzle={batchPuzzles[currentBatchIndex] ?? null}
-                draftSettings={editSession.draft}
-                onDraftSettingsChange={handleCanvasEditDraftSettingsChange}
-                draftPuzzleGridScale={editSession.draftPuzzleGridScale}
-                onDraftPuzzleGridScaleChange={handleCanvasEditDraftGridScaleChange}
-                draftTitleWords={editSession.draftTitleWords}
-                onDraftTitleWordsChange={handleCanvasEditDraftTitleWordsChange}
-                onCommitPage={handleCanvasEditCommitPage}
-                onCommitAll={() => requestCanvasEditCommitAll(false)}
-                onCommitRange={handleCanvasEditCommitRange}
-                onCancel={handleCanvasEditCancel}
-                hasUnsavedChanges={canvasEditHasUnsavedChanges}
-                canApplyToAllPages={canvasEditCanApplyToAllPages}
-                documentPuzzleCount={activeDocumentPuzzleCount}
-                rangeError={canvasEditRangeError}
-                canApplyToSelectedPages={canApplyToSelectedPages}
-                editTabs={canvasEditPanelTabs}
-                activeEditTabId={activeCanvasEditTabId}
-                onEditTabSelect={handleCanvasEditTabSelect}
-                onEditTabClose={handleCanvasEditTabClose}
-              />
+            {canvasEditEnabled && hasCanvasEditPanelOpen && (
+              <span className="canvas-edit-hint">
+                Edit controls are open in Document · This tab
+              </span>
             )}
-            {activeDocumentPage?.moduleType === 'crossword' &&
-              crosswordEditPanelOpen &&
-              crosswordSettings && (
-              <CrosswordContextualControls
-                settings={crosswordSettings}
-                activeTarget={crosswordEditTarget}
-                onTargetChange={setCrosswordEditTarget}
-                onSettingsChange={updateCrosswordSettings}
-                onClose={() => setCrosswordEditPanelOpen(false)}
-              />
+            {crosswordCanvasEditEnabled && crosswordEditPanelOpen && (
+              <span className="canvas-edit-hint">
+                Edit controls are open in Document · This tab
+              </span>
             )}
-            {activeDocumentPage?.moduleType === 'crossword' && !crosswordEditPanelOpen && (
-              <button
-                type="button"
-                className="canvas-edit-hint"
-                onClick={() => setCrosswordEditPanelOpen(true)}
-              >
-                Open crossword canvas controls
-              </button>
+            {crosswordCanvasEditEnabled && !crosswordEditPanelOpen && (
+              <span className="canvas-edit-hint">
+                Click title, grid, or clues to open edit controls
+              </span>
             )}
             {hasPuzzles || hasPreviewPages ? (
               isFlipbookPreview ? (
@@ -4566,71 +7484,32 @@ export function PreviewCanvas() {
                   <div
                     className={cn(
                       'origin-top transition-transform duration-200 shrink-0 preview-canvas-scale',
+                      previewShowBothPages && 'preview-both-pages-scale',
                       textPageEditEnabled && 'preview-canvas-scale--text-edit'
                     )}
                 style={{
                   transform: `scale(${previewZoom / 100})`,
                   transformOrigin: 'top center',
-                  width: widthPx,
+                  width: previewShowBothPages ? undefined : widthPx,
                   overflow: 'visible',
+                  ['--preview-page-width' as string]: `${widthPx}px`,
                 }}
               >
-                      <DocumentPageCanvas
-                      page={activeDocumentPage}
-                        activeDocumentPageId={activeDocumentPageId}
-                        currentPuzzleType={currentPuzzleType}
-                        currentPuzzle={currentPuzzle}
-                        batchPuzzles={batchPuzzles}
-                        currentBatchIndex={currentBatchIndex}
-                        activePreviewTab={activePreviewTab}
-                        previewRangeMode={previewRangeMode}
-                      wordSearchSettings={previewWordSearchSettings}
-                      titleWords={previewTitleWords}
-                        showSolution={showSolution}
-                      showMargins={displayShowMargins}
-                      showSafetyZone={displayShowSafetyZone}
-                        safetyMarginPx={safetyMarginPx}
-                        ptToPx={ptToPx}
-                      puzzleGridScale={previewPuzzleGridScale}
-                        titleToAnswerGap={titleToAnswerGap}
-                        solutionToSolutionGap={solutionToSolutionGap}
-                        pageMargin={pageMargin}
-                      bookHeaderTitleFontSizePt={headerTitleFontSizeForSample}
-                      currentSolutionPageIndex={currentSolutionPageIndex}
-                      compiledSolutionPages={compiledSolutionPagesForActiveDoc}
-                      canvasEditEnabled={canvasEditEnabled}
-                      canvasEditTarget={canvasEditTarget}
-                      canvasEditHighlightTarget={canvasEditHighlightTarget}
-                      canvasEditHideGuides={canvasEditHideGuides}
-                      onCanvasEditTargetChange={handleCanvasEditTargetChange}
-                      textEditEnabled={textPageEditEnabled}
-                      textEditTarget={textPageEditTarget}
-                      textEditHideGuides={textEditHideGuides}
-                      onTextEditTargetChange={handleTextEditTargetChange}
-                      onTextSettingsChange={handleTextSettingsChange}
-                      selectedTextBlockId={selectedTextBlockId}
-                      showTextBlockChrome={textPageBlockChromeVisible}
-                      onSelectTextBlock={handleSelectTextBlock}
-                      onCanvasBackgroundClick={handleCanvasBackgroundClick}
-                      onDeleteTextBlock={handleDeleteTextBlock}
-                      canvasScale={previewZoom / 100}
-                      compiledBook={compiledBook}
-                      onTocCanvasClick={handleTocCanvasClick}
-                      crosswordSettings={crosswordSettings}
-                      />
+                      {previewShowBothPages ? (
+                        <div className="preview-both-pages">
+                          <div className="preview-both-pages__pane">
+                            <span className="preview-both-pages__label">Puzzle page</span>
+                            {renderSampleDocumentPageCanvas('puzzles')}
+                          </div>
+                          <div className="preview-both-pages__pane">
+                            <span className="preview-both-pages__label">Solution page</span>
+                            {renderSampleDocumentPageCanvas('solutions')}
+                          </div>
+                        </div>
+                      ) : (
+                        renderSampleDocumentPageCanvas(activePreviewTab)
+                      )}
                     </div>
-                  {sampleInsertAnchor && (
-                    <button
-                      type="button"
-                      className="preview-sample-insert-after"
-                      title="Add blank page after"
-                      aria-label="Add blank page after"
-                      onClick={() => handleInsertSeparatorAfter(sampleInsertAnchor)}
-                      style={{ transform: `scale(${Math.max(0.85, previewZoom / 100)})` }}
-                    >
-                      +
-                    </button>
-                  )}
                 </div>
               ) : isAllPagesPreview ? (
                 <AllPagesGridPreview
@@ -4649,11 +7528,6 @@ export function PreviewCanvas() {
                           onRemove={
                             compiledPage.kind === 'text' || compiledPage.kind === 'puzzle'
                               ? () => handleRequestRemoveCompiledPage(compiledPage)
-                              : undefined
-                          }
-                          onInsertAfter={
-                            compiledPage.kind !== 'solution'
-                              ? () => handleInsertSeparatorAfter(compiledPage)
                               : undefined
                           }
                         >
@@ -4758,6 +7632,12 @@ export function PreviewCanvas() {
                                 onCanvasEditTargetChange={handleCanvasEditTargetChange}
                                 compiledBook={compiledBook}
                                 crosswordSettings={crosswordSettings}
+                                crosswordBatchPuzzles={crosswordBatchPuzzles}
+                                genericPuzzleSettings={genericPuzzleSettings}
+                                genericBatchPuzzles={genericBatchPuzzles}
+                                murdokuSettings={murdokuSettings}
+                                murdokuBatchPuzzles={murdokuBatchPuzzles}
+                                crosswordCanvasEditEnabled={false}
                               />
                             </AllPagesGridPreview.Item>
                           ))
@@ -4885,7 +7765,19 @@ export function PreviewCanvas() {
                         canvasScale={previewZoom / 100}
                         compiledBook={compiledBook}
                         onTocCanvasClick={handleTocCanvasClick}
-                        crosswordSettings={crosswordSettings}
+                        crosswordSettings={previewCrosswordSettings}
+                        crosswordBatchPuzzles={crosswordBatchPuzzles}
+                        genericPuzzleSettings={previewGenericSettings}
+                        genericBatchPuzzles={genericBatchPuzzles}
+                        murdokuSettings={murdokuSettings}
+                        murdokuBatchPuzzles={murdokuBatchPuzzles}
+                        crosswordCanvasEditEnabled={crosswordCanvasEditEnabled}
+                        crosswordEditTarget={crosswordEditTarget}
+                        crosswordEditHideGuides={crosswordEditHideGuides}
+                        onCrosswordEditTargetChange={handleCrosswordEditTargetChange}
+                        genericPuzzleCanvasEditEnabled={genericPuzzleEditEnabled}
+                        genericPuzzleEditHideGuides={genericPuzzleEditOpen}
+                        onGenericPuzzleEditTargetChange={handleGenericPuzzleEditTargetChange}
                           />
                         </div>
                   ))
@@ -4987,13 +7879,14 @@ export function PreviewCanvas() {
 
               {isFlipbookPreview && showPuzzleSolutionTabs ? (
                 <div className="preview-pagination-bar__group">
+                  <div className="preview-puzzle-solution-controls">
                   <div className="preview-segmented">
                     <button
                       type="button"
                       onClick={() => guardedSetActivePreviewTab('puzzles')}
                       className={cn(
                         'preview-segmented__btn',
-                        activePreviewTab === 'puzzles'
+                        !previewShowBothPages && activePreviewTab === 'puzzles'
                           ? 'preview-segmented__btn--active'
                           : 'preview-segmented__btn--inactive'
                       )}
@@ -5005,7 +7898,7 @@ export function PreviewCanvas() {
                       onClick={() => guardedSetActivePreviewTab('solutions')}
                       className={cn(
                         'preview-segmented__btn',
-                        activePreviewTab === 'solutions'
+                        !previewShowBothPages && activePreviewTab === 'solutions'
                           ? 'preview-segmented__btn--active'
                           : 'preview-segmented__btn--inactive'
                       )}
@@ -5013,8 +7906,10 @@ export function PreviewCanvas() {
                       Solutions
                     </button>
                   </div>
+                  {renderShowBothCheckbox()}
+                  </div>
                 </div>
-              ) : activePreviewTab === 'solutions' ? (
+              ) : !previewShowBothPages && activePreviewTab === 'solutions' ? (
                 <div className="preview-pagination-bar__group">
                   <Button
                     size="xs"
@@ -5028,8 +7923,12 @@ export function PreviewCanvas() {
                   </Button>
                   <input
                     type="number"
-                    min={1}
-                    max={solutionPages.length || 1}
+                    min={0}
+                    max={
+                      activeDocIsBatchModule
+                        ? crosswordSolutionPageCount
+                        : solutionPages.length || 1
+                    }
                     value={solutionPageInputValue}
                     onChange={(e) => setSolutionPageInputValue(e.target.value)}
                     onKeyDown={(e) => {
@@ -5043,13 +7942,30 @@ export function PreviewCanvas() {
                   />
                   <span className="text-[10px] font-bold text-slate-400">/</span>
                   <span className="text-[10px] font-bold text-slate-600 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200">
-                    {solutionPages.length || 1}
+                    {activeDocIsBatchModule
+                      ? crosswordSolutionPageCount
+                      : solutionPages.length || 1}
                   </span>
                   <Button
                     size="xs"
                     variant="outline"
-                    onClick={() => setCurrentSolutionPageIndex(Math.min((solutionPages.length || 1) - 1, currentSolutionPageIndex + 1))}
-                    disabled={currentSolutionPageIndex === (solutionPages.length || 1) - 1}
+                    onClick={() =>
+                      setCurrentSolutionPageIndex(
+                        Math.min(
+                          (activeDocIsBatchModule
+                            ? crosswordSolutionPageCount
+                            : solutionPages.length || 1) - 1,
+                          currentSolutionPageIndex + 1
+                        )
+                      )
+                    }
+                    disabled={
+                      currentSolutionPageIndex ===
+                      (activeDocIsBatchModule
+                        ? crosswordSolutionPageCount
+                        : solutionPages.length || 1) -
+                        1
+                    }
                     className="p-0.5 hover:bg-slate-100 transition-colors"
                     title="Next Page"
                   >
@@ -5062,6 +7978,14 @@ export function PreviewCanvas() {
                     size="xs"
                     variant="outline"
                     onClick={() => {
+                      if (
+                        activeDocIsBatchModule &&
+                        activeCrosswordPuzzleCount > 0
+                      ) {
+                        const step = activeDocIsGenericModule ? genericPuzzlesPerPage : 1;
+                        guardedSetCurrentBatchIndex(Math.max(0, currentBatchIndex - step));
+                        return;
+                      }
                       if (hasPreviewPages && activeDocumentPuzzleStartIndex >= 0) {
                         guardedSetCurrentBatchIndex(
                           Math.max(activeDocumentPuzzleStartIndex, currentBatchIndex - 1)
@@ -5071,7 +7995,10 @@ export function PreviewCanvas() {
                       guardedSetCurrentBatchIndex(Math.max(0, currentBatchIndex - 1));
                     }}
                     disabled={
-                      hasPreviewPages && activeDocumentPuzzleStartIndex >= 0
+                      activeDocIsBatchModule &&
+                      activeCrosswordPuzzleCount > 0
+                        ? batchPuzzlePageNumber <= 1
+                        : hasPreviewPages && activeDocumentPuzzleStartIndex >= 0
                         ? currentBatchIndex <= activeDocumentPuzzleStartIndex
                         : currentBatchIndex === 0
                     }
@@ -5082,9 +8009,12 @@ export function PreviewCanvas() {
                   </Button>
                   <input
                     type="number"
-                    min={1}
+                    min={0}
                     max={
-                      hasPreviewPages && activeDocumentPuzzleCount > 0
+                      activeDocIsBatchModule &&
+                      activeCrosswordPuzzleCount > 0
+                        ? batchPuzzlePageCount
+                        : hasPreviewPages && activeDocumentPuzzleCount > 0
                         ? activeDocumentPuzzleCount
                         : batchPuzzles.length || 1
                     }
@@ -5092,6 +8022,19 @@ export function PreviewCanvas() {
                     onChange={(e) => setBatchPageInputValue(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
+                        if (
+                          activeDocIsBatchModule &&
+                          activeCrosswordPuzzleCount > 0
+                        ) {
+                          const localPage = Math.max(
+                            1,
+                            Math.min(batchPuzzlePageCount, Number(e.currentTarget.value) || 1)
+                          );
+                          const step = activeDocIsGenericModule ? genericPuzzlesPerPage : 1;
+                          guardedSetCurrentBatchIndex((localPage - 1) * step);
+                          setBatchPageInputValue(localPage.toString());
+                          return;
+                        }
                         if (hasPreviewPages && activeDocumentPuzzleCount > 0 && activeDocumentPuzzleStartIndex >= 0) {
                           const localPage = Math.max(
                             1,
@@ -5105,6 +8048,19 @@ export function PreviewCanvas() {
                       }
                     }}
                     onBlur={(e) => {
+                      if (
+                        activeDocIsBatchModule &&
+                        activeCrosswordPuzzleCount > 0
+                      ) {
+                        const localPage = Math.max(
+                          1,
+                          Math.min(batchPuzzlePageCount, Number(e.currentTarget.value) || 1)
+                        );
+                        const step = activeDocIsGenericModule ? genericPuzzlesPerPage : 1;
+                        guardedSetCurrentBatchIndex((localPage - 1) * step);
+                        setBatchPageInputValue(localPage.toString());
+                        return;
+                      }
                       if (hasPreviewPages && activeDocumentPuzzleCount > 0 && activeDocumentPuzzleStartIndex >= 0) {
                         const localPage = Math.max(
                           1,
@@ -5121,7 +8077,10 @@ export function PreviewCanvas() {
                   />
                   <span className="text-[10px] font-bold text-slate-400">/</span>
                   <span className="text-[10px] font-bold text-slate-600 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200">
-                    {hasPreviewPages && activeDocumentPuzzleCount > 0
+                    {activeDocIsBatchModule &&
+                    activeCrosswordPuzzleCount > 0
+                      ? batchPuzzlePageCount
+                      : hasPreviewPages && activeDocumentPuzzleCount > 0
                       ? activeDocumentPuzzleCount
                       : batchPuzzles.length || 1}
                   </span>
@@ -5134,6 +8093,19 @@ export function PreviewCanvas() {
                     size="xs"
                     variant="outline"
                     onClick={() => {
+                      if (
+                        activeDocIsBatchModule &&
+                        activeCrosswordPuzzleCount > 0
+                      ) {
+                        const step = activeDocIsGenericModule ? genericPuzzlesPerPage : 1;
+                        guardedSetCurrentBatchIndex(
+                          Math.min(
+                            activeCrosswordPuzzleCount - 1,
+                            currentBatchIndex + step
+                          )
+                        );
+                        return;
+                      }
                       if (hasPreviewPages && activeDocumentPuzzleStartIndex >= 0) {
                         const lastIndex = activeDocumentPuzzleStartIndex + activeDocumentPuzzleCount - 1;
                         guardedSetCurrentBatchIndex(Math.min(lastIndex, currentBatchIndex + 1));
@@ -5142,7 +8114,10 @@ export function PreviewCanvas() {
                       guardedSetCurrentBatchIndex(Math.min((batchPuzzles.length || 1) - 1, currentBatchIndex + 1));
                     }}
                     disabled={
-                      hasPreviewPages && activeDocumentPuzzleStartIndex >= 0
+                      activeDocIsBatchModule &&
+                      activeCrosswordPuzzleCount > 0
+                        ? batchPuzzlePageNumber >= batchPuzzlePageCount
+                        : hasPreviewPages && activeDocumentPuzzleStartIndex >= 0
                         ? currentBatchIndex >= activeDocumentPuzzleStartIndex + activeDocumentPuzzleCount - 1
                         : currentBatchIndex === (batchPuzzles.length || 1) - 1
                     }
@@ -5166,7 +8141,7 @@ export function PreviewCanvas() {
                 </Button>
                   <input
                     type="number"
-                    min={1}
+                    min={0}
                     max={documentPages.length || 1}
                     value={documentPageInputValue}
                     onChange={(e) => setDocumentPageInputValue(e.target.value)}
@@ -5211,7 +8186,7 @@ export function PreviewCanvas() {
                 </span>
                 <input
                   type="range"
-                  min={25}
+                  min={0}
                   max={150}
                   value={previewZoom}
                   onChange={(e) => setPreviewZoom(Number(e.target.value))}
@@ -5234,8 +8209,20 @@ export function PreviewCanvas() {
         onCommitPage={handleCanvasEditUnsavedCommitPage}
         onCommitAll={handleCanvasEditUnsavedCommitAll}
         onDiscard={handleCanvasEditUnsavedDiscard}
-        hasUnsavedChanges={canvasEditHasUnsavedChanges}
-        canApplyToAllPages={canvasEditCanApplyToAllPages}
+        hasUnsavedChanges={
+          unsavedDialogKind === 'crossword'
+            ? crosswordHasUnsavedChanges
+            : unsavedDialogKind === 'generic'
+              ? genericPuzzleHasUnsavedChanges
+              : canvasEditHasUnsavedChanges
+        }
+        canApplyToAllPages={
+          unsavedDialogKind === 'crossword'
+            ? crosswordHasUnsavedChanges || pageCrosswordOverrides.size > 0
+            : unsavedDialogKind === 'generic'
+              ? genericPuzzleHasUnsavedChanges
+              : canvasEditCanApplyToAllPages
+        }
       />
 
       <CanvasApplyToAllConfirmDialog
@@ -5254,6 +8241,14 @@ export function PreviewCanvas() {
         preserveEditedPages={preserveEditedPagesOnApply}
         onPreserveEditedPagesChange={setPreserveEditedPagesOnApply}
         onConfirm={handleApplyToAllConfirm}
+      />
+      <AiProjectWizard
+        open={aiAppendOpen}
+        onClose={() => setAiAppendOpen(false)}
+        onComplete={() => setAiAppendOpen(false)}
+        mode="append"
+        insertPosition={aiInsertPosition}
+        defaultTitle={projectName || 'Puzzle Book'}
       />
     </div>
   );

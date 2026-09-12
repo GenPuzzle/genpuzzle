@@ -10,11 +10,13 @@ export type PuzzleType =
   | 'sudoku'
   | 'cryptogram'
   | 'word-scramble'
+  | 'trivia'
   | 'maze'
   | 'word-match'
-  | 'dot-to-dot';
+  | 'dot-to-dot'
+  | 'murdoku';
 
-export type Difficulty = 'easy' | 'medium' | 'hard';
+export type Difficulty = 'easy' | 'medium' | 'hard' | 'expert';
 
 export interface Position {
   row: number;
@@ -83,10 +85,39 @@ export interface WordSearchCoreSettings {
   // Quantity
   numberOfPuzzles: number;
   puzzlesStartingNumber: number;
+  /** Split each puzzle into two pages: layout/clues first, grid only second. */
+  twoPagePuzzles: boolean;
 
   // Grid Structure
   lettersAcross: number;
   lettersDown: number;
+  /** Fit word-search grid scale to the page safe area + page-number zone. */
+  autoBalanceGrid?: boolean;
+  /** Fit title / grid / word-list fonts so text stays inside the page. */
+  autoBalanceFont?: boolean;
+
+  /**
+   * Shape word search: letters only fill the silhouette of an uploaded PNG/JPEG.
+   * Outside-shape cells stay empty so the grid follows the image outline.
+   */
+  shapeWordSearchEnabled?: boolean;
+  /**
+   * `common` = one silhouette for every puzzle.
+   * `per-puzzle` = separate silhouette per puzzle (batch upload).
+   */
+  shapeMaskMode?: 'common' | 'per-puzzle';
+  /** Data URL of the shared silhouette (common mode). */
+  shapeMaskImage?: string;
+  /** Per-puzzle silhouette data URLs (per-puzzle mode), index = puzzleIndexInDocument. */
+  shapeMaskImages?: string[];
+  /** Alpha cutoff 0–255 when sampling transparent PNGs. Default 40. */
+  shapeMaskAlphaThreshold?: number;
+  /** How the silhouette maps onto the letter grid. */
+  shapeMaskFit?: 'contain' | 'cover' | 'stretch';
+  /** When true, draw the uploaded silhouette image under the letters. */
+  shapeMaskShowImage?: boolean;
+  /** Opacity of the shown silhouette image (0–100). Default 35. */
+  shapeMaskImageOpacity?: number;
 
   // Allowed Directions
   allowUp: boolean;
@@ -220,6 +251,19 @@ export interface WordListSettings {
   // Words Per Puzzle
   wordsPerPuzzle: number;
 
+  /**
+   * Each puzzle uses exactly one word from the list (word i → puzzle i).
+   * That word is placed on the grid `wordRepeatCount` times; the printed list shows it once.
+   */
+  oneWordPerPuzzle?: boolean;
+  /** How many times the single word appears on the grid (one-word mode). Default 5. */
+  wordRepeatCount?: number;
+  /**
+   * One-word mode: fill empty cells using only letters from that puzzle's word
+   * (e.g. FISH → only F, I, S, H).
+   */
+  fillWithWordLettersOnly?: boolean;
+
   // Visibility
   hideWordList: boolean;
 
@@ -261,6 +305,10 @@ export interface PuzzlePageColors {
   /** Color of inner cell grid lines (puzzle pages). */
   gridLinesColor?: string;
   puzzleColor: string;
+  /** Outline color for puzzle grid letters (0 thickness = no stroke). */
+  puzzleLetterStrokeColor?: string;
+  /** Stroke thickness for puzzle grid letters in CSS px. */
+  puzzleLetterStrokeThickness?: number;
   wordListTitleColor: string;
   wordListColor: string;
   backgroundImage?: string;
@@ -287,9 +335,13 @@ export interface AnswerPageColors {
   // Solution Display Mode (fixed to line-highlight)
   
   // Solution Stroke/Frame Settings
-  solutionStrokeThickness: number; // 1-15px
+  solutionStrokeThickness: number; // 1-30px — highlight bar body thickness
   solutionStrokePadding: number; // padding between letters and stroke
-  solutionFrameColor: string; // default color of the highlight frame (overridable per word)
+  solutionFrameColor: string; // highlight fill color (overridable per word)
+  /** Outline color for highlight capsules (0 thickness = no outline). */
+  solutionHighlightStrokeColor?: string;
+  /** Outline thickness for highlight capsules in CSS px. */
+  solutionHighlightStrokeThickness?: number;
   solutionFrameStyle: 'rounded' | 'square' | 'circle'; // style of the frame
   solutionFrameRadius: number; // border radius for rounded style (0-50)
   // Highlight mode fixed to box-frame, Line caps fixed to round (rounded ends)
@@ -336,6 +388,13 @@ export interface BookSettings {
   includeBleed: boolean;
   includeSolution: boolean;
   puzzlesPerPage: number;
+  /**
+   * When true, compile/export interleaves puzzle types within each chapter:
+   * word search #1, crossword #1, scramble #1, … then #2 of each type, etc.
+   */
+  mixPuzzles?: boolean;
+  /** Thematic chapter topics from AI by-chapter generation (used when mixing). */
+  chapterTopics?: string[];
 }
 
 export type TrimSize =
@@ -378,12 +437,19 @@ export interface WordSearchPuzzle {
   words: string[];
   displayWords: string[]; // Original words with spaces preserved for display
   solution: Map<string, Position[]>;
+  /**
+   * When set, true cells are inside the silhouette (letters); false = outside (blank).
+   * Outside cells in `grid` are left as empty strings.
+   */
+  shapeMask?: boolean[][];
   puzzleNumber?: number;
   /** 0-based index within the source document (for fun facts / custom titles). */
   puzzleIndexInDocument?: number;
   /** Source document module id (multi-document book builder) */
   pageId?: string;
   pageName?: string;
+  /** 0-based thematic chapter when generated as mixed-per-chapter. */
+  chapterIndex?: number;
 }
 
 // Batch Puzzle for preview
@@ -405,38 +471,156 @@ export interface CrosswordPuzzle {
   grid: CrosswordCell[][];
   acrossClues: { number: number; clue: string; answer: string }[];
   downClues: { number: number; clue: string; answer: string }[];
+  puzzleNumber?: number;
+  /** 0-based index within the source document. */
+  puzzleIndexInDocument?: number;
+  /** Source document module id */
+  pageId?: string;
+  pageName?: string;
+  /** 0-based thematic chapter when generated as mixed-per-chapter. */
+  chapterIndex?: number;
 }
 
+/** Shared batch metadata for puzzles that belong to a document tab. */
+export interface DocumentBatchPuzzleMeta {
+  puzzleNumber?: number;
+  /** 0-based index within the source document. */
+  puzzleIndexInDocument?: number;
+  /** Source document module id */
+  pageId?: string;
+  pageName?: string;
+  /** 0-based thematic chapter when generated as mixed-per-chapter. */
+  chapterIndex?: number;
+}
+
+/** Arithmetic operation shown on a Calcudoku cage. */
+export type CalcudokuOperation = '+' | '-' | '*' | '/';
+
+export interface CalcudokuCage {
+  id: string;
+  cells: Position[];
+  operation: CalcudokuOperation;
+  target: number;
+}
+
+export type SudokuVariant = 'standard' | 'calcudoku';
+
 // Sudoku Specific
-export interface SudokuPuzzle {
+export interface SudokuPuzzle extends DocumentBatchPuzzleMeta {
   type: 'sudoku';
   grid: number[][];
   solution: number[][];
   difficulty: Difficulty;
+  /**
+   * Board size (cells per side). Defaults to 9 when missing on older projects.
+   * Standard Sudoku uses 4/6/9/12/16/25; Calcudoku uses 4–9.
+   */
+  size?: number;
+  /** Absent or `standard` on older saved puzzles. */
+  variant?: SudokuVariant;
+  /** Present when variant is calcudoku. */
+  cages?: CalcudokuCage[];
+  seed?: number;
 }
 
 // Cryptogram Specific
-export interface CryptogramPuzzle {
+export interface CryptogramPuzzle extends DocumentBatchPuzzleMeta {
   type: 'cryptogram';
   originalText: string;
   encodedText: string;
+  /** cipher token -> original letter */
   letterMapping: Record<string, string>;
+  /** Letter tokens (A-Z) or number tokens ("1".."26"). */
+  cipherType?: 'letters' | 'numbers';
+  /** Original letters revealed as hints in the on-page answer key. */
+  hintLetters?: string[];
 }
 
 // Word Scramble Specific
-export interface WordScramblePuzzle {
+export interface WordScramblePuzzle extends DocumentBatchPuzzleMeta {
   type: 'word-scramble';
   words: { original: string; scrambled: string }[];
 }
 
+// Trivia Specific (re-exported shape; full helpers live in ./trivia)
+export interface TriviaPuzzle extends DocumentBatchPuzzleMeta {
+  type: 'trivia';
+  questions: Array<{
+    prompt: string;
+    suggestions: string[];
+    answer: string;
+    answerIndex: number;
+  }>;
+}
+
+export type MazeShape = 'square' | 'circle' | 'triangle' | 'diamond' | 'hexagon';
+export type MazeStartSide = 'left' | 'middle' | 'right' | 'mixed';
+export type MazeEndSide = 'bottom' | 'middle' | 'left' | 'right' | 'mixed';
+export type MazeMarkerStyle = 'point' | 'arrow' | 'image';
+/** How the maze solution guide path is stroked. */
+export type MazeSolutionPathStyle = 'solid' | 'dashed' | 'dotted';
+
+/** Shapes ordered easy → hard for mixed-shape books. */
+export const MAZE_SHAPE_DIFFICULTY_ORDER: Array<{
+  shape: MazeShape;
+  level: string;
+  label: string;
+}> = [
+  { shape: 'square', level: 'Easy', label: 'Square' },
+  { shape: 'circle', level: 'Easy–Medium', label: 'Circle' },
+  { shape: 'diamond', level: 'Medium', label: 'Diamond' },
+  { shape: 'hexagon', level: 'Medium–Hard', label: 'Hexagon' },
+  { shape: 'triangle', level: 'Hard', label: 'Triangle' },
+];
+
+/** Split N puzzles across the easy→hard shape ladder. */
+export function allocateMixedMazeShapes(count: number): Array<{
+  shape: MazeShape;
+  level: string;
+  label: string;
+  count: number;
+}> {
+  const n = Math.max(0, Math.round(count));
+  const levels = MAZE_SHAPE_DIFFICULTY_ORDER;
+  const base = Math.floor(n / levels.length);
+  let rem = n % levels.length;
+  return levels.map((entry) => {
+    const extra = rem > 0 ? 1 : 0;
+    if (rem > 0) rem -= 1;
+    return { ...entry, count: base + extra };
+  });
+}
+
 // Maze Specific
-export interface MazePuzzle {
+export interface MazePuzzle extends DocumentBatchPuzzleMeta {
   type: 'maze';
   grid: boolean[][];
   start: Position;
   end: Position;
   size: 'small' | 'medium' | 'large' | 'xl';
+  /** Actual logical cell count used (max side when rectangular). */
+  gridSize?: number;
+  /** Logical rows (length). */
+  gridLength?: number;
+  /** Logical columns (width). */
+  gridWidth?: number;
+  /** Difficulty: easy/medium ≈ turn count; hard ≈ longer route. */
+  difficulty?: Difficulty;
+  /** Overall silhouette of the maze (default rectangle/square). */
+  shape?: MazeShape;
+  /** Wall-grid cells outside the maze silhouette (not drawn). */
+  outside?: boolean[][];
+  /** Unique path from start to end (cell coordinates in the wall grid). */
+  solutionPath?: Position[];
 }
+
+/** Puzzle types that use the generic document-module pipeline. */
+export type GenericBatchPuzzle =
+  | SudokuPuzzle
+  | MazePuzzle
+  | CryptogramPuzzle
+  | WordScramblePuzzle
+  | TriviaPuzzle;
 
 // Word Match Specific
 export interface WordMatchPuzzle {
@@ -460,9 +644,13 @@ export type Puzzle =
   | SudokuPuzzle
   | CryptogramPuzzle
   | WordScramblePuzzle
+  | TriviaPuzzle
   | MazePuzzle
   | WordMatchPuzzle
-  | DotToDotPuzzle;
+  | DotToDotPuzzle
+  | import('./murdoku').MurdokuPuzzle;
+
+export type { MurdokuPuzzle } from './murdoku';
 
 // Saved Puzzle
 export interface SavedPuzzle {
@@ -497,8 +685,19 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
     core: {
       numberOfPuzzles: 1,
       puzzlesStartingNumber: 1,
+      twoPagePuzzles: false,
       lettersAcross: 15,
       lettersDown: 15,
+      autoBalanceGrid: false,
+      autoBalanceFont: false,
+      shapeWordSearchEnabled: false,
+      shapeMaskMode: 'common',
+      shapeMaskImage: undefined,
+      shapeMaskImages: [],
+      shapeMaskAlphaThreshold: 40,
+      shapeMaskFit: 'contain',
+      shapeMaskShowImage: false,
+      shapeMaskImageOpacity: 35,
       allowUp: false,
       allowDown: true,
       allowLeft: false,
@@ -558,6 +757,9 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
     },
     wordList: {
       wordsPerPuzzle: 10,
+      oneWordPerPuzzle: false,
+      wordRepeatCount: 5,
+      fillWithWordLettersOnly: false,
       hideWordList: false,
       selectWordListOption: 'manual',
       aiTheme: '',
@@ -584,6 +786,8 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
         boxColor: '#1f2937',
         gridLinesColor: '#d1d5db',
         puzzleColor: '#1f2937',
+        puzzleLetterStrokeColor: '#000000',
+        puzzleLetterStrokeThickness: 0,
         wordListTitleColor: '#374151',
         wordListColor: '#4b5563',
         backgroundImage: undefined,
@@ -602,6 +806,8 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
         solutionStrokeThickness: 12,
         solutionStrokePadding: 0,
         solutionFrameColor: '#000000',
+        solutionHighlightStrokeColor: '#000000',
+        solutionHighlightStrokeThickness: 0,
         solutionFrameStyle: 'rounded',
         solutionFrameRadius: 4,
         solutionHighlightAlpha: 30,

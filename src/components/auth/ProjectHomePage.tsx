@@ -1,14 +1,15 @@
 'use client';
 
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import Image from 'next/image';
-import { FolderOpen, FilePlus2, LayoutTemplate, LogOut, Clock } from 'lucide-react';
+import { FolderOpen, FilePlus2, LayoutTemplate, LogOut, Clock, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth-context';
 import { useLeavePagePrompt } from '@/lib/leave-page-prompt-context';
 import { useApp } from '@/lib/app-context';
 import { GP_FILE_EXTENSION, readGpProjectFromFile } from '@/lib/project-file';
 import { toast } from 'sonner';
+import { AiProjectWizard } from '@/components/ai/AiProjectWizard';
 
 interface ProjectHomePageProps {
   onEnterEditor: () => void;
@@ -19,12 +20,13 @@ export function ProjectHomePage({ onEnterEditor }: ProjectHomePageProps) {
   const { promptLeave } = useLeavePagePrompt();
   const app = useApp();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [aiWizardOpen, setAiWizardOpen] = useState(false);
 
   const handleSignOut = () => {
     promptLeave(() => logout(), { reason: 'sign-out' });
   };
 
-  const handleNewProject = () => {
+  const handleManualNewProject = () => {
     app.resetToNewProject();
     onEnterEditor();
     toast.success('New project created');
@@ -91,7 +93,7 @@ export function ProjectHomePage({ onEnterEditor }: ProjectHomePageProps) {
             onChange={handleFileSelected}
           />
 
-          <div className="grid gap-5 sm:grid-cols-3">
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
             <button
               type="button"
               onClick={handleOpenProject}
@@ -108,15 +110,29 @@ export function ProjectHomePage({ onEnterEditor }: ProjectHomePageProps) {
 
             <button
               type="button"
-              onClick={handleNewProject}
-              className="group flex flex-col items-start rounded-2xl border border-slate-200 bg-white p-6 text-left shadow-sm transition hover:border-[var(--gp-blue)] hover:shadow-md"
+              onClick={handleManualNewProject}
+              className="group flex flex-col items-start rounded-2xl border border-slate-200 bg-white p-6 text-left shadow-sm transition hover:border-teal-500 hover:shadow-md"
             >
               <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-teal-50 text-teal-700 transition group-hover:bg-teal-600 group-hover:text-white">
                 <FilePlus2 className="h-6 w-6" />
               </div>
-              <h2 className="text-lg font-semibold text-slate-900">New project</h2>
+              <h2 className="text-lg font-semibold text-slate-900">Create Manually</h2>
               <p className="mt-2 text-sm leading-relaxed text-slate-500">
-                Start a blank puzzle book from scratch.
+                Start a blank puzzle book and build everything yourself.
+              </p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setAiWizardOpen(true)}
+              className="group flex flex-col items-start rounded-2xl border border-slate-200 bg-white p-6 text-left shadow-sm transition hover:border-violet-400 hover:shadow-md"
+            >
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-violet-50 text-violet-700 transition group-hover:bg-violet-600 group-hover:text-white">
+                <Sparkles className="h-6 w-6" />
+              </div>
+              <h2 className="text-lg font-semibold text-slate-900">Create with AI</h2>
+              <p className="mt-2 text-sm leading-relaxed text-slate-500">
+                Generate editable puzzle content from your book topic.
               </p>
             </button>
 
@@ -140,6 +156,12 @@ export function ProjectHomePage({ onEnterEditor }: ProjectHomePageProps) {
           </div>
         </div>
       </main>
+
+      <AiProjectWizard
+        open={aiWizardOpen}
+        onClose={() => setAiWizardOpen(false)}
+        onComplete={onEnterEditor}
+      />
     </div>
   );
 }

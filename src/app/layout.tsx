@@ -28,8 +28,9 @@ export const metadata: Metadata = {
   description: "Create and publish professional puzzle books with GenPuzzle.",
   icons: [
     { rel: "icon", url: "/favicon.svg", type: "image/svg+xml" },
-    { rel: "shortcut icon", url: "/favicon.svg" },
-    { rel: "apple-touch-icon", url: "/favicon.svg" },
+    { rel: "icon", url: "/favicon.png", type: "image/png" },
+    { rel: "shortcut icon", url: "/favicon.png" },
+    { rel: "apple-touch-icon", url: "/favicon.png" },
   ],
 };
 
@@ -45,8 +46,9 @@ export default function RootLayout({
       <head>
         <link rel="stylesheet" href={PUBLISHING_FONTS_GOOGLE_CSS_URL} />
         <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-        <link rel="shortcut icon" href="/favicon.svg" />
-        <link rel="apple-touch-icon" href="/favicon.svg" />
+        <link rel="icon" href="/favicon.png" type="image/png" />
+        <link rel="shortcut icon" href="/favicon.png" />
+        <link rel="apple-touch-icon" href="/favicon.png" />
         <meta name="application-name" content="GenPuzzle" />
         <meta name="theme-color" content="#1a5a8c" />
       </head>

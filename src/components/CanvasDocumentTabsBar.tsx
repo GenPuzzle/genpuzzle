@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useRef, useState } from 'react';
-import { Redo2, Undo2, X } from 'lucide-react';
-import type { DocumentPage, DocumentModuleType } from '@/lib/document-model';
+import { Copy, Redo2, Undo2, X } from 'lucide-react';
+import type { DocumentPage, InsertableDocumentKind } from '@/lib/document-model';
 import { cn } from '@/lib/utils';
 import { RemoveDocumentConfirmDialog } from '@/components/RemoveDocumentConfirmDialog';
 import { CanvasDocumentInsertButton } from '@/components/CanvasDocumentInsertButton';
@@ -13,8 +13,11 @@ interface CanvasDocumentTabsBarProps {
   activeDocumentPageId: string;
   onSelect: (id: string) => void;
   onRemove: (id: string) => void;
+  onDuplicate: (id: string) => void;
+  onRename: (id: string, name: string) => void;
   onReorder: (activeId: string, overId: string) => void;
-  onInsert: (type: DocumentModuleType, position: 'before' | 'after', referenceId: string) => void;
+  onInsert: (type: InsertableDocumentKind, position: 'before' | 'after', referenceId: string) => void;
+  onUseAi?: (position: 'before' | 'after', referenceId: string) => void;
   canUndo?: boolean;
   canRedo?: boolean;
   onUndo?: () => void;
@@ -63,8 +66,11 @@ export function CanvasDocumentTabsBar({
   activeDocumentPageId,
   onSelect,
   onRemove,
+  onDuplicate,
+  onRename,
   onReorder,
   onInsert,
+  onUseAi,
   canUndo = false,
   canRedo = false,
   onUndo,
@@ -73,6 +79,8 @@ export function CanvasDocumentTabsBar({
   const [pageToRemove, setPageToRemove] = useState<DocumentPage | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [editingPageId, setEditingPageId] = useState<string | null>(null);
+  const [editingPageName, setEditingPageName] = useState('');
   const didDragRef = useRef(false);
 
   if (documentPages.length === 0) {
@@ -92,6 +100,7 @@ export function CanvasDocumentTabsBar({
               side="after"
               referenceId=""
               onInsert={onInsert}
+              onUseAi={onUseAi}
             />
           </div>
         </div>
@@ -103,6 +112,26 @@ export function CanvasDocumentTabsBar({
     event.stopPropagation();
     if (documentPages.length <= 1) return;
     setPageToRemove(page);
+  };
+
+  const handleDuplicateClick = (pageId: string, event: React.MouseEvent) => {
+    event.stopPropagation();
+    onDuplicate(pageId);
+  };
+
+  const startRename = (page: DocumentPage, event: React.MouseEvent) => {
+    event.stopPropagation();
+    setEditingPageId(page.id);
+    setEditingPageName(page.name);
+  };
+
+  const commitRename = (pageId: string) => {
+    const trimmed = editingPageName.trim();
+    if (trimmed && trimmed.length > 0) {
+      onRename(pageId, trimmed);
+    }
+    setEditingPageId(null);
+    setEditingPageName('');
   };
 
   const handleConfirmRemove = () => {
@@ -193,6 +222,11 @@ export function CanvasDocumentTabsBar({
                     onDragOver={(event) => handleDragOver(page.id, event)}
                     onDrop={(event) => handleDrop(page.id, event)}
                     onKeyDown={(event) => {
+                      const target = event.target as HTMLElement | null;
+                      // If focus is inside an input/textarea or editable element, don't intercept
+                      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+                        return;
+                      }
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault();
                         handleSelect(page.id);
@@ -208,21 +242,56 @@ export function CanvasDocumentTabsBar({
                     >
                       <span className="doc-tab__pre-name" aria-hidden />
                       <span className="doc-tab__label">
-                        <span className="doc-tab__select" title={page.name}>
+                        {editingPageId === page.id ? (
+                        <input
+                          autoFocus
+                          className="doc-tab__edit-input"
+                          value={editingPageName}
+                          onChange={(event) => setEditingPageName(event.target.value)}
+                          onBlur={() => commitRename(page.id)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              commitRename(page.id);
+                            }
+                            if (event.key === 'Escape') {
+                              event.preventDefault();
+                              setEditingPageId(null);
+                              setEditingPageName('');
+                            }
+                          }}
+                        />
+                      ) : (
+                        <span
+                          className="doc-tab__select"
+                          title={page.name}
+                          onDoubleClick={(event) => startRename(page, event)}
+                        >
                           {idx + 1}. {displayName}
                         </span>
-                        {documentPages.length > 1 && (
-                          <button
-                            type="button"
-                            aria-label={`Remove ${page.name}`}
-                            title={`Remove ${page.name}`}
-                            className="doc-tab__remove"
-                            onMouseDown={(event) => event.stopPropagation()}
-                            onClick={(e) => handleRemoveClick(page, e)}
-                          >
-                            <X className="h-2.5 w-2.5 stroke-[2.5]" />
-                          </button>
-                        )}
+                      )}
+                      <button
+                        type="button"
+                        aria-label={`Duplicate ${page.name}`}
+                        title={`Duplicate ${page.name}`}
+                        className="doc-tab__remove doc-tab__duplicate"
+                        onMouseDown={(event) => event.stopPropagation()}
+                        onClick={(event) => handleDuplicateClick(page.id, event)}
+                      >
+                        <Copy className="h-2.5 w-2.5 stroke-[2.5]" />
+                      </button>
+                      {documentPages.length > 1 && (
+                        <button
+                          type="button"
+                          aria-label={`Remove ${page.name}`}
+                          title={`Remove ${page.name}`}
+                          className="doc-tab__remove"
+                          onMouseDown={(event) => event.stopPropagation()}
+                          onClick={(e) => handleRemoveClick(page, e)}
+                        >
+                          <X className="h-2.5 w-2.5 stroke-[2.5]" />
+                        </button>
+                      )}
                       </span>
                       <span className="doc-tab__pos-name" aria-hidden />
                     </div>
@@ -232,6 +301,7 @@ export function CanvasDocumentTabsBar({
                     side="after"
                     referenceId={page.id}
                     onInsert={onInsert}
+                    onUseAi={onUseAi}
                     className="doc-tabs-add--beside"
                     title={`Add page after ${page.name}`}
                   />

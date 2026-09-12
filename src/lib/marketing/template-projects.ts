@@ -46,6 +46,8 @@ const defaultColorSettings = {
     solutionStrokeThickness: 12,
     solutionStrokePadding: 2,
     solutionFrameColor: '#22c55e',
+    solutionHighlightStrokeColor: '#000000',
+    solutionHighlightStrokeThickness: 0,
     solutionFrameStyle: 'rounded' as const,
     solutionFrameRadius: 6,
     solutionHighlightAlpha: 30,

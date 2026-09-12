@@ -43,56 +43,110 @@ function shuffleArray<T>(array: T[]): T[] {
   return shuffled;
 }
 
-function createSubstitutionCipher(text: string): {
-  encoded: string;
-  mapping: Record<string, string>;
-  reverseMapping: Record<string, string>;
-} {
-  // Get all unique letters in the text
-  const uniqueLetters = [...new Set(text.replace(/[^A-Z]/g, '').split(''))];
-  const shuffledLetters = shuffleArray(uniqueLetters);
+const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
-  // Create mapping (original -> encoded)
-  const mapping: Record<string, string> = {};
-  const reverseMapping: Record<string, string> = {};
-
-  for (let i = 0; i < uniqueLetters.length; i++) {
-    mapping[uniqueLetters[i]] = shuffledLetters[i];
-    reverseMapping[shuffledLetters[i]] = uniqueLetters[i];
+/**
+ * Full-alphabet substitution cipher. For a letters cipher no letter ever maps
+ * to itself (a derangement), which is the professional cryptogram standard.
+ */
+function createAlphabetCipher(cipherType: 'letters' | 'numbers'): Record<string, string> {
+  if (cipherType === 'numbers') {
+    const numbers = shuffleArray(ALPHABET.map((_, i) => String(i + 1)));
+    const mapping: Record<string, string> = {};
+    ALPHABET.forEach((letter, i) => {
+      mapping[letter] = numbers[i];
+    });
+    return mapping;
   }
 
-  // Encode the text
+  // Retry the shuffle until it is a derangement (fast — ~e/1 tries on average).
+  for (;;) {
+    const shuffled = shuffleArray(ALPHABET);
+    if (ALPHABET.every((letter, i) => shuffled[i] !== letter)) {
+      const mapping: Record<string, string> = {};
+      ALPHABET.forEach((letter, i) => {
+        mapping[letter] = shuffled[i];
+      });
+      return mapping;
+    }
+  }
+}
+
+export interface CryptogramOptions {
+  cipherType?: 'letters' | 'numbers';
+  /** How many original letters to reveal in the on-page answer key. */
+  hintCount?: number;
+  /** Extra letters (other languages) to include in the cipher alphabet. */
+  extraLetters?: string[];
+}
+
+export function generateCryptogram(
+  text: string,
+  options: CryptogramOptions = {}
+): CryptogramPuzzle {
+  const cipherType = options.cipherType ?? 'letters';
+  // Keep letters and whitespace; punctuation passes through unencoded.
+  const cleanText = text.toUpperCase().replace(/\s+/g, ' ').trim();
+
+  const mapping = createAlphabetCipher(cipherType);
+  // Extra (non A-Z) letters map to themselves' shuffled pool.
+  const extras = (options.extraLetters ?? [])
+    .map((l) => l.trim().toUpperCase())
+    .filter((l) => l.length === 1 && !/[A-Z]/.test(l));
+  if (extras.length > 0) {
+    const pool =
+      cipherType === 'numbers'
+        ? extras.map((_, i) => String(27 + i))
+        : shuffleArray(extras);
+    extras.forEach((letter, i) => {
+      mapping[letter] = pool[i];
+    });
+  }
+
+  const isCipherLetter = (ch: string) => mapping[ch] !== undefined;
+
+  // Letters: substitute in place. Numbers: space-separate tokens, double-space between words.
   let encoded = '';
-  for (const char of text) {
-    if (/[A-Z]/.test(char)) {
-      encoded += mapping[char];
+  for (const ch of cleanText) {
+    if (isCipherLetter(ch)) {
+      const token = mapping[ch];
+      if (cipherType === 'numbers') {
+        if (encoded.length > 0 && /\d$/.test(encoded)) encoded += ' ';
+        encoded += token;
+      } else {
+        encoded += token;
+      }
+    } else if (ch === ' ') {
+      encoded += cipherType === 'numbers' ? '  ' : ' ';
     } else {
-      encoded += char;
+      encoded += ch;
     }
   }
 
-  return { encoded, mapping, reverseMapping };
-}
+  // token -> original letter (used to decode / display the key)
+  const letterKey: Record<string, string> = {};
+  for (const [original, token] of Object.entries(mapping)) {
+    letterKey[token] = original;
+  }
 
-export function generateCryptogram(text: string): CryptogramPuzzle {
-  // Clean and uppercase the text
-  const cleanText = text.toUpperCase().replace(/[^A-Z\s]/g, '').trim();
-
-  const { encoded, mapping } = createSubstitutionCipher(cleanText);
-
-  // Create a letter key (sorted by encoded letter)
-  const letterKey = Object.entries(mapping)
-    .sort(([, a], [, b]) => a.localeCompare(b))
-    .reduce((acc, [original, encoded]) => {
-      acc[encoded] = original;
-      return acc;
-    }, {} as Record<string, string>);
+  // Reveal the most frequent letters in the phrase as hints.
+  const freq = new Map<string, number>();
+  for (const ch of cleanText) {
+    if (isCipherLetter(ch)) freq.set(ch, (freq.get(ch) ?? 0) + 1);
+  }
+  const hintCount = Math.max(0, Math.min(25, options.hintCount ?? 0));
+  const hintLetters = [...freq.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, hintCount)
+    .map(([letter]) => letter);
 
   return {
     type: 'cryptogram',
     originalText: cleanText,
     encodedText: encoded,
     letterMapping: letterKey,
+    cipherType,
+    hintLetters,
   };
 }
 

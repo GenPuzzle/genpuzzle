@@ -19,6 +19,7 @@ import {
   resolveReadableTextPageColor,
 } from '@/lib/text-page-settings';
 import { resolvePageFrameSettings } from '@/lib/page-frame-settings';
+import { PageBackgroundImage } from '@/components/puzzle/PageBackgroundImage';
 import { cn } from '@/lib/utils';
 import {
   constrainCornerResizeToBoxAspect,
@@ -1168,15 +1169,10 @@ export function TextPageBlockCanvas({
       onClick={handleBackgroundClick}
     >
       {pageBackground.backgroundImage && (
-        <div
-          className="absolute inset-0 pointer-events-none z-0"
-          style={{
-            backgroundImage: `url(${pageBackground.backgroundImage})`,
-            backgroundSize: pageBackground.backgroundImageFit || 'cover',
-            backgroundRepeat: 'no-repeat',
-            backgroundPosition: 'center',
-            opacity: (pageBackground.backgroundImageOpacity ?? 100) / 100,
-          }}
+        <PageBackgroundImage
+          src={pageBackground.backgroundImage}
+          opacity={pageBackground.backgroundImageOpacity}
+          fit={pageBackground.backgroundImageFit}
         />
       )}
 

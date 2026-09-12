@@ -1,38 +1,40 @@
 /**
- * Direct Puzzle → PPT export (v4 — image-based grids with editable text overlays).
+ * Direct Puzzle → PPT export (v4 — editable letters + image solution highlights).
  *
  * Uses the SAME unified layout engine (computeWordSearchPageLayout) as the
- * preview canvas and PDF export, so the output matches the canvas exactly.
+ * preview canvas and PDF export, so positions match the canvas.
  *
- * Puzzle pages use native editable PPT elements (matching v3).
- * Solution grids use a hybrid approach for precision:
- *   • Grid structure (borders, lines, highlights) → rendered to PNG image
- *   • Letters → editable text elements overlaid on the image
- *
- * This preserves the exact appearance of the UI preview and PDF export while
- * maintaining letter editability and crispness without table limitations.
- *
- * Grid image rendering occurs in browser only (server-side returns null).
- * Fallback to table rendering if canvas unavailable.
- *
- * No PDF step, no pdfjs-dist, no server round-trip.
- * All coordinates are strictly sanitized (no NaN / undefined / Infinity).
+ * Puzzle letters are native editable PPT text (fill + stroke).
+ * Solution pages use a highlight/border underlay image + the same editable
+ * letters (same font family / size / fill / stroke as the canvas settings).
  */
 
 import {
   TitleWordsSettings,
   WordSearchPuzzle,
   WordSearchSettings,
+  CrosswordPuzzle,
 } from "./puzzles/types";
 import {
+  isWordSearchShapeCell,
+  resolveShapeMaskImageSrc,
+} from "./puzzles/word-search-shape-mask";
+import {
+  isGenericOrCrosswordPageKind,
+  captureCompiledPageSnapshot,
+} from "./compiled-page-snapshot";
+import { addNativeGenericOrCrosswordSlide } from "./generic-puzzle-ppt-draw";
+import type { CrosswordSettings } from "./crossword-settings";
+import {
   computeWordSearchPageLayout,
-  distributeWordsIntoColumns,
   UnifiedPageLayout,
 } from "./word-search-page-layout";
 import { cssPxToPoints, getPageMarginInches } from "./puzzle-layout";
+import { toHex6 } from "./color-utils";
 import { getSolutionGridFontSize } from "./puzzle-layout";
 import { getMergedSettingsForPage } from "./page-settings";
 import { captureGridSnapshot } from "./solution-canvas-snapshot";
+import { wordSearchFontFamily } from "./puzzles/word-search-letters";
 import { addHeaderAssemblyToSlide } from "./header-assembly-ppt-draw";
 import {
   FlattenedBackgroundPptCache,
@@ -60,12 +62,16 @@ import {
   compileBook,
   getTitleWordsForDocument,
   groupPuzzlesByDocument,
+  groupCrosswordPuzzlesByDocument,
+  groupGenericPuzzlesByDocument,
+  groupMurdokuPuzzlesByDocument,
   shouldDrawBookPageNumber,
 } from "./book-compiler";
 import {
   resolveLayoutSettingsForExport,
   resolvePageNumberSettingsForBook,
 } from "./text-page-pdf-draw";
+import { overlayBookLayoutOnAllDocuments } from "./visual-settings-sync";
 import { addTextModuleSlide } from "./text-page-ppt-draw";
 import { resolvePuzzleDisplayNumber, getPuzzleContentLine } from "./puzzle-line-index";
 
@@ -82,11 +88,9 @@ function safeIn(v: number, fallback = 0.01): number {
   return Number.isFinite(v) && v > 0 ? v : fallback;
 }
 
-/** Hex (#RRGGBB or RRGGBB) → 6-char hex string (no #) expected by pptxgenjs. */
+/** Hex (#RRGGBB / #RRGGBBAA or RRGGBB) → 6-char hex string (no #) expected by pptxgenjs. */
 function hex6(hex: string | undefined, fallback = "000000"): string {
-  if (!hex) return fallback;
-  const clean = hex.replace(/^#/, "");
-  return clean.length === 6 ? clean.toUpperCase() : fallback;
+  return toHex6(hex, fallback);
 }
 
 /**
@@ -137,6 +141,17 @@ function _addGridFrameShape(
 
 /** PPT background config — inner frame fill is a single vector shape, not baked into raster. */
 const PPT_BG_OPTIONS = { bakeInnerFrameFill: false } as const;
+
+function pptBackgroundOptions(pageFrame: {
+  enabled: boolean;
+  marginSizeIn: number;
+}) {
+  return {
+    ...PPT_BG_OPTIONS,
+    frameEnabled: pageFrame.enabled,
+    frameMarginIn: pageFrame.marginSizeIn,
+  };
+}
 
 /**
  * Shared page-container frame geometry (inches).
@@ -229,7 +244,7 @@ async function addBlankSeparatorSlide(
     pageHeightPt,
     settings.colors.puzzlePage,
     pageFrame.cornerRadiusPx,
-    PPT_BG_OPTIONS
+    pptBackgroundOptions(pageFrame)
   );
   await applyFlattenedBackgroundToSlide(slide, bgConfig, backgroundCache, hex6);
   _addPageContainerFrame(
@@ -263,6 +278,10 @@ function buildSettingsForCompiledPage(
         bookSettings.includePageBetweenPuzzleAndSolutions ??
         wordSearchSettings.bookCanvas.includePageBetweenPuzzleAndSolutions ??
         false,
+    },
+    core: {
+      ...wordSearchSettings.core,
+      twoPagePuzzles: wordSearchSettings.core.twoPagePuzzles ?? false,
     },
     typography: {
       ...wordSearchSettings.typography,
@@ -365,10 +384,22 @@ export interface ExportOptions {
     useCustomTrim: boolean;
     answersPerPage: number;
     includePageBetweenPuzzleAndSolutions: boolean;
+    mixPuzzles?: boolean;
+    chapterTopics?: string[];
   };
   titleWords: TitleWordsSettings;
   wordSearchSettings: WordSearchSettings;
   puzzles: WordSearchPuzzle[];
+  /** Generated crossword puzzles (crossword document tabs). */
+  crosswordPuzzles?: CrosswordPuzzle[];
+  /** Per-crossword-page overrides keyed by document-local puzzle index. */
+  crosswordPageOverrides?: Map<number, Partial<CrosswordSettings>>;
+  /** Generated sudoku/maze puzzles (generic document tabs). */
+  genericPuzzles?: import('./puzzles/types').GenericBatchPuzzle[];
+  /** Per-sudoku/maze-page overrides keyed by document-local puzzle index. */
+  genericPageOverrides?: Map<number, Partial<import('./generic-puzzle-settings').GenericPuzzleSettings>>;
+  /** Generated Murdoku puzzles (Murdoku document tabs). */
+  murdokuPuzzles?: import('./puzzles/types').MurdokuPuzzle[];
   includeSolution: boolean;
   onlySolutions?: boolean;
   puzzleGridScale?: number;
@@ -387,10 +418,8 @@ export interface ExportOptions {
  * Render one puzzle or solution page onto a PPT slide.
  * Uses the unified layout so positions match the canvas preview exactly.
  *
- * For solution pages (`showSolution = true`) the grid is rendered to a
- * pixel-perfect PNG via captureGridSnapshot and injected as a flat image.
- * For puzzle pages the grid remains an editable native PPT table.
- * Falls back to the table on server-side (no DOM / canvas unavailable).
+ * Puzzle pages: frame + editable per-cell letters (fill + stroke).
+ * Solution pages: full PNG grid snapshot (letters + highlights + border).
  */
 async function buildSlide(
   prs: any,
@@ -400,9 +429,12 @@ async function buildSlide(
   settings?: WordSearchSettings,
   backgroundCache?: FlattenedBackgroundPptCache,
   bookPageIndex = 0,
-  suppressPageNumber = false
+  suppressPageNumber = false,
+  pagePart: 'clues' | 'grid' = 'clues'
 ): Promise<void> {
   const slide = prs.addSlide();
+  const isSolutionPage = !!showSolution;
+  const isGridOnlyPage = !isSolutionPage && settings?.core.twoPagePuzzles && pagePart === 'grid';
 
   // Prefer book canvas size (same source as defineLayout) so the frame is
   // centered on the slide even if layout.page rounding differs.
@@ -418,20 +450,21 @@ async function buildSlide(
   // ── Flattened background (uneditable slide.background layer) ─────────────
   const bgCache = backgroundCache ?? new FlattenedBackgroundPptCache();
   const pageFrame = settings ? resolvePageFrameSettings(settings) : DEFAULT_PAGE_FRAME_SETTINGS;
+  const frameOpts = pptBackgroundOptions(pageFrame);
   const bgConfig = showSolution
     ? answerPageBackgroundConfig(
         pageWidthPt,
         pageHeightPt,
         settings?.colors?.answerPage ?? {},
         pageFrame.cornerRadiusPx,
-        PPT_BG_OPTIONS
+        frameOpts
       )
     : puzzlePageBackgroundConfig(
         pageWidthPt,
         pageHeightPt,
         settings?.colors?.puzzlePage ?? { backgroundColor: layout.page.backgroundColor },
         pageFrame.cornerRadiusPx,
-        PPT_BG_OPTIONS
+        frameOpts
       );
   await applyFlattenedBackgroundToSlide(slide, bgConfig, bgCache, hex6);
 
@@ -449,9 +482,9 @@ async function buildSlide(
   );
 
   // ── Header assembly (native editable shapes + text) ───────────────────────
-  if (layout.headerAssembly) {
+  if (!isGridOnlyPage && layout.headerAssembly) {
     addHeaderAssemblyToSlide(slide, layout.headerAssembly);
-  } else if (layout.title && layout.title.text) {
+  } else if (!isGridOnlyPage && layout.title && layout.title.text) {
     const t = layout.title;
     slide.addText(t.text, {
       x: 0,
@@ -471,7 +504,7 @@ async function buildSlide(
   }
 
   // ── Subtitle ─────────────────────────────────────────────────────────────
-  if (!layout.headerAssembly && layout.subtitle && layout.subtitle.text) {
+  if (!isGridOnlyPage && !layout.headerAssembly && layout.subtitle && layout.subtitle.text) {
     const s = layout.subtitle;
     const wrappedLines =
       s.wrappedLines && s.wrappedLines.length > 0 ? s.wrappedLines : [s.text];
@@ -495,79 +528,115 @@ async function buildSlide(
   }
 
   // ── Grid ─────────────────────────────────────────────────────────────────
-  const g = layout.grid;
-  const framePaddingPt = g.framePaddingPt || 0;
-  const puzzleGridBorder = resolvePuzzleGridBorder(settings?.core ?? ({} as WordSearchSettings['core']));
-  const borderCssPx = puzzleGridBorder.strokeThicknessPx;
-  const outerBounds = computeGridBorderOuterBounds(
-    g.leftPt,
-    g.topPt,
-    g.widthPt,
-    g.heightPt,
-    framePaddingPt,
-    borderCssPx,
-    g.noBox
-  );
-  const borderLinePt = getGridBorderThicknessPt(borderCssPx);
-
-  const outerGridXIn = pt2in(outerBounds.leftPt);
-  const outerGridYIn = pt2in(outerBounds.topPt);
-  const outerGridWIn = safeIn(pt2in(outerBounds.widthPt), 0.1);
-  const outerGridHIn = safeIn(pt2in(outerBounds.heightPt), 0.1);
-
-  if (showSolution && settings) {
-    const snapshot = await captureGridSnapshot(
-      puzzle,
-      settings,
-      g.cellSizePt,
-      g.fontSizePt,
-      { scale: 3 },
-      showSolution
+  const shouldRenderGridOnThisPage = showSolution || !settings?.core.twoPagePuzzles || pagePart === 'grid';
+  if (shouldRenderGridOnThisPage) {
+    const g = layout.grid;
+    const framePaddingPt = g.framePaddingPt || 0;
+    const activeGridBorder = showSolution
+      ? resolveSolutionGridBorder(settings?.core ?? ({} as WordSearchSettings["core"]))
+      : resolvePuzzleGridBorder(settings?.core ?? ({} as WordSearchSettings["core"]));
+    const borderCssPx = activeGridBorder.strokeThicknessPx;
+    const outerBounds = computeGridBorderOuterBounds(
+      g.leftPt,
+      g.topPt,
+      g.widthPt,
+      g.heightPt,
+      framePaddingPt,
+      borderCssPx,
+      g.noBox
     );
+    const borderLinePt = getGridBorderThicknessPt(borderCssPx);
 
-    if (snapshot) {
-      slide.addImage({
-        data: snapshot,
-        x: outerGridXIn,
-        y: outerGridYIn,
-        w: outerGridWIn,
-        h: outerGridHIn,
-      });
+    const outerGridXIn = pt2in(outerBounds.leftPt);
+    const outerGridYIn = pt2in(outerBounds.topPt);
+    const outerGridWIn = safeIn(pt2in(outerBounds.widthPt), 0.1);
+    const outerGridHIn = safeIn(pt2in(outerBounds.heightPt), 0.1);
+
+    // Solutions: highlight underlay image + editable letters (same font/size as puzzles).
+    // Full letter snapshots drop custom fonts (Sunday Magic) → wrong look in PPT.
+    if (showSolution && settings) {
+      const snapshot = await captureGridSnapshot(
+        puzzle,
+        settings,
+        g.cellSizePt,
+        g.fontSizePt,
+        { scale: 3, includeLetters: false },
+        true
+      );
+      if (snapshot) {
+        slide.addImage({
+          data: snapshot.dataUrl,
+          x: outerGridXIn,
+          y: outerGridYIn,
+          w: outerGridWIn,
+          h: outerGridHIn,
+        });
+      } else {
+        _addGridFrameShape(
+          slide,
+          outerGridXIn,
+          outerGridYIn,
+          outerGridWIn,
+          outerGridHIn,
+          activeGridBorder.cornerRadiusPx,
+          g.boxColor,
+          borderLinePt,
+          g.noBox
+        );
+      }
+      _buildEditableLetterGrid(slide, puzzle, g);
     } else {
-      _addGridFrameShape(
-        slide,
-        outerGridXIn,
-        outerGridYIn,
-        outerGridWIn,
-        outerGridHIn,
-        puzzleGridBorder.cornerRadiusPx,
-        g.boxColor,
-        borderLinePt,
-        g.noBox
-      );
-      _buildTableGrid(slide, puzzle, g);
+      // Optional shape silhouette under editable letters (no letter pixels in image).
+      const needsShapeUnderlay =
+        !!settings?.core.shapeWordSearchEnabled &&
+        !!settings.core.shapeMaskShowImage &&
+        !!resolveShapeMaskImageSrc(settings.core, puzzle.puzzleIndexInDocument ?? 0);
+
+      let underlayPlaced = false;
+      if (needsShapeUnderlay && settings) {
+        const snapshot = await captureGridSnapshot(
+          puzzle,
+          settings,
+          g.cellSizePt,
+          g.fontSizePt,
+          { scale: 3, includeLetters: false },
+          false
+        );
+        if (snapshot) {
+          const inkPadIn = pt2in(snapshot.inkPadPt ?? 0);
+          slide.addImage({
+            data: snapshot.dataUrl,
+            x: outerGridXIn - inkPadIn,
+            y: outerGridYIn - inkPadIn,
+            w: outerGridWIn + inkPadIn * 2,
+            h: outerGridHIn + inkPadIn * 2,
+          });
+          underlayPlaced = true;
+        }
+      }
+
+      if (!underlayPlaced) {
+        _addGridFrameShape(
+          slide,
+          outerGridXIn,
+          outerGridYIn,
+          outerGridWIn,
+          outerGridHIn,
+          activeGridBorder.cornerRadiusPx,
+          g.boxColor,
+          borderLinePt,
+          g.noBox
+        );
+      }
+
+      _buildEditableLetterGrid(slide, puzzle, g);
     }
-  } else {
-    if (settings) {
-      _addGridFrameShape(
-        slide,
-        outerGridXIn,
-        outerGridYIn,
-        outerGridWIn,
-        outerGridHIn,
-        puzzleGridBorder.cornerRadiusPx,
-        g.boxColor,
-        borderLinePt,
-        g.noBox
-      );
-    }
-    _buildTableGrid(slide, puzzle, g);
   }
 
   // ── Word list (puzzle pages only) ─────────────────────────────────────────
   const wl = layout.wordList;
-  if (!showSolution && wl && wl.words.length > 0) {
-    const wordFontSize = Math.max(4, Math.round(wl.fontSizePt));
+  if (!showSolution && !isGridOnlyPage && wl && wl.words.length > 0) {
+    const wordFontSize = Math.max(4, wl.fontSizePt);
     const wordColor = hex6(wl.color);
     const columnWidths = wl.columnWidthsPt;
     const wordsPerCol = wl.wordsPerColumn;
@@ -577,7 +646,6 @@ async function buildSlide(
       const row = i % wordsPerCol;
       const word = wl.words[i];
 
-      // X: centeredLeftPt + sum of previous column widths + gaps between columns
       const prevColsWidth = columnWidths
         .slice(0, col)
         .reduce((sum, w) => sum + w, 0);
@@ -587,9 +655,8 @@ async function buildSlide(
       const wordX = pt2in(wordXPt);
       const wordY = pt2in(wordYPt);
       const wordW = safeIn(pt2in((columnWidths[col] || 80) + 4), 0.3);
-      const wordH = safeIn(pt2in(wl.lineHeightPt * 1.2), 0.15);
+      const wordH = safeIn(pt2in(wl.lineHeightPt), 0.15);
 
-      // Optional checkbox
       if (wl.addCheckboxes) {
         const cbSize = safeIn(pt2in(wl.checkboxSizePt), 0.1);
         slide.addShape("rect" as any, {
@@ -638,79 +705,71 @@ async function buildSlide(
 }
 
 /**
- * Build and add an editable PPT table for a word-search grid.
- * Shared by puzzle pages and by the server-side solution fallback.
- *
- * The table is always placed at the INNER grid origin (g.leftPt, g.topPt)
- * with no cell margin adjustment for frame padding. The outer border frame
- * is drawn separately by the caller as a shape, so it can expand correctly
- * with the Border Padding slider — exactly as the PDF engine does.
+ * Build editable per-cell letter text boxes for puzzle grids.
+ * Fill = text color; stroke = pptxgenjs `outline`.
+ * Boxes are slightly larger than the cell so large fonts / strokes are not cropped at the top.
  */
-/** pptxgenjs ignores table `margin: 0` (falsy) and applies ~0.05–0.1" cell insets. */
-const PPT_TABLE_ZERO_MARGIN: [number, number, number, number] = [0, 0, 0, 0];
-
-function _buildTableGrid(
+function _buildEditableLetterGrid(
   slide: any,
   puzzle: WordSearchPuzzle,
   g: UnifiedPageLayout["grid"]
 ): void {
   const gridX = pt2in(g.leftPt);
   const gridY = pt2in(g.topPt);
-  const gridWIn = g.widthPt / 72;
-  const gridHIn = g.heightPt / 72;
-  const cellWIn = gridWIn / g.cols;
-  const cellHIn = gridHIn / g.rows;
-  const colWidths = Array<number>(g.cols).fill(cellWIn);
-  const rowHeights = Array<number>(g.rows).fill(cellHIn);
+  const cellWIn = safeIn(pt2in(g.cellSizePt), 0.05);
+  const cellHIn = safeIn(pt2in(g.cellSizePt), 0.05);
   const gridColor = hex6(g.letterColor);
-  const noBorder = { type: "none" as const };
+  const strokeThicknessPt = Math.max(0, g.letterStrokeThicknessPt || 0);
+  const letterOutline =
+    strokeThicknessPt > 0
+      ? {
+          // CSS stroke width in pt (not doubled — PPT outline is already a full stroke).
+          size: Math.max(0.25, strokeThicknessPt),
+          color: hex6(g.letterStrokeColor || "#000000"),
+        }
+      : undefined;
+  const gridFontSz = Math.max(1, g.fontSizePt);
+  // Expand past the cell so ascenders / outline are not clipped by the text box.
+  const overflowIn = pt2in(
+    Math.max(strokeThicknessPt * 1.5, Math.min(g.fontSizePt * 0.2, g.cellSizePt * 0.25))
+  );
+  const zeroMargin: [number, number, number, number] = [0, 0, 0, 0];
 
-  const tableRows: any[][] = [];
   for (let row = 0; row < g.rows; row++) {
-    const rowCells: any[] = [];
     for (let col = 0; col < g.cols; col++) {
+      if (!isWordSearchShapeCell(puzzle.shapeMask, row, col)) continue;
       const letter = (puzzle.grid[row]?.[col] ?? "").trim();
-      const gridFontSz = Math.max(4, Math.round(g.fontSizePt));
-      rowCells.push({
-        text: letter,
-        options: {
+      if (!letter) continue;
+
+      slide.addText(letter, {
+        x: gridX + col * cellWIn - overflowIn,
+        y: gridY + row * cellHIn - overflowIn,
+        w: cellWIn + overflowIn * 2,
+        h: cellHIn + overflowIn * 2,
           fontSize: gridFontSz,
-          fontFace: g.fontFamily || "Arial",
+          fontFace: wordSearchFontFamily(g.fontFamily || "Arial", puzzle),
           color: gridColor,
+        ...(letterOutline ? { outline: letterOutline } : {}),
           bold: false,
           align: "center",
           valign: "middle",
-          margin: PPT_TABLE_ZERO_MARGIN,
-          fill: { type: "none" as const },
-          border: [noBorder, noBorder, noBorder, noBorder],
-        },
+        margin: zeroMargin,
+        inset: 0,
+        wrap: false,
+        isTextBox: true,
+        fill: { type: "none" as const },
+        line: { color: "FFFFFF", transparency: 100, width: 0 },
       });
     }
-    tableRows.push(rowCells);
   }
-
-  slide.addTable(tableRows, {
-    x: gridX,
-    y: gridY,
-    w: gridWIn,
-    h: gridHIn,
-    colW: colWidths,
-    rowH: rowHeights,
-    margin: PPT_TABLE_ZERO_MARGIN,
-    border: noBorder,
-    fill: { type: "none" as const },
-    autoPage: false,
-  });
 }
 
 /**
  * Build a multi-puzzle solution page.
  *
- * Each solution grid is captured as a pixel-perfect PNG via captureGridSnapshot
- * and injected with slide.addImage() — eliminating all shape-position drift.
+ * Each solution grid is a full pixel-perfect PNG (highlights + letters + border).
  * Title text remains an editable native PPT text element.
- *
- * Falls back to a native table (server-side / no DOM) if the snapshot returns null.
+ * Falls back to frame + editable letters if the snapshot returns null.
  */
 async function buildSolutionSlide(
   prs: any,
@@ -732,16 +791,16 @@ async function buildSolutionSlide(
 
   // ─── Flattened background (uneditable slide.background layer) ────────────
   const bgCache = backgroundCache ?? new FlattenedBackgroundPptCache();
+  const solutionPageFrame = resolvePageFrameSettings(settings);
   const answerBgConfig = answerPageBackgroundConfig(
     pageWidthPt,
     pageHeightPt,
     settings.colors.answerPage,
-    resolvePageFrameSettings(settings).cornerRadiusPx,
-    PPT_BG_OPTIONS
+    solutionPageFrame.cornerRadiusPx,
+    pptBackgroundOptions(solutionPageFrame)
   );
   await applyFlattenedBackgroundToSlide(slide, answerBgConfig, bgCache, hex6);
 
-  const solutionPageFrame = resolvePageFrameSettings(settings);
   const solutionPageW = pt2in(pageWidthPt);
   const solutionPageH = pt2in(pageHeightPt);
   _addPageContainerFrame(
@@ -829,7 +888,8 @@ async function buildSolutionSlide(
 
     // ─── GRID STYLING (from live settings) ───────────────────────────────
     const boxColor = hex6(settings.colors.answerPage.boxColor);
-    const letterColor = hex6(settings.colors.answerPage.lettersInSolutionColor);
+    // Solution letters use the same fill/stroke as the puzzle grid.
+    const letterColor = hex6(settings.colors.puzzlePage.puzzleColor || "#000000");
     const solutionGridBorder = resolveSolutionGridBorder(settings.core);
     const borderThicknessPt = settings.core.noBoxAroundPuzzle
       ? 0
@@ -840,6 +900,7 @@ async function buildSolutionSlide(
     const gridFontFamily = settings.typography.setFontForAnswerPages
       ? (settings.typography.answerGridFontFamily || "Arial")
       : (settings.typography.puzzleGridFontFamily || "Arial");
+    const renderFontFamily = wordSearchFontFamily(gridFontFamily, puzzle);
 
     // ─── TITLE TEXTBOX (wrap long titles to 2+ lines like PDF / canvas preview) ─
     const titleMaxWidthPt = Math.max(1, blockWidthPt - innerMarginPt * 2);
@@ -872,16 +933,14 @@ async function buildSolutionSlide(
       isTextBox: true,
     });
 
-    // ─── SOLUTION GRID: pixel-perfect PNG snapshot ────────────────────────
-    // captureGridSnapshot draws the same rounded-capsule highlights and
-    // cell-centred letters as WordSearchGrid.tsx — no coordinate drift.
-    // On the server (no DOM) it returns null → fallback to a native table.
+    // ─── SOLUTION GRID: highlight underlay + editable letters ─────────────
+    // Same font / size / fill / stroke path as puzzle pages (editable text).
     const snapshot = await captureGridSnapshot(
       puzzle,
       settings,
       cellSizePt,
       gridFontSizePt,
-      { scale: 3 }
+      { scale: 3, includeLetters: false }
     );
 
     const paddingPt = cssPxToPoints(solutionGridBorder.paddingPx);
@@ -902,37 +961,14 @@ async function buildSolutionSlide(
     const imageHIn = safeIn(pt2in(outerBounds.heightPt), 0.1);
 
     if (snapshot) {
-      // ── Inject flat image (pixel-perfect) ──────────────────────────────
       slide.addImage({
-        data: snapshot,
+        data: snapshot.dataUrl,
         x: imageXIn,
         y: imageYIn,
         w: imageWIn,
         h: imageHIn,
       });
     } else {
-      // ── Server-side fallback: native editable table + border shape ─────
-      // Build a minimal grid descriptor so _buildTableGrid can render the
-      // letters at the correct inner-grid position.
-      const fallbackG: UnifiedPageLayout["grid"] = {
-        topPt: gridTopPt,
-        leftPt: gridLeftPt,
-        cellSizePt: cellSizePt,
-        widthPt: gridWidthPt,
-        heightPt: gridHeightPt,
-        rows: gridRows,
-        cols: gridCols,
-        fontSizePt: gridFontSizePt,
-        fontFamily: gridFontFamily,
-        letterColor: letterColor,
-        boxColor: boxColor,
-        borderThicknessPt: borderThicknessPt,
-        noBox: settings.core.noBoxAroundPuzzle ?? false,
-        innerGridOpacity: settings.core.innerGridOpacity ?? 0,
-        gridLinesThicknessPt: settings.core.gridLinesStrokeThickness ?? 0,
-        gridLinesColor: settings.colors.puzzlePage.gridLinesColor || settings.colors.puzzlePage.boxColor || '#d1d5db',
-        framePaddingPt: paddingPt,
-      };
       _addGridFrameShape(
         slide,
         imageXIn,
@@ -944,8 +980,39 @@ async function buildSolutionSlide(
         borderLinePt,
         settings.core.noBoxAroundPuzzle ?? false
       );
-      _buildTableGrid(slide, puzzle, fallbackG);
     }
+
+    const letterStrokeColor =
+      settings.colors.puzzlePage.puzzleLetterStrokeColor || "#000000";
+    const letterStrokeThicknessPt = Math.max(
+      0,
+      cssPxToPoints(settings.colors.puzzlePage.puzzleLetterStrokeThickness ?? 0)
+    );
+    const letterG: UnifiedPageLayout["grid"] = {
+        topPt: gridTopPt,
+        leftPt: gridLeftPt,
+        cellSizePt: cellSizePt,
+        widthPt: gridWidthPt,
+        heightPt: gridHeightPt,
+        rows: gridRows,
+        cols: gridCols,
+        fontSizePt: gridFontSizePt,
+        fontFamily: renderFontFamily,
+        letterColor: letterColor,
+      letterStrokeColor,
+      letterStrokeThicknessPt,
+        boxColor: boxColor,
+        borderThicknessPt: borderThicknessPt,
+        noBox: settings.core.noBoxAroundPuzzle ?? false,
+      innerGridOpacity: settings.core.innerGridOpacity ?? 0,
+      gridLinesThicknessPt: settings.core.gridLinesStrokeThickness ?? 0,
+      gridLinesColor:
+        settings.colors.puzzlePage.gridLinesColor ||
+        settings.colors.puzzlePage.boxColor ||
+        "#d1d5db",
+        framePaddingPt: paddingPt,
+      };
+    _buildEditableLetterGrid(slide, puzzle, letterG);
   }
 
   if (!suppressPageNumber) {
@@ -1011,7 +1078,7 @@ export async function generatePuzzlePPTBlob(
         includePageBetweenPuzzleAndSolutions:
           bookSettings.includePageBetweenPuzzleAndSolutions || false,
       },
-      core: { ...wordSearchSettings.core },
+      core: { ...wordSearchSettings.core, twoPagePuzzles: wordSearchSettings.core.twoPagePuzzles ?? false },
       typography: {
         ...wordSearchSettings.typography,
         pageNumber: normalizePageNumberSettings(wordSearchSettings.typography?.pageNumber),
@@ -1042,11 +1109,31 @@ export async function generatePuzzlePPTBlob(
           useCustomTrim: bookSettings.useCustomTrim ?? layoutSettingsRaw.bookCanvas.useCustomTrim,
         },
       };
-      const pageNumberSettings = resolvePageNumberSettingsForBook(documentPages, baseSettings);
-      const puzzleMap = groupPuzzlesByDocument(puzzles, documentPages);
-      const compiled = compileBook(documentPages, puzzleMap, {
+      const pagesForBook = overlayBookLayoutOnAllDocuments(documentPages, layoutSettings);
+      const pageNumberSettings = resolvePageNumberSettingsForBook(pagesForBook, baseSettings);
+      const puzzleMap = groupPuzzlesByDocument(puzzles, pagesForBook);
+      const crosswordMap = groupCrosswordPuzzlesByDocument(
+        options.crosswordPuzzles ?? [],
+        pagesForBook
+      );
+      const genericMap = groupGenericPuzzlesByDocument(
+        options.genericPuzzles ?? [],
+        pagesForBook
+      );
+      const murdokuMap = groupMurdokuPuzzlesByDocument(
+        options.murdokuPuzzles ?? [],
+        pagesForBook
+      );
+      const compiled = compileBook(pagesForBook, puzzleMap, {
         includeSolutions: includeSolution,
         pageNumberSettings,
+        crosswordPuzzlesByDocumentId: crosswordMap,
+        crosswordPageOverrides: options.crosswordPageOverrides,
+        genericPuzzlesByDocumentId: genericMap,
+        genericPageOverrides: options.genericPageOverrides,
+        murdokuPuzzlesByDocumentId: murdokuMap,
+        mixPuzzles: Boolean(bookSettings.mixPuzzles),
+        chapterTopics: bookSettings.chapterTopics,
       });
 
       const pageW = layoutSettings.bookCanvas.customWidth || 8.5;
@@ -1093,7 +1180,8 @@ export async function generatePuzzlePPTBlob(
             backgroundCache,
             compiledPage.sourceDocumentName,
             compiledPage.resolvedToc,
-            !allowPageNumber
+            !allowPageNumber,
+            compiledPage.moduleType
           );
           continue;
         }
@@ -1106,6 +1194,41 @@ export async function generatePuzzlePPTBlob(
             backgroundCache,
             !allowPageNumber
           );
+          continue;
+        }
+
+        // Crossword / maze / sudoku / trivia / scramble: native PPT text + shapes.
+        if (isGenericOrCrosswordPageKind(compiledPage.kind)) {
+          await addNativeGenericOrCrosswordSlide(
+            prs,
+            compiledPage,
+            layoutSettings,
+            documentPages,
+            titleWords,
+            backgroundCache,
+            !allowPageNumber
+          );
+          continue;
+        }
+
+        if (compiledPage.kind === "murdoku" || compiledPage.kind === "murdoku-solution") {
+          const snapshot = await captureCompiledPageSnapshot(compiledPage, {
+            documentPages,
+            layoutSettings,
+            titleWords,
+          });
+          const pageW = layoutSettings.bookCanvas.customWidth || 8.5;
+          const pageH = layoutSettings.bookCanvas.customHeight || 11;
+          const slide = prs.addSlide();
+          if (snapshot) {
+            slide.addImage({
+              data: snapshot.dataUrl,
+              x: 0,
+              y: 0,
+              w: pageW,
+              h: pageH,
+            });
+          }
           continue;
         }
 
@@ -1143,7 +1266,8 @@ export async function generatePuzzlePPTBlob(
             false,
             puzzleGridScale,
             titleToAnswerGap,
-            bookHeaderTitleFontSizePt
+            bookHeaderTitleFontSizePt,
+            compiledPage.pagePart ?? 'clues'
           );
 
           await buildSlide(
@@ -1154,7 +1278,8 @@ export async function generatePuzzlePPTBlob(
             effectiveSettings,
             backgroundCache,
             compiledPage.bookPageIndex,
-            !allowPageNumber
+            !allowPageNumber,
+            compiledPage.pagePart ?? 'clues'
           );
           continue;
         }
@@ -1201,14 +1326,14 @@ export async function generatePuzzlePPTBlob(
         }
       }
     } else {
-      // Slide dimensions match the PDF page size exactly
-      const pageW = baseSettings.bookCanvas.customWidth || 8.5;
-      const pageH = baseSettings.bookCanvas.customHeight || 11;
+    // Slide dimensions match the PDF page size exactly
+    const pageW = baseSettings.bookCanvas.customWidth || 8.5;
+    const pageH = baseSettings.bookCanvas.customHeight || 11;
 
-      prs.defineLayout({ name: "PUZZLE_PAGE", width: pageW, height: pageH });
-      prs.layout = "PUZZLE_PAGE";
+    prs.defineLayout({ name: "PUZZLE_PAGE", width: pageW, height: pageH });
+    prs.layout = "PUZZLE_PAGE";
 
-      let currentPageIndex = 0;
+    let currentPageIndex = 0;
 
       const bookHeaderTitleSizeEntries = !onlySolutions
         ? puzzles.map((puzzle, puzzleIndex) => ({
@@ -1226,75 +1351,109 @@ export async function generatePuzzlePPTBlob(
         titleWords
       );
 
-      // ── Puzzle pages ──────────────────────────────────────────────────────
-      if (!onlySolutions) {
-        for (let pi = 0; pi < puzzles.length; pi++) {
-          if (onProgress)
-            onProgress(`Building puzzle slide ${pi + 1} of ${puzzles.length}…`);
+    // ── Puzzle pages ──────────────────────────────────────────────────────
+    if (!onlySolutions) {
+      for (let pi = 0; pi < puzzles.length; pi++) {
+        if (onProgress)
+          onProgress(`Building puzzle slide ${pi + 1} of ${puzzles.length}…`);
 
-          const puzzle = puzzles[pi];
+        const puzzle = puzzles[pi];
           puzzle.puzzleNumber = resolvePuzzleDisplayNumber(
             puzzle,
             getMergedSettingsForPage(baseSettings, pageOverrides, applyMode, currentPageIndex),
             pi
           );
 
-          const effectiveSettings = getMergedSettingsForPage(
-            baseSettings, pageOverrides, applyMode, currentPageIndex
-          );
+        const effectiveSettings = getMergedSettingsForPage(
+          baseSettings, pageOverrides, applyMode, currentPageIndex
+        );
 
-          const layout = computeWordSearchPageLayout(
-            puzzle, effectiveSettings, titleWords, false, puzzleGridScale, titleToAnswerGap,
-            bookHeaderTitleFontSizePt
+        const clueLayout = computeWordSearchPageLayout(
+          puzzle,
+          effectiveSettings,
+          titleWords,
+          false,
+          puzzleGridScale,
+          titleToAnswerGap,
+          bookHeaderTitleFontSizePt,
+          'clues'
+        );
+
+        await buildSlide(
+          prs,
+          clueLayout,
+          puzzle,
+          false,
+          effectiveSettings,
+          backgroundCache,
+          currentPageIndex,
+          false,
+          'clues'
+        );
+        currentPageIndex++;
+
+        if (effectiveSettings.core.twoPagePuzzles) {
+          const gridLayout = computeWordSearchPageLayout(
+            puzzle,
+            effectiveSettings,
+            titleWords,
+            false,
+            puzzleGridScale,
+            titleToAnswerGap,
+            bookHeaderTitleFontSizePt,
+            'grid'
           );
 
           await buildSlide(
             prs,
-            layout,
+            gridLayout,
             puzzle,
             false,
             effectiveSettings,
             backgroundCache,
-            currentPageIndex
+            currentPageIndex,
+            false,
+            'grid'
           );
           currentPageIndex++;
+        }
 
-          if (effectiveSettings.bookCanvas.includePageBetweenPuzzleAndSolutions) {
+        if (effectiveSettings.bookCanvas.includePageBetweenPuzzleAndSolutions) {
             await addBlankSeparatorSlide(
               prs,
               effectiveSettings,
               currentPageIndex,
               backgroundCache
             );
-            currentPageIndex++;
-          }
+          currentPageIndex++;
         }
       }
+    }
 
-      // ── Solution pages ────────────────────────────────────────────────────
-      if (includeSolution) {
-        const chunkSize = baseSettings.bookCanvas.answersPerPage || 1;
+    // ── Solution pages ────────────────────────────────────────────────────
+    if (includeSolution) {
+      const chunkSize = baseSettings.bookCanvas.answersPerPage || 1;
 
-        if (chunkSize === 1) {
-          // One puzzle per solution slide — use full unified layout (same as puzzle page)
-          for (let pi = 0; pi < puzzles.length; pi++) {
-            if (onProgress)
-              onProgress(`Building solution slide ${pi + 1} of ${puzzles.length}…`);
+      if (chunkSize === 1) {
+        // One puzzle per solution slide — use full unified layout (same as puzzle page)
+        for (let pi = 0; pi < puzzles.length; pi++) {
+          if (onProgress)
+            onProgress(`Building solution slide ${pi + 1} of ${puzzles.length}…`);
 
-            const puzzle = puzzles[pi];
+          const puzzle = puzzles[pi];
             puzzle.puzzleNumber = resolvePuzzleDisplayNumber(
               puzzle,
               getMergedSettingsForPage(baseSettings, pageOverrides, applyMode, currentPageIndex),
               pi
             );
 
-            const effectiveSettings = getMergedSettingsForPage(
-              baseSettings, pageOverrides, applyMode, currentPageIndex
-            );
+          const effectiveSettings = getMergedSettingsForPage(
+            baseSettings, pageOverrides, applyMode, currentPageIndex
+          );
 
-            const layout = computeWordSearchPageLayout(
-              puzzle, effectiveSettings, titleWords, true, puzzleGridScale
-            );
+          const layout = computeWordSearchPageLayout(
+            puzzle, effectiveSettings, titleWords, true, puzzleGridScale
+          );
 
             await buildSlide(
               prs,
@@ -1305,30 +1464,30 @@ export async function generatePuzzlePPTBlob(
               backgroundCache,
               currentPageIndex
             );
-            currentPageIndex++;
-          }
-        } else {
-          // Multiple puzzles per solution slide — use compact grid layout
-          for (let i = 0; i < puzzles.length; i += chunkSize) {
-            if (onProgress)
-              onProgress(`Building solution slide ${Math.floor(i / chunkSize) + 1}…`);
+          currentPageIndex++;
+        }
+      } else {
+        // Multiple puzzles per solution slide — use compact grid layout
+        for (let i = 0; i < puzzles.length; i += chunkSize) {
+          if (onProgress)
+            onProgress(`Building solution slide ${Math.floor(i / chunkSize) + 1}…`);
 
-            const effectiveSettings = getMergedSettingsForPage(
-              baseSettings, pageOverrides, applyMode, currentPageIndex
-            );
+          const effectiveSettings = getMergedSettingsForPage(
+            baseSettings, pageOverrides, applyMode, currentPageIndex
+          );
 
-            await buildSolutionSlide(
-              prs,
-              puzzles.slice(i, i + chunkSize),
-              effectiveSettings,
-              titleWords,
-              titleToAnswerGap,
-              pageMargin,
-              solutionToSolutionGap,
+          await buildSolutionSlide(
+            prs,
+            puzzles.slice(i, i + chunkSize),
+            effectiveSettings,
+            titleWords,
+            titleToAnswerGap,
+            pageMargin,
+            solutionToSolutionGap,
               backgroundCache,
               currentPageIndex
-            );
-            currentPageIndex++;
+          );
+          currentPageIndex++;
           }
         }
       }
@@ -1352,10 +1511,8 @@ export async function generatePuzzlePPTBlob(
 /**
  * Generate and download a .pptx file (browser client-side).
  *
- * Runs entirely in the browser so that captureGridSnapshot has access to the
- * Canvas API. The server-side API route is bypassed — pptxgenjs is lazily
- * imported inside generatePuzzlePPTBlob. Solution grids are captured as
- * pixel-perfect PNG snapshots before being embedded in the slide.
+ * Puzzle + solution letters are editable PPT text (fill + stroke) using the
+ * same font family/size as the canvas. Solution highlights are PNG underlays.
  */
 export async function generatePuzzlePPT(
   options: ExportOptions,

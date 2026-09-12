@@ -9,28 +9,7 @@ import {
 import { HeaderShapePicker } from '@/components/header/HeaderShapePicker';
 import { Label } from '@/components/ui/label';
 import { SliderField } from '@/components/ui/slider-field';
-
-function MiniColorInput({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <Label className="text-xs text-gray-500 shrink-0">{label}</Label>
-      <input
-        type="color"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-7 w-10 cursor-pointer rounded border border-gray-200"
-      />
-    </div>
-  );
-}
+import { MiniColorInput } from '@/components/ui/color-input';
 
 export function PageNumberShapeEditor({
   shape,
@@ -91,15 +70,17 @@ export function PageNumberShapeEditor({
           max={8}
           step={1}
           format="px"
+          control="popover"
         />
         {shape.shapeId === 'polygon' && (
           <SliderField
             label="Polygon Sides"
             value={shape.polygonSides}
             onValueChange={(v) => onShapeChange({ polygonSides: v })}
-            min={3}
+            min={0}
             max={12}
             step={1}
+            control="input"
           />
         )}
       </div>
@@ -125,10 +106,11 @@ export function PageNumberShapeEditor({
           label="Font Size"
           value={fontSize}
           onValueChange={onFontSizeChange}
-          min={8}
+          min={0}
           max={48}
           step={1}
           format="px"
+          control="input"
         />
       </div>
     </div>

@@ -1,5 +1,5 @@
 import type { Puzzle } from './puzzles';
-import type { WordSearchPuzzle } from './puzzles/types';
+import type { WordSearchPuzzle, CrosswordPuzzle, GenericBatchPuzzle, MurdokuPuzzle } from './puzzles/types';
 import type { PersistedAppSettings } from './settings-persistence';
 
 export const GP_FILE_EXTENSION = '.gp';
@@ -12,6 +12,11 @@ export interface GpProjectFile {
   projectName: string;
   settings: PersistedAppSettings;
   batchPuzzles: WordSearchPuzzle[];
+  /** Optional so projects saved before crossword support still load. */
+  crosswordBatchPuzzles?: CrosswordPuzzle[];
+  murdokuBatchPuzzles?: MurdokuPuzzle[];
+  /** Optional so projects saved before sudoku/maze support still load. */
+  genericBatchPuzzles?: GenericBatchPuzzle[];
   currentPuzzle: Puzzle | null;
   currentBatchIndex: number;
 }

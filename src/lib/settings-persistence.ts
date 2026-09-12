@@ -9,11 +9,15 @@ import {
   getDefaultWordSearchSettings,
 } from './puzzles';
 import type { DocumentPage } from './document-model';
+import type { CrosswordSettings } from './crossword-settings';
+import type { GenericPuzzleSettings } from './generic-puzzle-settings';
 
 export const SETTINGS_STORAGE_KEY = 'puzzle-book-maker-settings-v1';
 export const SETTINGS_TAB_STORAGE_KEY = 'puzzle-book-maker-active-settings-tab';
 /** Top-level settings panel: book-wide layout vs current document */
 export const SETTINGS_PANEL_STORAGE_KEY = 'puzzle-book-maker-active-settings-panel';
+/** Desktop settings sidebar width in px (resizable). */
+export const SETTINGS_SIDEBAR_WIDTH_KEY = 'puzzle-book-maker-settings-sidebar-width';
 
 export interface PersistedAppSettings {
   version: 1;
@@ -34,6 +38,10 @@ export interface PersistedAppSettings {
   mazeSize: 'small' | 'medium' | 'large' | 'xl';
   cryptogramText: string;
   pageOverrides: Array<[number, Partial<WordSearchSettings>]>;
+  /** Per-crossword-page styling overrides keyed by document-local puzzle index. */
+  pageCrosswordOverrides?: Array<[number, Partial<CrosswordSettings>]>;
+  /** Per-sudoku/maze-page styling overrides keyed by document-local puzzle index. */
+  pageGenericOverrides?: Array<[number, Partial<GenericPuzzleSettings>]>;
   pagePuzzleGridScales: Array<[number, number]>;
   applyMode: Array<[string, boolean]>;
   documentPages?: DocumentPage[];
@@ -91,6 +99,8 @@ export function mergePersistedSettings(
       },
     },
     pageOverrides: stored.pageOverrides ?? defaults.pageOverrides,
+    pageCrosswordOverrides: stored.pageCrosswordOverrides ?? defaults.pageCrosswordOverrides,
+    pageGenericOverrides: stored.pageGenericOverrides ?? defaults.pageGenericOverrides,
     pagePuzzleGridScales: stored.pagePuzzleGridScales ?? defaults.pagePuzzleGridScales,
     applyMode: stored.applyMode ?? defaults.applyMode,
     documentPages: stored.documentPages ?? defaults.documentPages,

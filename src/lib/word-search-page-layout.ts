@@ -93,6 +93,10 @@ export interface UnifiedGridBlock {
   fontSizePt: number;
   fontFamily: string;
   letterColor: string;
+  /** Letter outline color (puzzle pages). */
+  letterStrokeColor: string;
+  /** Letter outline thickness in points. */
+  letterStrokeThicknessPt: number;
   boxColor: string;
   borderThicknessPt: number;
   noBox: boolean;
@@ -241,6 +245,65 @@ export function measureWordListColumnWidthsPt(
     }
     return maxWidth;
   });
+}
+
+let wordListMeasureCtx: CanvasRenderingContext2D | null | undefined;
+
+function getWordListMeasureContext(): CanvasRenderingContext2D | null {
+  if (typeof document === 'undefined') return null;
+  if (wordListMeasureCtx !== undefined) return wordListMeasureCtx;
+  const canvas = document.createElement('canvas');
+  wordListMeasureCtx = canvas.getContext('2d');
+  return wordListMeasureCtx;
+}
+
+/** CSS-canvas width of a word-list entry (matches WordListPreview font). */
+export function measureWordListWordWidthPt(
+  word: string,
+  fontSizePt: number,
+  fontFamily: string
+): number {
+  const ctx = getWordListMeasureContext();
+  if (!ctx) {
+    return word.length * fontSizePt * WORD_LIST_CHAR_WIDTH_EM;
+  }
+  const px = fontSizePt * PT_TO_CSS_PX;
+  ctx.font = `400 ${px}px "${fontFamily}", Arial, sans-serif`;
+  return ctx.measureText(word).width / PT_TO_CSS_PX;
+}
+
+export function resolveWordListColumnWidthsPt(
+  columns: string[][],
+  fontSizePt: number,
+  fontFamily: string,
+  addCheckboxes: boolean,
+  checkboxSizePt: number,
+  checkboxGapPt: number
+): number[] {
+  const extra = addCheckboxes ? checkboxSizePt + checkboxGapPt : 0;
+  return columns.map((col) => {
+    const estimated = estimateWordListColumnWidthPt(
+      col,
+      fontSizePt,
+      addCheckboxes,
+      checkboxSizePt,
+      checkboxGapPt
+    );
+    let measured = 0;
+    for (const word of col) {
+      measured = Math.max(measured, measureWordListWordWidthPt(word, fontSizePt, fontFamily) + extra);
+    }
+    return Math.max(estimated, measured);
+  });
+}
+
+/** CSS-like baseline from the top of a word-list row (half-leading + ascent). */
+export function getWordListRowBaselineFromTopPt(
+  lineHeightPt: number,
+  fontSizePt: number,
+  ascentPt: number
+): number {
+  return Math.max(0, (lineHeightPt - fontSizePt) / 2) + ascentPt;
 }
 
 function resolveTitleText(
@@ -393,9 +456,12 @@ export function computeWordSearchPageLayout(
   showSolution: boolean,
   puzzleScale: number = 70,
   titleToAnswerGap: number = 10,
-  bookHeaderTitleFontSizePt?: number | null
+  bookHeaderTitleFontSizePt?: number | null,
+  pagePart: 'clues' | 'grid' = 'clues'
 ): UnifiedPageLayout {
   const { core, typography, wordList, colors } = settings;
+  const isSolutionPage = !!showSolution;
+  const isGridOnlyPage = !isSolutionPage && settings.core.twoPagePuzzles && pagePart === 'grid';
   const pageColors = showSolution ? colors.answerPage : colors.puzzlePage;
   const dims = getPageDimensionsInches(settings);
   const pageWidthPt = dims.width * 72;
@@ -429,7 +495,7 @@ export function computeWordSearchPageLayout(
       (colors.puzzlePage as { headerLayout?: Record<string, unknown> }).headerLayout
     );
   const headerAssemblySettings = normalizeHeaderAssemblySettings(rawHeaderAssembly);
-  const useHeaderAssembly = !showSolution && headerAssemblySettings.enabled;
+  const useHeaderAssembly = !showSolution && !isGridOnlyPage && headerAssemblySettings.enabled;
 
   let title: UnifiedTitleBlock | null = null;
   let subtitle: UnifiedSubtitleBlock | null = null;
@@ -626,8 +692,19 @@ export function computeWordSearchPageLayout(
   const scaleFactor = Math.max(0.5, Math.min(puzzleScale / 100, 2.0));
   const scaledGridWidthPt = maxAvailableWidthPt * scaleFactor;
 
+  // ===== CRITICAL: Grid Scale Isolation =====
+  // The grid size is ONLY determined by the puzzleGridScale slider.
+  // It does NOT change based on title size, word list font size, vertical spacing, etc.
+
+  const cellSizePt = scaledGridWidthPt / gridCols;
+  const gridWidthPt = cellSizePt * gridCols;
+  const gridHeightPt = cellSizePt * gridRows;
+
   const puzzleIndexInDocument = Math.max(0, puzzle.puzzleIndexInDocument ?? 0);
-  const wordsPerPuzzle = Math.max(1, wordList.wordsPerPuzzle);
+  const wordsPerPuzzle = Math.max(
+    1,
+    wordList.oneWordPerPuzzle ? 1 : wordList.wordsPerPuzzle || 1
+  );
   const titleWordSlice = titleWords.words.slice(
     puzzleIndexInDocument * wordsPerPuzzle,
     puzzleIndexInDocument * wordsPerPuzzle + wordsPerPuzzle
@@ -638,7 +715,10 @@ export function computeWordSearchPageLayout(
       : puzzle.displayWords;
 
   const formattedWords =
-    !showSolution && !wordList.hideWordList && listSourceWords.length > 0
+    !showSolution &&
+    !wordList.hideWordList &&
+    !wordList.oneWordPerPuzzle &&
+    listSourceWords.length > 0
       ? formatWords(listSourceWords, wordList)
       : [];
   const columns = wordList.wordListColumns || 2;
@@ -649,22 +729,15 @@ export function computeWordSearchPageLayout(
   const wordListBlockHeightPt =
     formattedWords.length > 0 ? wordsPerColumn * wordListLineHeightPt + WORD_LIST_BOTTOM_RESERVE_PT : 0;
 
-  const gridTopPt = yPt;
-  
-  // ===== CRITICAL: Grid Scale Isolation =====
-  // The grid size is ONLY determined by the puzzleGridScale slider.
-  // It does NOT change based on title size, word list font size, vertical spacing, etc.
-  
-  // Step 2: Calculate cell size from width alone (HORIZONTAL ONLY)
-  // This is now completely independent of all other layout controls
-  const cellSizePt = scaledGridWidthPt / gridCols;
-  
-  // Step 3: Calculate final grid dimensions (derived from cell size)
-  const gridWidthPt = cellSizePt * gridCols;
-  const gridHeightPt = cellSizePt * gridRows;
-  
+  const splitCluePage = !showSolution && settings.core.twoPagePuzzles && pagePart === 'clues';
+  const gridTopPt = isGridOnlyPage
+    ? Math.max(marginPt + 12, (pageHeightPt - gridHeightPt) / 2)
+    : yPt;
+
   // Step 4: Center grid horizontally (does not affect size)
   const gridLeftPt = marginPt + (contentWidthPt - gridWidthPt) / 2;
+  const resolvedGridTopPt = splitCluePage ? yPt : gridTopPt;
+  const resolvedGridHeightPt = splitCluePage ? 0 : gridHeightPt;
 
   const gridFontSizePt = showSolution
     ? getSolutionGridFontSize(typography)
@@ -680,18 +753,21 @@ export function computeWordSearchPageLayout(
     : resolvePuzzleGridBorder(core);
 
   const grid: UnifiedGridBlock = {
-    topPt: gridTopPt,
+    topPt: resolvedGridTopPt,
     leftPt: gridLeftPt,
     cellSizePt: cellSizePt,
-    widthPt: gridWidthPt,
-    heightPt: gridHeightPt,
+    widthPt: splitCluePage ? 0 : gridWidthPt,
+    heightPt: resolvedGridHeightPt,
     rows: gridRows,
     cols: gridCols,
     fontSizePt: gridFontSizePt,
     fontFamily: gridFontFamily,
-    letterColor: showSolution
-      ? colors.answerPage.lettersInSolutionColor || '#000000'
-      : colors.puzzlePage.puzzleColor || '#000000',
+    letterColor: colors.puzzlePage.puzzleColor || '#000000',
+    letterStrokeColor: colors.puzzlePage.puzzleLetterStrokeColor || '#000000',
+    letterStrokeThicknessPt: Math.max(
+      0,
+      (colors.puzzlePage.puzzleLetterStrokeThickness ?? 0) / PT_TO_CSS_PX
+    ),
     boxColor: pageColors.boxColor || '#000000',
     borderThicknessPt: activeGridBorder.strokeThicknessPx,
     noBox: core.noBoxAroundPuzzle ?? false,
@@ -702,23 +778,24 @@ export function computeWordSearchPageLayout(
   };
 
   // CRITICAL: Position word list relative to scaled grid bottom + constant gap
-  const gridBottomYPt = gridTopPt + gridHeightPt;
+  const gridBottomYPt = resolvedGridTopPt + resolvedGridHeightPt;
   // Apply frame padding so the word list is positioned after the outer frame
   const framePaddingPt = activeGridBorder.paddingPx / PT_TO_CSS_PX;
-  const wordListTopYPt = gridBottomYPt + framePaddingPt + spaceGridToWordListPt;
+  const wordListTopYPt = splitCluePage ? yPt : gridBottomYPt + framePaddingPt + spaceGridToWordListPt;
 
   let wordListBlock: UnifiedWordListBlock | null = null;
   if (formattedWords.length > 0) {
     const columnGapPt = columns > 1 ? listSpacing.horizontal : 0;
     const wordColumns = distributeWordsIntoColumns(formattedWords, columns);
-    const columnWidthsPt = wordColumns.map((col) =>
-      estimateWordListColumnWidthPt(
-        col,
-        wordListFontSizePt,
-        wordList.addCheckboxes || false,
-        10,
-        8
-      )
+    const checkboxSizePt = 10;
+    const checkboxGapPt = 8;
+    const columnWidthsPt = resolveWordListColumnWidthsPt(
+      wordColumns,
+      wordListFontSizePt,
+      wordList.wordListFontFamily || 'Arial',
+      wordList.addCheckboxes || false,
+      checkboxSizePt,
+      checkboxGapPt
     );
     let blockWidthPt = computeWordListBlockWidthPt(columnWidthsPt, columnGapPt);
     

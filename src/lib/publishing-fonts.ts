@@ -14,10 +14,30 @@ export const PUBLISHING_FONTS = [
   'Fredoka',
   'Patrick Hand',
   'Playfair Display',
+  'Grow Year',
+  'Sunday Magic',
   'Arabic Typesetting',
 ] as const;
 
 export type PublishingFont = (typeof PUBLISHING_FONTS)[number];
+
+/** First family name from a CSS font-family stack, without quotes. */
+export function normalizeFontFamilyName(raw: string | undefined | null): string {
+  if (!raw) return '';
+  return raw.split(',')[0]?.replace(/['"]/g, '').trim() || '';
+}
+
+/** Match a CSS/computed font to a curated publishing font, or null if unknown. */
+export function matchPublishingFont(raw: string | undefined | null): PublishingFont | null {
+  const normalized = normalizeFontFamilyName(raw).toLowerCase();
+  if (!normalized) return null;
+  return PUBLISHING_FONTS.find((font) => font.toLowerCase() === normalized) ?? null;
+}
+
+/** Value that is always a valid Radix Select item (avoids infinite update loops). */
+export function selectPublishingFont(raw: string | undefined | null): PublishingFont {
+  return matchPublishingFont(raw) ?? 'Arial';
+}
 
 export interface PublishingFontConfig {
   /** Google Fonts CSS family name (when not a system font). */
@@ -92,6 +112,23 @@ export const FONT_REGISTRY: Record<PublishingFont, PublishingFontConfig> = {
       regular:
         'https://fonts.gstatic.com/s/playfairdisplay/v40/nuFvD-vYSZviVYUb_rj3ij__anPXJzDwcbmjWBN2PKdFvUDQ.ttf',
       bold: 'https://fonts.gstatic.com/s/playfairdisplay/v40/nuFvD-vYSZviVYUb_rj3ij__anPXJzDwcbmjWBN2PKeiukDQ.ttf',
+    },
+  },
+  'Grow Year': {
+    // Bundled under public/fonts (UI @font-face + PDF embedding).
+    regularWeight: 400,
+    boldWeight: 400,
+    ttfUrl: {
+      regular: '/fonts/GrowYear.ttf',
+      bold: '/fonts/GrowYear.ttf',
+    },
+  },
+  'Sunday Magic': {
+    regularWeight: 400,
+    boldWeight: 400,
+    ttfUrl: {
+      regular: '/fonts/SundayMagic-Regular.otf',
+      bold: '/fonts/SundayMagic-Regular.otf',
     },
   },
   'Arabic Typesetting': {

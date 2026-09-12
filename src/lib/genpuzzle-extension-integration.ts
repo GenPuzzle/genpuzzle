@@ -86,7 +86,7 @@ export function generateWords(options: {
       return;
     }
 
-    const dynamicPrompt = `Generate ${options.puzzlesCount} word lists. Each word must not exceed ${options.maxLength} letters in ${options.charCase} case. Unique no duplicated words, target audience: ${options.ageLevel}, language: ${options.language}. Make sure to add space between words when we have 2 words based. Format:\n${options.themeTitle}\nword, word, word...`;
+    const dynamicPrompt = `Generate ${options.puzzlesCount} word lists. Each entry must be a real, correctly spelled ${options.language} word or phrase. Max ${options.maxLength} letters (spaces do not count) in ${options.charCase} case. Unique, no duplicated words. Target audience: ${options.ageLevel}. If an entry is two or more words, put a space between them: write "Sea Animals" not "Seaanimals" or "SeaAnimals". Never smash words together. Format:\n${options.themeTitle}\nword, word, word...`;
 
     try {
       chrome.runtime.sendMessage(

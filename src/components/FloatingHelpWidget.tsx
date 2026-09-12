@@ -438,12 +438,26 @@ export function FloatingHelpWidget() {
 
         @media (max-width: 768px) {
           .floating-help-root {
-            bottom: 5rem;
-            right: 0.75rem;
+            bottom: calc(4.25rem + env(safe-area-inset-bottom, 0px));
+            right: calc(0.65rem + env(safe-area-inset-right, 0px));
+          }
+
+          .floating-help-btn {
+            width: 3rem !important;
+            height: 3rem !important;
+            min-width: 3rem !important;
+            min-height: 3rem !important;
+            max-width: 3rem !important;
+            max-height: 3rem !important;
+            font-size: 0.55rem !important;
+            box-shadow:
+              0 0 0 2px rgba(34, 118, 180, 0.2),
+              0 4px 12px rgba(26, 90, 140, 0.35) !important;
           }
 
           .floating-help-panel {
-            height: min(62vh, 30rem);
+            width: min(calc(100vw - 1.25rem), 22rem);
+            height: min(55vh, 26rem);
           }
         }
       `}</style>

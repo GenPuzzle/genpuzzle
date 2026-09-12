@@ -50,6 +50,39 @@ async function fetchTtfFromUrl(url: string, cacheKey: string): Promise<Uint8Arra
   if (fontCache.has(cacheKey)) {
     return fontCache.get(cacheKey)!;
   }
+
+  // Bundled fonts under /public (e.g. /fonts/GrowYear.ttf)
+  if (url.startsWith('/')) {
+    if (isNode) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const fs = require('fs') as typeof import('fs');
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const path = require('path') as typeof import('path');
+        const absolutePath = path.join(process.cwd(), 'public', url.replace(/^\//, ''));
+        if (fs.existsSync(absolutePath)) {
+          const bytes = new Uint8Array(fs.readFileSync(absolutePath));
+          fontCache.set(cacheKey, bytes);
+          return bytes;
+        }
+      } catch (error) {
+        console.warn(`Error loading local font "${url}":`, error);
+      }
+      return null;
+    }
+
+    try {
+      const fontRes = await fetch(url);
+      if (!fontRes.ok) return null;
+      const bytes = new Uint8Array(await fontRes.arrayBuffer());
+      fontCache.set(cacheKey, bytes);
+      return bytes;
+    } catch (error) {
+      console.warn(`Error fetching local font ${url}:`, error);
+      return null;
+    }
+  }
+
   try {
     const fontRes = await fetch(url);
     if (!fontRes.ok) return null;

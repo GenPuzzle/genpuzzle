@@ -15,6 +15,13 @@ import { fillRoundedRectClipped } from './page-frame-geometry';
 /** PDF points (72/in) → CSS pixels (96/in) */
 const PT_TO_PX = 96 / 72;
 
+/** Normalize UI opacity (canonical 0–100) to 0–1 for canvas/PDF. */
+export function normalizeBackgroundOpacity01(opacity: number | undefined): number {
+  if (opacity == null || !Number.isFinite(opacity)) return 1;
+  // Stored as percent (0–100). Clamp then scale — do not treat 1 as “fully opaque”.
+  return Math.max(0, Math.min(100, opacity)) / 100;
+}
+
 /** Default frame border margin in inches (UI + export). */
 export const DEFAULT_FRAME_BORDER_MARGIN_IN = 0.56;
 
@@ -241,7 +248,7 @@ export async function generateFlattenedBackground(
   if (config.backgroundImage) {
     try {
       const img = await loadImage(config.backgroundImage);
-      const opacity = (config.backgroundImageOpacity ?? 100) / 100;
+      const opacity = normalizeBackgroundOpacity01(config.backgroundImageOpacity);
       const fit = config.backgroundImageFit ?? 'cover';
       drawImageWithFit(ctx, img, widthPx, heightPx, fit, opacity);
     } catch (e) {
@@ -272,9 +279,15 @@ export async function generateFlattenedBackground(
     }
   }
 
-  // Fully opaque raster (JPEG) — inner frame uses backgroundColor, not transparency
-  const mimeType: 'image/jpeg' | 'image/png' = 'image/jpeg';
-  const dataUrl = await canvasToDataUrl(canvas, mimeType, 0.9);
+  // Prefer PNG when the image is faded so JPEG quantization doesn't wash opacity.
+  const opacity01 = normalizeBackgroundOpacity01(config.backgroundImageOpacity);
+  const mimeType: 'image/jpeg' | 'image/png' =
+    config.backgroundImage && opacity01 < 0.999 ? 'image/png' : 'image/jpeg';
+  const dataUrl = await canvasToDataUrl(
+    canvas,
+    mimeType,
+    mimeType === 'image/jpeg' ? 0.9 : undefined
+  );
 
   return {
     dataUrl,
@@ -393,27 +406,24 @@ export class FlattenedBackgroundPptCache {
 export const UnifiedBackgroundPptCache = FlattenedBackgroundPptCache;
 
 /**
- * Apply uneditable slide background from flattened raster (or solid color fallback).
+ * Apply page art as the PPT slide background (not a floating image).
+ * Native text/shapes drawn after this stay editable on top of the background.
  */
 export async function applyFlattenedBackgroundToSlide(
-  slide: { background?: Record<string, unknown> },
+  slide: {
+    background?: Record<string, unknown>;
+    addImage?: (opts: Record<string, unknown>) => void;
+  },
   config: PageBackgroundConfig,
   cache: FlattenedBackgroundPptCache,
   hex6: (hex: string | undefined, fallback?: string) => string
 ): Promise<void> {
   const bgColor = hex6(normalizeHexColor(config.backgroundColor, '#ffffff'), 'FFFFFF');
   const raster = await cache.get(config);
-
   if (raster) {
-    // PPT: raster is bg image only — inner fill + border come from one vector shape.
-    // PDF: raster may include baked inner fill; color underlay prevents transparent holes.
-    slide.background =
-      config.bakeInnerFrameFill === false
-        ? { data: raster.dataUrl }
-        : { color: bgColor, data: raster.dataUrl };
+    slide.background = { color: bgColor, data: raster.dataUrl };
     return;
   }
-
   slide.background = { color: bgColor };
 }
 
@@ -432,7 +442,12 @@ export function puzzlePageBackgroundConfig(
     backgroundImageFrameMargin?: number;
   },
   pageFrameCornerRadiusPx?: number,
-  options?: { bakeInnerFrameFill?: boolean }
+  options?: {
+    bakeInnerFrameFill?: boolean;
+    /** Prefer live page-frame settings over legacy color fields. */
+    frameEnabled?: boolean;
+    frameMarginIn?: number;
+  }
 ): PageBackgroundConfig {
   return {
     widthPt,
@@ -441,8 +456,12 @@ export function puzzlePageBackgroundConfig(
     backgroundImage: puzzlePage.backgroundImage,
     backgroundImageOpacity: puzzlePage.backgroundImageOpacity,
     backgroundImageFit: puzzlePage.backgroundImageFit,
-    backgroundImageFrameEnabled: resolveFrameEnabled(puzzlePage.backgroundImageFrameEnabled),
-    backgroundImageFrameMargin: resolveFrameMargin(puzzlePage.backgroundImageFrameMargin),
+    backgroundImageFrameEnabled: resolveFrameEnabled(
+      options?.frameEnabled ?? puzzlePage.backgroundImageFrameEnabled
+    ),
+    backgroundImageFrameMargin: resolveFrameMargin(
+      options?.frameMarginIn ?? puzzlePage.backgroundImageFrameMargin
+    ),
     pageFrameCornerRadiusPx: pageFrameCornerRadiusPx ?? 4,
     bakeInnerFrameFill: options?.bakeInnerFrameFill,
   };
@@ -460,7 +479,11 @@ export function answerPageBackgroundConfig(
     backgroundImageFrameMargin?: number;
   },
   pageFrameCornerRadiusPx?: number,
-  options?: { bakeInnerFrameFill?: boolean }
+  options?: {
+    bakeInnerFrameFill?: boolean;
+    frameEnabled?: boolean;
+    frameMarginIn?: number;
+  }
 ): PageBackgroundConfig {
   return puzzlePageBackgroundConfig(
     widthPt,

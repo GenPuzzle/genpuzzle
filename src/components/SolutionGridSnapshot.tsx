@@ -30,8 +30,8 @@ export function SolutionGridSnapshot({
   useEffect(() => {
     let cancelled = false;
     void captureGridSnapshot(puzzle, settings, cellSizePt, gridFontSizePt, { scale: 2 }).then(
-      (url) => {
-        if (!cancelled) setSrc(url);
+      (snapshot) => {
+        if (!cancelled) setSrc(snapshot?.dataUrl ?? null);
       }
     );
     return () => {

@@ -1,11 +1,17 @@
 import type { PDFDocument, PDFFont, PDFPage, RGB } from 'pdf-lib';
 import type { WordSearchSettings } from './puzzles/types';
-import type { DocumentPage, PuzzleModuleSettings, TextModuleSettings, TextPageBlock } from './document-model';
-import { getPageMarginInches } from './puzzle-layout';
+import type {
+  DocumentModuleType,
+  DocumentPage,
+  PuzzleModuleSettings,
+  TextModuleSettings,
+  TextPageBlock,
+} from './document-model';
+import { getPageMarginInches, cssPxToPoints } from './puzzle-layout';
 import { resolveTextPageBlocks, resolveOwnershipNameLineType, ownershipNameLineIsVisible } from './text-page-blocks';
 import {
   getFrameCornerRadiusPx,
-  getOwnershipNameLineRect,
+  getOwnershipCanvasLayout,
   getTextPageBlockRectPt,
   getTextPageContentAreaPt,
   resolveTextPageFrameShapeId,
@@ -19,13 +25,21 @@ import {
   type RichTextLine,
 } from './text-page-rich-text-export';
 import { normalizeCssColorToHex } from './text-page-export-color';
-import { measureTextBlockLayoutFromDom, measureOwnershipBlockLayoutFromDom } from './text-page-dom-layout';
+import {
+  measureOwnershipBlockLayoutFromDom,
+  measureTextBlockLayoutFromDom,
+} from './text-page-dom-layout';
 import { drawShapeOnPdfPage } from './header-assembly-pdf-draw';
 import {
   resolveTextPageBackground,
   resolveTextPageFrameSettings,
   resolveTextPageTextColor,
 } from './text-page-settings';
+import {
+  buildLegacyCenteredTextLayout,
+  cssLineBaselineFromTopPt,
+  wrapPreWrapLinesPt,
+} from './text-page-legacy-layout';
 import {
   FlattenedBackgroundPdfCache,
   puzzlePageBackgroundConfig,
@@ -64,62 +78,43 @@ function drawLegacyCenteredText(
   layoutSettings: WordSearchSettings,
   pageWidth: number,
   pageHeight: number,
-  marginPt: number,
   font: PDFFont,
   titleFont: PDFFont,
-  getColor: GetColorFn
+  getColor: GetColorFn,
+  pageTitle: string
 ) {
-  const contentWidth = pageWidth - marginPt * 2;
-  const titleSize =
-    settings.titleFontSize && settings.titleFontSize > 0
-      ? settings.titleFontSize
-      : settings.fontSize * 1.2;
-  const bodySize = settings.fontSize;
-  const titleLine = (settings.title || '').trim();
-  const bodyText = (settings.content || '').trim();
-  const alignment = settings.alignment || 'center';
+  const layout = buildLegacyCenteredTextLayout(
+    settings,
+    layoutSettings,
+    pageWidth,
+    pageHeight,
+    pageTitle
+  );
   const textColor = getColor(
-    normalizeCssColorToHex(resolveTextPageTextColor(settings, layoutSettings), '#1f2937'),
+    normalizeCssColorToHex(layout.color, '#1f2937'),
     '#1f2937'
   );
 
-  const titleLines = titleLine ? [titleLine] : [];
-  const bodyLines = bodyText ? bodyText.split('\n') : [];
-  const lineHeight = bodySize * 1.35;
-  const titleBlockHeight = titleLines.length * (titleSize * 1.2);
-  const gapAfterTitle = titleLines.length > 0 && bodyLines.length > 0 ? lineHeight * 0.5 : 0;
-  const bodyBlockHeight = bodyLines.length * lineHeight;
-  const totalHeight = titleBlockHeight + gapAfterTitle + bodyBlockHeight;
-
-  let cursorY = pageHeight / 2 + totalHeight / 2;
-
-  const drawAlignedLine = (line: string, size: number, useTitleFont: boolean) => {
-    const activeFont = useTitleFont ? titleFont : font;
-    const textWidth = activeFont.widthOfTextAtSize(line, size);
-    let x = marginPt;
-    if (alignment === 'center') {
-      x = marginPt + Math.max(0, (contentWidth - textWidth) / 2);
-    } else if (alignment === 'right') {
-      x = pageWidth - marginPt - textWidth;
+  for (const line of layout.lines) {
+    if (!line.text) continue;
+    const activeFont = line.bold ? titleFont : font;
+    const size = line.fontSizePt;
+    const textWidth = activeFont.widthOfTextAtSize(line.text, size);
+    let x = layout.boxLeftPt;
+    if (layout.alignment === 'center') {
+      x = layout.boxLeftPt + Math.max(0, (layout.boxWidthPt - textWidth) / 2);
+    } else if (layout.alignment === 'right') {
+      x = layout.boxLeftPt + Math.max(0, layout.boxWidthPt - textWidth);
     }
-    page.drawText(line, {
+    const ascent = activeFont.heightAtSize(size, { descender: false });
+    const baselineFromTop = cssLineBaselineFromTopPt(line.lineHeightPt, size, ascent);
+    page.drawText(line.text, {
       x,
-      y: cursorY - size,
+      y: pageHeight - (line.topPt + baselineFromTop),
       size,
       font: activeFont,
       color: textColor,
     });
-    cursorY -= useTitleFont ? titleSize * 1.2 : lineHeight;
-  };
-
-  for (const line of titleLines) {
-    drawAlignedLine(line, titleSize, true);
-  }
-  if (gapAfterTitle > 0) {
-    cursorY -= gapAfterTitle;
-  }
-  for (const line of bodyLines) {
-    drawAlignedLine(line, bodySize, false);
   }
 }
 
@@ -216,6 +211,105 @@ async function drawRichTextLineOnPdf(
   return baseTopFromPageTop + line.lineHeightPt;
 }
 
+async function drawOwnershipBlockOnPdf(
+  page: PDFPage,
+  block: TextPageBlock,
+  pageHeight: number,
+  rect: ReturnType<typeof getTextPageBlockRectPt>,
+  fallbackColor: string,
+  getColor: GetColorFn,
+  getFont: GetPdfFontFn
+) {
+  const layout = getOwnershipCanvasLayout(block, rect);
+  const nameLineType = resolveOwnershipNameLineType(block);
+  const measured = measureOwnershipBlockLayoutFromDom(
+    block,
+    rect.innerWidth,
+    rect.innerHeight,
+    fallbackColor,
+    nameLineType
+  );
+
+  if (measured && measured.textLines.length > 0) {
+    for (const line of measured.textLines) {
+      await drawDomMeasuredRunsOnPdf(
+        page,
+        pageHeight,
+        line.runs,
+        rect.innerLeft,
+        rect.innerTopFromPageTop,
+        getColor,
+        getFont
+      );
+    }
+  } else {
+    const font = await getFont(block.fontFamily || 'Arial', !!block.bold);
+    const size = layout.fontSizePt;
+    const color = getColor(
+      normalizeCssColorToHex(block.textColor ?? fallbackColor, '#1f2937'),
+      '#1f2937'
+    );
+    const label = block.text || '';
+    const lines = label
+      ? wrapPreWrapLinesPt(label, rect.innerWidth, size, block.fontFamily || 'Arial', !!block.bold)
+      : [];
+    const ascent = font.heightAtSize(size, { descender: false });
+    const alignment = block.alignment || 'center';
+    const maxBottom = layout.nameLine.lineTopFromPageTop;
+
+    let cursorTop = layout.textTopPt;
+    for (const line of lines) {
+      if (cursorTop + layout.lineHeightPt * 0.35 > maxBottom) break;
+      if (line) {
+        const textWidth = font.widthOfTextAtSize(line, size);
+        let x = rect.innerLeft;
+        if (alignment === 'center') {
+          x = rect.innerLeft + Math.max(0, (rect.innerWidth - textWidth) / 2);
+        } else if (alignment === 'right') {
+          x = rect.innerLeft + Math.max(0, rect.innerWidth - textWidth);
+        }
+        const baselineFromTop = cssLineBaselineFromTopPt(layout.lineHeightPt, size, ascent);
+        page.drawText(line, {
+          x,
+          y: pageHeight - (cursorTop + baselineFromTop),
+          size,
+          font,
+          color,
+        });
+        if (block.underline) {
+          const underlineY = pageHeight - (cursorTop + baselineFromTop) - 1;
+          page.drawLine({
+            start: { x, y: underlineY },
+            end: { x: x + textWidth, y: underlineY },
+            thickness: Math.max(0.5, size * 0.05),
+            color,
+          });
+        }
+      }
+      cursorTop += layout.lineHeightPt;
+    }
+  }
+
+  if (ownershipNameLineIsVisible(nameLineType)) {
+    const lineFromTop =
+      measured != null
+        ? rect.innerTopFromPageTop + measured.nameLineBottomPt
+        : layout.nameLine.lineBottomFromPageTop;
+    const lineY = pageHeight - lineFromTop;
+    page.drawLine({
+      start: { x: rect.innerLeft, y: lineY },
+      end: { x: rect.innerLeft + rect.innerWidth, y: lineY },
+      thickness: cssPxToPoints(1),
+      color: getColor(
+        normalizeCssColorToHex(block.frameBorderColor ?? block.textColor, '#1f2937'),
+        '#1f2937'
+      ),
+      dashArray:
+        nameLineType === 'dashed' ? [4, 3] : nameLineType === 'dotted' ? [1, 2] : undefined,
+    });
+  }
+}
+
 async function drawTextBlockContent(
   page: PDFPage,
   block: TextPageBlock,
@@ -231,53 +325,16 @@ async function drawTextBlockContent(
   );
 
   if (block.kind === 'ownership') {
-    const nameLineType = resolveOwnershipNameLineType(block);
-    const ownershipLayout = measureOwnershipBlockLayoutFromDom(
+    await drawOwnershipBlockOnPdf(
+      page,
       block,
-      rect.innerWidth,
-      rect.innerHeight,
+      pageHeight,
+      rect,
       fallbackColor,
-      nameLineType
+      getColor,
+      getFont
     );
-
-    if (ownershipLayout) {
-      for (const line of ownershipLayout.textLines) {
-        await drawDomMeasuredRunsOnPdf(
-          page,
-          pageHeight,
-          line.runs,
-          rect.innerLeft,
-          rect.innerTopFromPageTop,
-          getColor,
-          getFont
-        );
-      }
-
-      if (ownershipNameLineIsVisible(nameLineType)) {
-        const nameLine = getOwnershipNameLineRect(
-          rect,
-          block,
-          ownershipLayout.nameLineBottomPt
-        );
-        const lineY = pageHeight - nameLine.lineBottomFromPageTop;
-        page.drawLine({
-          start: { x: rect.innerLeft, y: lineY },
-          end: { x: rect.innerLeft + rect.innerWidth, y: lineY },
-          thickness: 1,
-          color: getColor(
-            normalizeCssColorToHex(block.frameBorderColor ?? block.textColor, '#1f2937'),
-            '#1f2937'
-          ),
-          dashArray:
-            nameLineType === 'dashed'
-              ? [4, 3]
-              : nameLineType === 'dotted'
-                ? [1, 2]
-                : undefined,
-        });
-      }
-      return;
-    }
+    return;
   }
 
   const domLines = measureTextBlockLayoutFromDom(block, rect.innerWidth, fallbackColor);
@@ -314,29 +371,6 @@ async function drawTextBlockContent(
         getColor,
         getFont
       );
-    }
-  }
-
-  if (block.kind === 'ownership') {
-    const nameLineType = resolveOwnershipNameLineType(block);
-    if (ownershipNameLineIsVisible(nameLineType)) {
-      const nameLine = getOwnershipNameLineRect(rect, block);
-      const lineY = pageHeight - nameLine.lineBottomFromPageTop;
-      page.drawLine({
-        start: { x: rect.innerLeft, y: lineY },
-        end: { x: rect.innerLeft + rect.innerWidth, y: lineY },
-        thickness: 1,
-        color: getColor(
-          normalizeCssColorToHex(block.frameBorderColor ?? block.textColor, '#1f2937'),
-          '#1f2937'
-        ),
-        dashArray:
-          nameLineType === 'dashed'
-            ? [4, 3]
-            : nameLineType === 'dotted'
-              ? [1, 2]
-              : undefined,
-      });
     }
   }
 }
@@ -484,28 +518,38 @@ async function drawTocModuleOnPdfPage(
     titleX = layout.titleXPt + Math.max(0, contentWidth - titleWidth);
   }
 
+  const titleAscent = titleFont.heightAtSize(titleSize, { descender: false });
+  const titleBaseline = pageHeight - (
+    layout.titleYFromTopPt +
+    cssLineBaselineFromTopPt(titleSize * 1.2, titleSize, titleAscent)
+  );
+
   page.drawText(layout.titleText, {
     x: titleX,
-    y: pageHeight - layout.titleYFromTopPt - titleSize,
+    y: titleBaseline,
     size: titleSize,
     font: titleFont,
     color: titleColor,
-    maxWidth: contentWidth,
   });
 
   const entrySize = layout.entryFontSizePt;
+  const entryAscent = entryFont.heightAtSize(entrySize, { descender: false });
   for (const column of layout.columns) {
     for (const row of column.rows) {
       const rowLeft = column.xPt + row.indentPt;
       const rowWidth = Math.max(20, column.widthPt - row.indentPt);
-      const baseline = pageHeight - row.yFromTopPt - entrySize;
+      const baseline =
+        pageHeight -
+        (row.yFromTopPt +
+          layout.rowPadPt +
+          cssLineBaselineFromTopPt(layout.entryLineHeightPt, entrySize, entryAscent));
       const pageNum = toc.showPageNumbers ? row.pageNumber : '';
       const pageWidthText = pageNum
         ? entryFont.widthOfTextAtSize(pageNum, entrySize)
         : 0;
       const titleMax = Math.max(
         12,
-        rowWidth - pageWidthText - (pageNum ? layout.entryGapPt + 8 : 0)
+        rowWidth - pageWidthText - (pageNum ? layout.entryGapPt : 0)
       );
 
       // Truncate title to one line to match canvas.
@@ -590,7 +634,8 @@ export async function drawTextModuleOnPdfPage(
   pageTitle = 'Text Page',
   getFont?: GetPdfFontFn,
   resolvedToc?: ResolvedTocEntry[],
-  suppressPageNumber = false
+  suppressPageNumber = false,
+  moduleType?: DocumentModuleType | string
 ): Promise<void> {
   const marginPt = getPageMarginInches(layoutSettings) * 72;
   const pageBackground = resolveTextPageBackground(settings, layoutSettings);
@@ -603,7 +648,11 @@ export async function drawTextModuleOnPdfPage(
     pageWidth,
     pageHeight,
     pageBackground,
-    pageFrame.cornerRadiusPx
+    pageFrame.cornerRadiusPx,
+    {
+      frameEnabled: pageFrame.enabled,
+      frameMarginIn: pageFrame.marginSizeIn,
+    }
   );
   await drawBackground(pdfDoc, page, pageWidth, pageHeight, bgConfig, backgroundCache);
   drawFrame(page, pageWidth, pageHeight, pageFrame);
@@ -626,7 +675,7 @@ export async function drawTextModuleOnPdfPage(
       pageTitle
     );
   } else if (!noText) {
-    const blocks = resolveTextPageBlocks(settings, pageTitle, layoutSettings);
+    const blocks = resolveTextPageBlocks(settings, pageTitle, layoutSettings, moduleType);
     if (blocks.length > 0) {
       for (const block of blocks) {
         await drawTextPageBlock(
@@ -649,10 +698,10 @@ export async function drawTextModuleOnPdfPage(
         layoutSettings,
         pageWidth,
         pageHeight,
-        marginPt,
         font,
         titleFont,
-        getColor
+        getColor,
+        pageTitle
       );
     }
   }
@@ -677,17 +726,46 @@ export async function drawTextModuleOnPdfPage(
   }
 }
 
+/**
+ * Live Style (Color Settings) owns page fill, background image, and the page
+ * container frame. A word-search document tab can be stale when the user edits
+ * those controls on crossword / maze / sudoku / text pages.
+ */
+export function withLiveStylePageChrome(
+  layout: WordSearchSettings,
+  liveStyle: WordSearchSettings
+): WordSearchSettings {
+  return {
+    ...layout,
+    colors: {
+      puzzlePage: {
+        ...layout.colors.puzzlePage,
+        ...liveStyle.colors.puzzlePage,
+      },
+      answerPage: {
+        ...layout.colors.answerPage,
+        ...liveStyle.colors.answerPage,
+      },
+    },
+    pageFrameSettings: liveStyle.pageFrameSettings ?? layout.pageFrameSettings,
+  };
+}
+
 export function resolveLayoutSettingsForExport(
   documentPages: DocumentPage[],
   fallback: WordSearchSettings
 ): WordSearchSettings {
+  let fromDoc: WordSearchSettings | null = null;
   for (const doc of documentPages) {
     if (doc.moduleType === 'word-search') {
       const ws = (doc.settings as PuzzleModuleSettings).wordSearchSettings;
-      if (ws) return ws;
+      if (ws) {
+        fromDoc = ws;
+        break;
+      }
     }
   }
-  return fallback;
+  return withLiveStylePageChrome(fromDoc ?? fallback, fallback);
 }
 
 export function resolvePageNumberSettingsForBook(

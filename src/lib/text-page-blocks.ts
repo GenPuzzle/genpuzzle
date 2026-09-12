@@ -1,4 +1,10 @@
-import type { TextModuleSettings, TextPageBlock, TextPageBlockKind, OwnershipNameLineType } from './document-model';
+import type {
+  DocumentModuleType,
+  TextModuleSettings,
+  TextPageBlock,
+  TextPageBlockKind,
+  OwnershipNameLineType,
+} from './document-model';
 import type { WordSearchSettings } from './puzzles/types';
 import { resolveTextPageTextColor } from './text-page-settings';
 import {
@@ -133,31 +139,93 @@ function baseBlockFromSettings(
   });
 }
 
-/** Title pages start blank — users add only the elements they need. */
+export const DEFAULT_TITLE_PAGE_SERIES_TEXT = 'Series Title';
+export const DEFAULT_TITLE_PAGE_HEADING = 'Book Title';
+export const DEFAULT_TITLE_PAGE_SUBTITLE = 'Puzzles & Games';
+
+export function defaultTitlePageCopyrightText(year = new Date().getFullYear()): string {
+  return `© ${year}. All rights reserved. No part of this publication may be reproduced, stored, or distributed in any form without prior written permission from the copyright owner.`;
+}
+
+export function resolveDefaultTitlePageHeading(
+  pageTitle: string,
+  settings?: TextModuleSettings
+): string {
+  const skip = new Set(['', 'Title Page', 'Empty Page', 'Chapter']);
+  const fromSettings = settings?.title?.trim() ?? '';
+  if (!skip.has(fromSettings)) return fromSettings;
+  const fromPage = pageTitle.trim();
+  if (!skip.has(fromPage)) return fromPage;
+  return DEFAULT_TITLE_PAGE_HEADING;
+}
+
+export function createSeriesTitleBlock(
+  settings: TextModuleSettings,
+  globalSettings: WordSearchSettings
+): TextPageBlock {
+  return baseBlockFromSettings(settings, globalSettings, {
+    id: 'title-page-series',
+    kind: 'text',
+    text: DEFAULT_TITLE_PAGE_SERIES_TEXT,
+    xPercent: 12,
+    yPercent: 16,
+    widthPercent: 76,
+    heightPercent: 7,
+    fontFamily: 'Playfair Display',
+    fontSize: 22,
+    bold: false,
+    alignment: 'center',
+    textColor: settings.textColor || '#000000',
+    lineHeight: 1.2,
+  });
+}
+
+/**
+ * Default title-page layout (editable): series line, bold main title,
+ * subtitle, belongs-to box, and copyright footer.
+ */
 export function createDefaultTitlePageBlocks(
-  _pageTitle: string,
-  _settings: TextModuleSettings,
-  _globalSettings: WordSearchSettings
+  pageTitle: string,
+  settings: TextModuleSettings,
+  globalSettings: WordSearchSettings
 ): TextPageBlock[] {
-  return [];
+  const heading = resolveDefaultTitlePageHeading(pageTitle, settings);
+  const titleSettings: TextModuleSettings = {
+    ...settings,
+    title: heading,
+    titleFontSize: settings.titleFontSize && settings.titleFontSize > 0 ? settings.titleFontSize : 40,
+    textColor: settings.textColor || '#000000',
+  };
+  return [
+    createSeriesTitleBlock(titleSettings, globalSettings),
+    createTitleBlock(titleSettings, globalSettings, heading),
+    createSubtitleBlock(titleSettings, globalSettings),
+    createOwnershipBlock(titleSettings, globalSettings),
+    createCopyrightBlock(titleSettings, globalSettings),
+  ];
 }
 
 export function createTitleBlock(
   settings: TextModuleSettings,
   globalSettings: WordSearchSettings,
-  pageTitle = 'Title'
+  pageTitle = DEFAULT_TITLE_PAGE_HEADING
 ): TextPageBlock {
-  const titleSize = settings.titleFontSize ?? settings.fontSize * 1.6;
+  const titleSize =
+    settings.titleFontSize && settings.titleFontSize > 0 ? settings.titleFontSize : 40;
   return baseBlockFromSettings(settings, globalSettings, {
+    id: 'title-page-title',
     kind: 'title',
-    text: settings.title || pageTitle,
+    text: resolveDefaultTitlePageHeading(pageTitle, settings),
     xPercent: 10,
-    yPercent: 6,
+    yPercent: 23,
     widthPercent: 80,
-    heightPercent: 14,
+    heightPercent: 12,
+    fontFamily: 'Arial',
     fontSize: titleSize,
     bold: true,
+    alignment: 'center',
     textColor: settings.textColor || '#000000',
+    lineHeight: 1.1,
   });
 }
 
@@ -165,15 +233,26 @@ export function createSubtitleBlock(
   settings: TextModuleSettings,
   globalSettings: WordSearchSettings
 ): TextPageBlock {
+  const fromContent = settings.content?.trim() ?? '';
+  const skipContent = new Set(['', 'Title Page', 'Empty Page', 'Chapter', 'Book Title']);
+  const subtitleText =
+    fromContent && !fromContent.includes('\n') && !skipContent.has(fromContent)
+      ? fromContent
+      : DEFAULT_TITLE_PAGE_SUBTITLE;
   return baseBlockFromSettings(settings, globalSettings, {
+    id: 'title-page-subtitle',
     kind: 'subtitle',
-    text: 'Subtitle',
-    xPercent: 10,
-    yPercent: 16,
-    widthPercent: 75,
-    fontSize: Math.max(14, settings.fontSize || 18),
+    text: subtitleText,
+    xPercent: 12,
+    yPercent: 36,
+    widthPercent: 76,
+    heightPercent: 8,
+    fontFamily: 'Arial',
+    fontSize: 16,
     bold: false,
+    alignment: 'center',
     textColor: settings.textColor || '#000000',
+    lineHeight: 1.3,
   });
 }
 
@@ -206,23 +285,25 @@ export function createOwnershipBlock(
 ): TextPageBlock {
   return normalizeTextPageBlock({
     ...baseBlockFromSettings(settings, globalSettings, {
+      id: 'title-page-ownership',
       kind: 'ownership',
       text: 'This book belongs to:',
-      xPercent: 20,
-      yPercent: 68,
-      widthPercent: 60,
-      fontSize: 18,
+      xPercent: 23,
+      yPercent: 50,
+      widthPercent: 54,
+      fontSize: 14,
       bold: false,
       alignment: 'center',
+      textColor: settings.textColor || '#000000',
     }),
     frameEnabled: true,
-    frameShape: 'rounded',
+    frameShape: 'rectangle',
     frameFillColor: '#ffffff',
-    frameBorderColor: '#1f2937',
-    frameBorderThicknessPx: 2,
-    frameCornerRadiusPx: 10,
-    framePaddingPx: 16,
-    heightPercent: 14,
+    frameBorderColor: '#000000',
+    frameBorderThicknessPx: 1.5,
+    frameCornerRadiusPx: 8,
+    framePaddingPx: 14,
+    heightPercent: 13,
     nameLineType: 'solid',
   });
 }
@@ -232,13 +313,19 @@ export function createCopyrightBlock(
   globalSettings: WordSearchSettings
 ): TextPageBlock {
   return baseBlockFromSettings(settings, globalSettings, {
+    id: 'title-page-copyright',
     kind: 'copyright',
-    text: `© ${new Date().getFullYear()} Your Name. All rights reserved.`,
+    text: defaultTitlePageCopyrightText(),
     xPercent: 10,
-    yPercent: 88,
+    yPercent: 84,
     widthPercent: 80,
-    fontSize: 9,
+    heightPercent: 12,
+    fontFamily: 'Arial',
+    fontSize: 8,
     bold: false,
+    alignment: 'center',
+    textColor: settings.textColor || '#000000',
+    lineHeight: 1.35,
   });
 }
 
@@ -275,11 +362,18 @@ export function createTextBlock(
 export function resolveTextPageBlocks(
   settings: TextModuleSettings,
   pageTitle: string,
-  globalSettings: WordSearchSettings
+  globalSettings: WordSearchSettings,
+  moduleType?: DocumentModuleType | string
 ): TextPageBlock[] {
-  // Explicit blocks (including empty) win — title pages stay clean until the user adds elements.
+  // Explicit blocks (including empty) win. Empty arrays stay blank (separators /
+  // chapter / empty pages). Missing blocks on a real title page use the default layout.
+  // Introduction / Instructions / Copyright / CTA omit `blocks` and must NOT
+  // inherit the title-page template — they use the centered title+body canvas.
   if (Array.isArray(settings.blocks)) {
     return settings.blocks.map(normalizeTextPageBlock);
+  }
+  if (moduleType && moduleType !== 'title-page') {
+    return [];
   }
   return createDefaultTitlePageBlocks(pageTitle, settings, globalSettings);
 }

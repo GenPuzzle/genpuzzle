@@ -3,7 +3,7 @@
 import React from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { CanvasDocumentInsertButton } from '@/components/CanvasDocumentInsertButton';
-import { DocumentModuleType } from '@/lib/document-model';
+import { InsertableDocumentKind } from '@/lib/document-model';
 import { cn } from '@/lib/utils';
 
 interface CanvasDocumentSideControlsProps {
@@ -13,7 +13,8 @@ interface CanvasDocumentSideControlsProps {
   canNavigateNext: boolean;
   onNavigatePrev: () => void;
   onNavigateNext: () => void;
-  onInsert: (type: DocumentModuleType, position: 'before' | 'after', referenceId: string) => void;
+  onInsert: (type: InsertableDocumentKind, position: 'before' | 'after', referenceId: string) => void;
+  onUseAi?: (position: 'before' | 'after', referenceId: string) => void;
   documentLabel?: string;
 }
 
@@ -57,6 +58,7 @@ export function CanvasDocumentSideControls({
   onNavigatePrev,
   onNavigateNext,
   onInsert,
+  onUseAi,
   documentLabel,
 }: CanvasDocumentSideControlsProps) {
   if (side === 'left') {
@@ -73,6 +75,7 @@ export function CanvasDocumentSideControls({
             side="before"
             referenceId={referenceId}
             onInsert={onInsert}
+            onUseAi={onUseAi}
           />
         </div>
         {documentLabel && (
@@ -91,6 +94,7 @@ export function CanvasDocumentSideControls({
           side="after"
           referenceId={referenceId}
           onInsert={onInsert}
+          onUseAi={onUseAi}
         />
         <NavArrowButton
           direction="next"

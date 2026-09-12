@@ -3,6 +3,25 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Bundled publishing fonts (not from Google Fonts) */
+@font-face {
+  font-family: "Grow Year";
+  src:
+    url("/fonts/GrowYear.otf") format("opentype"),
+    url("/fonts/GrowYear.ttf") format("truetype");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Sunday Magic";
+  src: url("/fonts/SundayMagic-Regular.otf") format("opentype");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* Global: Remove focus rings from all buttons */
 button:focus-visible,
 button:focus,
@@ -751,7 +770,7 @@ input[type="range"]::-moz-range-thumb:active {
 }
 
 /* Modern buttons — global default */
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.custom-checkbox-input):not(.direction-toggle):not(.gp-icon-toggle) {
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.custom-checkbox-input):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading) {
   appearance: none;
   background-color: var(--gp-white);
   color: var(--gp-black);
@@ -766,13 +785,13 @@ button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
 }
 
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):focus,
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):focus-visible {
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading):focus,
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading):focus-visible {
   outline: none !important;
   box-shadow: 0 0 0 2px rgba(26, 90, 140, 0.25);
 }
 
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):hover {
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading):hover {
   background-color: var(--gp-grey-50);
   color: var(--gp-blue);
   border-color: var(--gp-blue);
@@ -780,7 +799,7 @@ button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not
   transform: translateY(-1px);
 }
 
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):active {
+button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading):active {
   transform: translateY(0);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
@@ -818,12 +837,10 @@ iframe[title="PDF Preview"] {
     min-height: 0;
   }
 
-  /* Fix button sizes for touch — exclude compact chrome controls */
-  button:not(.gp-alert-close):not(.canvas-context-panel__close):not(.canvas-context-panel__icon-btn):not(.canvas-hit-zone):not(.direction-toggle):not(.gp-icon-toggle):not(.header-expand-btn):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.doc-tab__select):not(.gp-theme-toggle):not(.mobile-sidebar-toggle):not(.preview-segmented__btn):not(.preview-zoom-btn):not(.modern-tabs-trigger):not(.auth-page__tab):not(.auth-page__submit):not(.auth-page__toggle-pw):not(.marketing-nav__menu-btn) {
-    min-height: 44px;
-    min-width: 44px;
-    padding: 10px 12px !important;
-    font-size: 14px !important;
+  /* Fix button sizes for touch — exclude compact chrome; size chrome intentionally below */
+  button:not(.gp-alert-close):not(.canvas-context-panel__close):not(.canvas-context-panel__icon-btn):not(.canvas-hit-zone):not(.direction-toggle):not(.gp-icon-toggle):not(.header-expand-btn):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.doc-tab__select):not(.gp-theme-toggle):not(.mobile-sidebar-toggle):not(.preview-segmented__btn):not(.preview-zoom-btn):not(.modern-tabs-trigger):not(.auth-page__tab):not(.auth-page__submit):not(.auth-page__toggle-pw):not(.marketing-nav__menu-btn):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading):not(.sidebar-generate-btn):not(.floating-help-btn):not(.floating-help-send-btn) {
+    min-height: 40px;
+    min-width: 40px;
   }
 
   .header-expand-btn,
@@ -838,20 +855,45 @@ iframe[title="PDF Preview"] {
   .canvas-context-panel__icon-btn,
   .gp-icon-toggle,
   .direction-toggle,
+  .gp-adjust-btn,
+  .gp-adjust-step,
   .auth-page__tab,
   .auth-page__submit,
   .auth-page__toggle-pw,
-  .marketing-nav__menu-btn {
+  .marketing-nav__menu-btn,
+  .modern-tabs-trigger,
+  .sidebar-rail-heading,
+  .sidebar-generate-btn,
+  .floating-help-btn {
     min-height: unset;
     min-width: unset;
     padding: unset !important;
     font-size: unset !important;
   }
 
-  /* Mobile sidebar drawer width */
+  .mobile-sidebar-toggle {
+    min-height: 44px !important;
+    min-width: 44px !important;
+  }
+
+  .preview-zoom-btn,
+  .preview-segmented__btn,
+  .header-expand-btn {
+    min-height: 40px !important;
+    min-width: 40px !important;
+  }
+
+  /* Mobile settings drawer — leave a peek of the canvas */
+  .gp-app-shell > .gp-mobile-drawer,
   .gp-app-shell > .fixed.inset-y-0 {
-    width: min(100vw, 20rem) !important;
-    max-width: min(100vw, 20rem);
+    width: min(100vw - 2.5rem, 22rem) !important;
+    max-width: min(100vw - 2.5rem, 22rem);
+  }
+
+  .gp-app-shell .word-search-sidebar,
+  .gp-app-shell .crossword-sidebar {
+    width: 100% !important;
+    max-width: 100% !important;
   }
 
   /* Improve spacing on mobile controls */
@@ -869,8 +911,8 @@ iframe[title="PDF Preview"] {
 
   /* Safe area for fixed floating widgets */
   .floating-help-root {
-    bottom: calc(5rem + env(safe-area-inset-bottom, 0px)) !important;
-    right: calc(0.75rem + env(safe-area-inset-right, 0px)) !important;
+    bottom: calc(4.25rem + env(safe-area-inset-bottom, 0px)) !important;
+    right: calc(0.65rem + env(safe-area-inset-right, 0px)) !important;
   }
 
   /* Fix PDF preview container on mobile */
@@ -903,18 +945,18 @@ iframe[title="PDF Preview"] {
   /* Fix zoom slider on mobile */
   input[type="range"] {
     height: 8px;
-    min-height: 44px;
-    padding: 18px 0;
+    min-height: 28px;
+    padding: 10px 0;
   }
 
   input[type="range"]::-webkit-slider-thumb {
-    width: 24px;
-    height: 24px;
+    width: 22px;
+    height: 22px;
   }
 
   input[type="range"]::-moz-range-thumb {
-    width: 24px;
-    height: 24px;
+    width: 22px;
+    height: 22px;
   }
 
   /* Prevent text selection on controls */
@@ -983,11 +1025,6 @@ iframe[title="PDF Preview"] {
 
   .shadow-lg.md\:shadow-xl {
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-  }
-
-  /* Stack buttons vertically on very small screens */
-  .flex.gap-2 > button {
-    width: 100%;
   }
 
   /* Reduce header padding */

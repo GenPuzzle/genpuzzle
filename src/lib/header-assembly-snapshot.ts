@@ -39,7 +39,8 @@ async function captureDomSnapshot(
   try {
     const React = await import('react');
     const { createRoot } = await import('react-dom/client');
-    const { default: html2canvas } = await import('html2canvas');
+    // html2canvas-pro: plain html2canvas throws on Tailwind v4 oklch() colors.
+    const { default: html2canvas } = await import('html2canvas-pro');
     const { HeaderAssemblyBar } = await import('@/components/header/HeaderAssemblyBar');
 
     root = createRoot(container);

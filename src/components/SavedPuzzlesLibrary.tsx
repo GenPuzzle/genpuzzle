@@ -23,6 +23,7 @@ export function SavedPuzzlesLibrary({ isOpen, onClose }: SavedPuzzlesLibraryProp
       'sudoku': 'SD',
       'cryptogram': 'CG',
       'word-scramble': 'SC',
+      'trivia': 'TR',
       'maze': 'MZ',
       'word-match': 'WM',
       'dot-to-dot': 'DD',

@@ -865,7 +865,7 @@ export function BookFlipbookViewer({
             Spread
             <input
               type="number"
-              min={1}
+              min={0}
               max={maxSpread}
               value={spreadInput}
               onChange={(e) => setSpreadInput(e.target.value)}

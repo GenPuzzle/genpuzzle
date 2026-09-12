@@ -345,14 +345,11 @@ export function getWordListSpacing(wordList: WordSearchSettings['wordList']): {
   };
 }
 
-/** Solution grid font size — respects "custom size for answer pages" toggle. */
+/** Solution grid font size — always honors the Solution Font Size control value. */
 export function getSolutionGridFontSize(typography: WordSearchSettings['typography']): number {
-  // FIX: Completely isolate from puzzleGridFontSize
-  // Use answerGridFontSize ONLY if explicitly enabled and set
-  if (typography.setFontSizeForAnswerPages && typography.answerGridFontSize !== undefined && typography.answerGridFontSize !== null && typography.answerGridFontSize !== 0) {
-    return typography.answerGridFontSize;
-  }
-  // Strict hardcoded default for solutions (never fallback to puzzleGridFontSize)
+  const n = Number(typography.answerGridFontSize);
+  if (Number.isFinite(n) && n > 0) return n;
+  // Isolated default (never falls back to puzzleGridFontSize).
   return 18;
 }
 

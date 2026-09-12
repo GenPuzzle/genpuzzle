@@ -10,13 +10,14 @@ import {
   resolveTextPageFrameSettings,
   resolveTextPageTextColor,
 } from '@/lib/text-page-settings';
-import { normalizeTocSettings } from '@/lib/toc-settings';
+import { normalizeTocSettings, tocEntryIndentPx, displayTocPageNumber, DEFAULT_TOC_SETTINGS } from '@/lib/toc-settings';
 import {
   splitEntriesIntoColumns,
   tocEntryOverrideKey,
   shouldUseTwoColumns,
   resolveTocLayoutMetricsForEntries,
 } from '@/lib/toc-layout';
+import { PageBackgroundImage } from '@/components/puzzle/PageBackgroundImage';
 
 function PageFrameOverlay({
   frame,
@@ -78,15 +79,16 @@ function TocEntryRow({
 }) {
   const titleRef = useRef<HTMLSpanElement>(null);
   const pageRef = useRef<HTMLSpanElement>(null);
-  const indent =
-    tocSettings.tableFormat === 'indented' && entry.level === 2
-      ? `${tocSettings.entryIndentPx ?? 24}px`
-      : '0';
-  const pageNum = tocSettings.showPageNumbers && entry.pageNumber ? entry.pageNumber : '';
+  const indentPx = tocEntryIndentPx(tocSettings, entry.level);
+  const indent = indentPx ? `${indentPx}px` : '0';
+  const pageNum = displayTocPageNumber(entry, tocSettings.showPageNumbers);
   const simple = tocSettings.tableFormat === 'simple' || tocSettings.leaderStyle === 'none';
   const leaderStyle = tocSettings.leaderStyle;
   const showLeaderLine =
-    !simple && leaderStyle !== 'none' && leaderStyle !== 'spaces';
+    tocSettings.showPageNumbers &&
+    !simple &&
+    leaderStyle !== 'none' &&
+    leaderStyle !== 'spaces';
 
   useEffect(() => {
     if (titleRef.current && document.activeElement !== titleRef.current) {
@@ -107,7 +109,7 @@ function TocEntryRow({
     fontSize: entryFontPx,
     lineHeight: 1.2,
     color: entryColor,
-    gap: tocSettings.entryHorizontalGapPx ?? 8,
+    gap: tocSettings.entryHorizontalGapPx ?? DEFAULT_TOC_SETTINGS.entryHorizontalGapPx,
     letterSpacing: tocSettings.entryLetterSpacingPx
       ? `${tocSettings.entryLetterSpacingPx}px`
       : undefined,
@@ -138,7 +140,8 @@ function TocEntryRow({
     />
   );
 
-  const pageSpan = pageNum || isEditing ? (
+  const pageSpan =
+    tocSettings.showPageNumbers ? (
     <span
       ref={pageRef}
       className="shrink-0 tabular-nums whitespace-nowrap outline-none"
@@ -330,15 +333,10 @@ export function TocPageCanvas({
       }}
     >
       {pageBackground.backgroundImage && (
-        <div
-          className="absolute inset-0 pointer-events-none z-0"
-          style={{
-            backgroundImage: `url(${pageBackground.backgroundImage})`,
-            backgroundSize: pageBackground.backgroundImageFit || 'cover',
-            backgroundRepeat: 'no-repeat',
-            backgroundPosition: 'center',
-            opacity: (pageBackground.backgroundImageOpacity ?? 100) / 100,
-          }}
+        <PageBackgroundImage
+          src={pageBackground.backgroundImage}
+          opacity={pageBackground.backgroundImageOpacity}
+          fit={pageBackground.backgroundImageFit}
         />
       )}
 
@@ -394,7 +392,7 @@ export function TocPageCanvas({
             fontSize: titleFontPx,
             lineHeight: 1.2,
             color: titleColor,
-            marginBottom: tocSettings.titleBottomGapPx ?? 16,
+            marginBottom: tocSettings.titleBottomGapPx ?? DEFAULT_TOC_SETTINGS.titleBottomGapPx,
             fontFamily: tocSettings.titleFontFamily || settings.fontFamily || 'Arial',
             fontWeight: tocSettings.titleFontWeight === false ? 400 : 700,
           }}
@@ -416,8 +414,8 @@ export function TocPageCanvas({
             style={{
               fontSize: entryFontPx,
               color: entryColor,
-              gap: tocSettings.columnGapPx ?? 24,
-              marginTop: tocSettings.entriesTopGapPx ?? 0,
+              gap: tocSettings.columnGapPx ?? DEFAULT_TOC_SETTINGS.columnGapPx,
+              marginTop: tocSettings.entriesTopGapPx ?? DEFAULT_TOC_SETTINGS.entriesTopGapPx,
               fontFamily: tocSettings.entryFontFamily || settings.fontFamily || 'Arial',
               fontWeight: tocSettings.entryFontWeight ? 700 : 400,
               letterSpacing: tocSettings.entryLetterSpacingPx

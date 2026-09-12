@@ -185,7 +185,7 @@
   text-overflow: ellipsis;
   max-width: 100%;
   text-align: left;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .doc-tab__pre-name,
@@ -248,21 +248,46 @@
   animation: doc-tab-text-activated 0.15s ease-out forwards;
 }
 
+.doc-tab__duplicate,
 .doc-tab__remove {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   border: none;
   border-radius: 9999px;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.75);
+  background: transparent !important;
+  color: rgba(15, 23, 42, 0.95);
   cursor: pointer;
   padding: 0;
   transition: background-color 0.15s ease, color 0.15s ease;
   pointer-events: auto;
+}
+
+.doc-tab__duplicate {
+  margin-left: 0.25rem;
+}
+
+.doc-tab__duplicate svg {
+  stroke: currentColor;
+  fill: none !important;
+}
+
+.doc-tab__duplicate {
+  background: transparent !important;
+  border-radius: 4px;
+  width: 18px;
+  height: 18px;
+}
+
+.doc-tab__duplicate:hover {
+  background: rgba(0,0,0,0.04);
+}
+
+.doc-tab__duplicate {
+  margin-left: 0.25rem;
 }
 
 .doc-tab:not(.doc-tab--active) .doc-tab__remove:hover {

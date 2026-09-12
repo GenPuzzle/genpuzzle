@@ -13,7 +13,7 @@ import {
   resolveTextPageTextColor,
   resolveTextPageTitleFontSize,
 } from './text-page-settings';
-import { normalizeTocSettings, type TocLeaderStyle, type TocTableFormat } from './toc-settings';
+import { displayTocPageNumber, normalizeTocSettings, tocEntryIndentPx, DEFAULT_TOC_SETTINGS, type TocLeaderStyle, type TocTableFormat } from './toc-settings';
 import {
   resolveTocLayoutMetricsForEntries,
   shouldUseTwoColumns,
@@ -53,6 +53,9 @@ export interface TocExportLayout {
   entryBold: boolean;
   entryLetterSpacingPt: number;
   entryGapPt: number;
+  entryLineHeightPt: number;
+  rowPadPt: number;
+  rowHeightPt: number;
   columns: TocExportColumn[];
 }
 
@@ -86,12 +89,13 @@ export function buildTocExportLayout(
   const titleFontSizePt = pxToPt(fit.titleFontPx);
   const entryFontSizePt = pxToPt(fit.entryFontPx);
   const rowPadPt = pxToPt(fit.rowPaddingPx);
-  const titleGapPt = pxToPt(toc.titleBottomGapPx ?? 16);
-  const entriesTopGapPt = pxToPt(toc.entriesTopGapPx ?? 0);
-  const columnGapPt = pxToPt(toc.columnGapPx ?? 24);
-  const entryGapPt = pxToPt(toc.entryHorizontalGapPx ?? 10);
-  const entryLetterSpacingPt = pxToPt(toc.entryLetterSpacingPx ?? 0);
-  const indentPt = pxToPt(toc.entryIndentPx ?? 24);
+  const titleGapPt = pxToPt(toc.titleBottomGapPx ?? DEFAULT_TOC_SETTINGS.titleBottomGapPx);
+  const entriesTopGapPt = pxToPt(toc.entriesTopGapPx ?? DEFAULT_TOC_SETTINGS.entriesTopGapPx);
+  const columnGapPt = pxToPt(toc.columnGapPx ?? DEFAULT_TOC_SETTINGS.columnGapPx);
+  const entryGapPt = pxToPt(toc.entryHorizontalGapPx ?? DEFAULT_TOC_SETTINGS.entryHorizontalGapPx);
+  const entryLetterSpacingPt = pxToPt(toc.entryLetterSpacingPx ?? DEFAULT_TOC_SETTINGS.entryLetterSpacingPx);
+  const entryLineHeightPt = entryFontSizePt * 1.2;
+  const rowHeightPt = entryLineHeightPt + rowPadPt * 2;
 
   const contentLeft = marginPt + frameInsetPt + padPt;
   const contentRight = pageWidthPt - marginPt - frameInsetPt - padPt;
@@ -117,26 +121,27 @@ export function buildTocExportLayout(
 
   const simple = toc.tableFormat === 'simple' || toc.leaderStyle === 'none';
   const showLeaderLine =
-    !simple && toc.leaderStyle !== 'none' && toc.leaderStyle !== 'spaces';
+    toc.showPageNumbers &&
+    !simple &&
+    toc.leaderStyle !== 'none' &&
+    toc.leaderStyle !== 'spaces';
 
   const columns: TocExportColumn[] = columnsSrc.map((colEntries, colIdx) => {
     const xPt = contentLeft + colIdx * (colWidth + columnGapPt);
     const rows: TocExportRow[] = [];
     let y = contentTop + titleFontSizePt * 1.2 + titleGapPt + entriesTopGapPt;
     for (const entry of colEntries) {
-      const pageNumber =
-        toc.showPageNumbers && entry.pageNumber ? String(entry.pageNumber) : '';
+      const pageNumber = displayTocPageNumber(entry, toc.showPageNumbers);
       rows.push({
         title: entry.title,
         pageNumber,
-        indentPt:
-          toc.tableFormat === 'indented' && entry.level === 2 ? indentPt : 0,
+        indentPt: pxToPt(tocEntryIndentPx(toc, entry.level)),
         yFromTopPt: y,
         showLeader: showLeaderLine && !!pageNumber,
         leaderStyle: toc.leaderStyle,
         simple,
       });
-      y += entryFontSizePt * 1.2 + rowPadPt * 2;
+      y += rowHeightPt;
     }
     return { xPt, widthPt: colWidth, rows };
   });
@@ -158,6 +163,9 @@ export function buildTocExportLayout(
     entryBold: !!toc.entryFontWeight,
     entryLetterSpacingPt,
     entryGapPt,
+    entryLineHeightPt,
+    rowPadPt,
+    rowHeightPt,
     columns,
   };
 }

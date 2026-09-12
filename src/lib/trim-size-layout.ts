@@ -353,6 +353,52 @@ export function scaleDocumentPagesForTrim(
         },
       };
     }
+    if (page.moduleType === 'crossword') {
+      const ps = page.settings as import('./document-model').PuzzleModuleSettings;
+      const cw = ps.crosswordSettings;
+      if (!cw) return page;
+      return {
+        ...page,
+        settings: {
+          ...ps,
+          crosswordSettings: {
+            ...cw,
+            bookCanvas: {
+              ...cw.bookCanvas,
+              includeBleed: nextBookCanvas.includeBleed,
+              useCustomTrim: nextBookCanvas.useCustomTrim,
+              customWidth: nextBookCanvas.customWidth,
+              customHeight: nextBookCanvas.customHeight,
+              trimSizePreset: nextBookCanvas.trimSizePreset,
+              measurementUnits: nextBookCanvas.measurementUnits,
+            },
+          },
+        },
+      };
+    }
+    if (page.moduleType === 'murdoku') {
+      const ps = page.settings as import('./document-model').PuzzleModuleSettings;
+      const md = ps.murdokuSettings;
+      if (!md) return page;
+      return {
+        ...page,
+        settings: {
+          ...ps,
+          murdokuSettings: {
+            ...md,
+            bookCanvas: {
+              ...md.bookCanvas,
+              includeBleed: nextBookCanvas.includeBleed,
+              useCustomTrim: nextBookCanvas.useCustomTrim,
+              customWidth: nextBookCanvas.customWidth,
+              customHeight: nextBookCanvas.customHeight,
+              trimSizePreset: nextBookCanvas.trimSizePreset,
+              measurementUnits: nextBookCanvas.measurementUnits,
+            },
+          },
+        },
+      };
+    }
     return page;
   });
 }

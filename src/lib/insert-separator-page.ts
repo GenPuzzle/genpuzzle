@@ -55,6 +55,15 @@ export function isChapterTitlePage(
   return !!settings.isChapterPage;
 }
 
+/** Empty Page, chapter pages, and inserted separators stay blank. */
+export function isSpecialBlankTitlePage(
+  page: Pick<DocumentPage, 'name' | 'moduleType' | 'settings'> | null | undefined
+): boolean {
+  if (!page || page.moduleType !== 'title-page') return false;
+  if (isSeparatorTitlePage(page) || isChapterTitlePage(page)) return true;
+  return page.name.trim() === 'Empty Page';
+}
+
 /**
  * Build updated documents + puzzles after inserting a blank title page after `anchor`.
  * Insert is skipped for solution pages (returns null).

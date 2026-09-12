@@ -16,7 +16,7 @@ export default function Header() {
   return (
     <>
       <header
-        className="relative flex items-center gap-2 px-3 py-2 border-b border-[#144a75] shadow-sm sm:gap-3 sm:px-4 pt-[env(safe-area-inset-top,0px)]"
+        className="relative flex items-center gap-2 px-2 py-1.5 border-b border-[#144a75] shadow-sm sm:gap-3 sm:px-4 sm:py-2 pt-[env(safe-area-inset-top,0px)]"
         style={{ background: 'linear-gradient(to right, #1a5a8c 0%, #2276b4 100%)' }}
       >
         <Link
@@ -35,13 +35,18 @@ export default function Header() {
           />
         </Link>
 
-        <nav className="flex min-w-0 flex-1 items-center gap-1 sm:gap-1.5 md:gap-2" aria-label="Main navigation">
+        <nav
+          className="flex min-w-0 flex-1 items-center gap-1 sm:gap-1.5 md:gap-2 overflow-x-auto overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          aria-label="Main navigation"
+        >
           <AppFileMenu onShare={openShareDialog} shareEnabled={shareEnabled} />
           <AppServicesMenu />
           <AppUpgradeMenu />
         </nav>
 
-        <AppHeaderRightNav onShare={openShareDialog} shareEnabled={shareEnabled} />
+        <div className="flex shrink-0 items-center gap-1 sm:gap-1.5 overflow-x-auto overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <AppHeaderRightNav onShare={openShareDialog} shareEnabled={shareEnabled} />
+        </div>
       </header>
 
       <ShareProjectDialog

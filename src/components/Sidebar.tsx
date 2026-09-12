@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import React, { useState } from 'react';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
+import { ColorInput } from '@/components/ui/color-input';
 import { SliderField } from '@/components/ui/slider-field';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -169,13 +170,30 @@ export function Sidebar() {
               />
             </div>
 
+            <div className="flex items-center justify-between gap-3 p-3 rounded-lg hover:shadow-sm transition-shadow duration-200" style={{background: `linear-gradient(to right, #F0F5F6, #F0F5F6)`}}>
+              <div className="min-w-0">
+                <Label className="text-sm font-medium text-gray-700 dark:text-gray-200">Mix the puzzles</Label>
+                <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                  Each chapter: word search, then related crossword, scramble, and so on.
+                </p>
+              </div>
+              <Switch
+                checked={Boolean(bookSettings.mixPuzzles)}
+                onCheckedChange={(checked) =>
+                  setBookSettings({ ...bookSettings, mixPuzzles: checked })
+                }
+                className="shrink-0"
+                style={{color: `#404040`} as React.CSSProperties}
+              />
+            </div>
+
             <SliderField
               label="Puzzles Per Page"
               value={bookSettings.puzzlesPerPage}
               onValueChange={(value) =>
                 setBookSettings({ ...bookSettings, puzzlesPerPage: value })
               }
-              min={1}
+              min={0}
               max={4}
               step={1}
               labelClassName="text-sm font-medium text-gray-700 dark:text-gray-200"
@@ -204,7 +222,7 @@ export function Sidebar() {
                   onValueChange={(value) =>
                     setPuzzleSettings({ ...puzzleSettings, gridSize: value })
                   }
-                  min={10}
+                  min={0}
                   max={25}
                   step={1}
                   formatValue={(v) => `${v}×${v}`}
@@ -327,6 +345,7 @@ export function Sidebar() {
                 placeholder="Enter puzzle title"
                 className="mt-1 border-gray-300 dark:border-slate-600 transition-colors duration-200" style={{"--focus-border": `#404040`, "--focus-ring": `rgba(34, 118, 180, 0.2)`} as React.CSSProperties}
               />
+            </div>
 
             <div className="space-y-2">
               <Label className="text-sm font-medium text-gray-700 dark:text-gray-200">Font Family</Label>
@@ -355,7 +374,7 @@ export function Sidebar() {
               onValueChange={(value) =>
                 setTitleWords({ ...titleWords, fontSize: value })
               }
-              min={12}
+              min={0}
               max={48}
               step={2}
               format="px"
@@ -403,113 +422,46 @@ export function Sidebar() {
           </AccordionTrigger>
           <AccordionContent className="px-4 py-4 space-y-4 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 border-t border-gray-100 dark:border-slate-700 animate-fade-in">
             
-            <div className="space-y-3 p-3 rounded-lg bg-blue-50 dark:bg-slate-700 border border-blue-200 dark:border-slate-600">
-              <Label className="text-sm font-medium text-gray-700 dark:text-gray-200">Background Color</Label>
-              <div className="flex items-center gap-3 mt-1">
-                <Input
-                  type="color"
-                  value={colorSettings.puzzlePage.backgroundColor}
-                  onChange={(e) =>
-                    setColorSettings({
-                      ...colorSettings,
-                      puzzlePage: { ...colorSettings.puzzlePage, backgroundColor: e.target.value },
-                    })
-                  }
-                  className="w-14 h-12 p-1 cursor-pointer border-2 border-blue-300 dark:border-slate-500 rounded-lg hover:shadow-lg transition-shadow duration-200"
-                />
-                <Input
-                  value={colorSettings.puzzlePage.backgroundColor}
-                  onChange={(e) =>
-                    setColorSettings({
-                      ...colorSettings,
-                      puzzlePage: { ...colorSettings.puzzlePage, backgroundColor: e.target.value },
-                    })
-                  }
-                  className="flex-1 font-mono text-sm border-gray-300 dark:border-slate-600 focus:border-blue-400 focus:ring-blue-400/20"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-3 p-3 rounded-lg border" style={{background: `rgba(34, 118, 180, 0.08)`}}>
-              <Label className="text-sm font-medium text-gray-700 dark:text-gray-200">Title Color</Label>
-              <div className="flex items-center gap-3 mt-1">
-                <Input
-                  type="color"
-                  value={colorSettings.puzzlePage.titleColor}
-                  onChange={(e) =>
-                    setColorSettings({
-                      ...colorSettings,
-                      puzzlePage: { ...colorSettings.puzzlePage, titleColor: e.target.value },
-                    })
-                  }
-                  className="w-14 h-12 p-1 cursor-pointer border-2 rounded-lg hover:shadow-lg transition-shadow duration-200"
-                />
-                <Input
-                  value={colorSettings.puzzlePage.titleColor}
-                  onChange={(e) =>
-                    setColorSettings({
-                      ...colorSettings,
-                      puzzlePage: { ...colorSettings.puzzlePage, titleColor: e.target.value },
-                    })
-                  }
-                  className="flex-1 font-mono text-sm border-gray-300 dark:border-slate-600"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-3 p-3 rounded-lg bg-green-50 dark:bg-slate-700 border border-green-200 dark:border-slate-600">
-              <Label className="text-sm font-medium text-gray-700 dark:text-gray-200">Grid/Box Lines</Label>
-              <div className="flex items-center gap-3 mt-1">
-                <Input
-                  type="color"
-                  value={colorSettings.puzzlePage.boxColor}
-                  onChange={(e) =>
-                    setColorSettings({
-                      ...colorSettings,
-                      puzzlePage: { ...colorSettings.puzzlePage, boxColor: e.target.value },
-                    })
-                  }
-                  className="w-14 h-12 p-1 cursor-pointer border-2 border-green-300 dark:border-slate-500 rounded-lg hover:shadow-lg transition-shadow duration-200"
-                />
-                <Input
-                  value={colorSettings.puzzlePage.boxColor}
-                  onChange={(e) =>
-                    setColorSettings({
-                      ...colorSettings,
-                      puzzlePage: { ...colorSettings.puzzlePage, boxColor: e.target.value },
-                    })
-                  }
-                  className="flex-1 font-mono text-sm border-gray-300 dark:border-slate-600 focus:border-green-400 focus:ring-green-400/20"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-3 p-3 rounded-lg bg-orange-50 dark:bg-slate-700 border border-orange-200 dark:border-slate-600">
-              <Label className="text-sm font-medium text-gray-700 dark:text-gray-200">Solution Highlight</Label>
-              <div className="flex items-center gap-3 mt-1">
-                <Input
-                  type="color"
-                  value={colorSettings.answerPage.solutionFrameColor}
-                  onChange={(e) =>
-                    setColorSettings({
-                      ...colorSettings,
-                      answerPage: { ...colorSettings.answerPage, solutionFrameColor: e.target.value },
-                    })
-                  }
-                  className="w-14 h-12 p-1 cursor-pointer border-2 border-orange-300 dark:border-slate-500 rounded-lg hover:shadow-lg transition-shadow duration-200"
-                />
-                <Input
-                  value={colorSettings.answerPage.solutionFrameColor}
-                  onChange={(e) =>
-                    setColorSettings({
-                      ...colorSettings,
-                      answerPage: { ...colorSettings.answerPage, solutionFrameColor: e.target.value },
-                    })
-                  }
-                  className="flex-1 font-mono text-sm border-gray-300 dark:border-slate-600 focus:border-orange-400 focus:ring-orange-400/20"
-                />
-              </div>
-            </div>
+            <ColorInput
+              label="Background Color"
+              value={colorSettings.puzzlePage.backgroundColor}
+              onChange={(v) =>
+                setColorSettings({
+                  ...colorSettings,
+                  puzzlePage: { ...colorSettings.puzzlePage, backgroundColor: v },
+                })
+              }
+            />
+            <ColorInput
+              label="Title Color"
+              value={colorSettings.puzzlePage.titleColor}
+              onChange={(v) =>
+                setColorSettings({
+                  ...colorSettings,
+                  puzzlePage: { ...colorSettings.puzzlePage, titleColor: v },
+                })
+              }
+            />
+            <ColorInput
+              label="Grid/Box Lines"
+              value={colorSettings.puzzlePage.boxColor}
+              onChange={(v) =>
+                setColorSettings({
+                  ...colorSettings,
+                  puzzlePage: { ...colorSettings.puzzlePage, boxColor: v },
+                })
+              }
+            />
+            <ColorInput
+              label="Solution Highlight"
+              value={colorSettings.answerPage.solutionFrameColor}
+              onChange={(v) =>
+                setColorSettings({
+                  ...colorSettings,
+                  answerPage: { ...colorSettings.answerPage, solutionFrameColor: v },
+                })
+              }
+            />
 
             <Button
               variant="outline"
@@ -560,241 +512,6 @@ export function Sidebar() {
           style={{background: `linear-gradient(to right, #404040, #1a5a8c)`, boxShadow: `0 0 16px rgba(34, 118, 180, 0.3)`}}
         >
           <Grid3X3 className="w-5 h-5 mr-2" />
-          Generate {currentPuzzleType === 'cryptogram' ? 'Cryptogram' : currentPuzzleType === 'sudoku' ? 'Sudoku' : 'Puzzle'}
-        </Button>
-      </div>
-    </div>
-  );
-        </TabsContent>
-
-        {/* Title/Words Settings */}
-        <TabsContent value="words" className="p-4 space-y-4 bg-white transition-colors duration-200 rounded-md">
-          <div>
-            <Label className="text-sm font-medium">Puzzle Title</Label>
-            <Input
-              value={titleWords.title}
-              onChange={(e) => setTitleWords({ ...titleWords, title: e.target.value })}
-              placeholder="Enter puzzle title"
-              className="mt-1"
-            />
-          </div>
-
-          <div>
-            <Label className="text-sm font-medium">Font Family</Label>
-            <Select
-              value={titleWords.fontFamily}
-              onValueChange={(value) =>
-                setTitleWords({ ...titleWords, fontFamily: value })
-              }
-            >
-              <SelectTrigger className="mt-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PUBLISHING_FONTS.map((font) => (
-                  <SelectItem key={font} value={font} style={{ fontFamily: font }}>
-                    {font}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <SliderField
-            label="Font Size"
-            value={titleWords.fontSize}
-            onValueChange={(value) =>
-              setTitleWords({ ...titleWords, fontSize: value })
-            }
-            min={12}
-            max={48}
-            step={2}
-            format="px"
-            labelClassName="text-sm text-gray-900 font-medium"
-          />
-
-          {/* Word List */}
-          <div>
-            <Label className="text-sm font-medium">
-              {currentPuzzleType === 'cryptogram' ? 'Custom Text' : 'Word List'}
-            </Label>
-            {currentPuzzleType === 'cryptogram' ? (
-              <Textarea
-                value={cryptogramText}
-                onChange={(e) => setCryptogramText(e.target.value)}
-                placeholder="Enter text to encode (or use Random Quote)"
-                className="mt-1 h-32"
-              />
-            ) : (
-              <Textarea
-                value={titleWords.words.join('\n')}
-                onChange={(e) => handleWordsChange(e.target.value)}
-                placeholder="Enter words (one per line)"
-                className="mt-1 h-32"
-              />
-            )}
-            <p className="text-xs text-gray-500 mt-1">
-              {currentPuzzleType === 'cryptogram'
-                ? 'Use letters only for best results'
-                : `${titleWords.words.length} words entered`}
-            </p>
-          </div>
-        </TabsContent>
-
-        {/* Color Settings */}
-        <TabsContent value="colors" className="p-4 space-y-4 bg-white transition-colors duration-200 rounded-md">
-          <div>
-            <Label className="text-sm font-medium">Background Color</Label>
-            <div className="flex items-center gap-2 mt-1">
-              <Input
-                type="color"
-                value={colorSettings.puzzlePage.backgroundColor}
-                onChange={(e) =>
-                  setColorSettings({
-                    ...colorSettings,
-                    puzzlePage: { ...colorSettings.puzzlePage, backgroundColor: e.target.value },
-                  })
-                }
-                className="w-12 h-10 p-1 cursor-pointer"
-              />
-              <Input
-                value={colorSettings.puzzlePage.backgroundColor}
-                onChange={(e) =>
-                  setColorSettings({
-                    ...colorSettings,
-                    puzzlePage: { ...colorSettings.puzzlePage, backgroundColor: e.target.value },
-                  })
-                }
-                className="flex-1 font-mono text-sm"
-              />
-            </div>
-          </div>
-
-          <div>
-            <Label className="text-sm font-medium">Title Color</Label>
-            <div className="flex items-center gap-2 mt-1">
-              <Input
-                type="color"
-                value={colorSettings.puzzlePage.titleColor}
-                onChange={(e) =>
-                  setColorSettings({
-                    ...colorSettings,
-                    puzzlePage: { ...colorSettings.puzzlePage, titleColor: e.target.value },
-                  })
-                }
-                className="w-12 h-10 p-1 cursor-pointer"
-              />
-              <Input
-                value={colorSettings.puzzlePage.titleColor}
-                onChange={(e) =>
-                  setColorSettings({
-                    ...colorSettings,
-                    puzzlePage: { ...colorSettings.puzzlePage, titleColor: e.target.value },
-                  })
-                }
-                className="flex-1 font-mono text-sm"
-              />
-            </div>
-          </div>
-
-          <div>
-            <Label className="text-sm font-medium">Grid/Box Lines</Label>
-            <div className="flex items-center gap-2 mt-1">
-              <Input
-                type="color"
-                value={colorSettings.puzzlePage.boxColor}
-                onChange={(e) =>
-                  setColorSettings({
-                    ...colorSettings,
-                    puzzlePage: { ...colorSettings.puzzlePage, boxColor: e.target.value },
-                  })
-                }
-                className="w-12 h-10 p-1 cursor-pointer"
-              />
-              <Input
-                value={colorSettings.puzzlePage.boxColor}
-                onChange={(e) =>
-                  setColorSettings({
-                    ...colorSettings,
-                    puzzlePage: { ...colorSettings.puzzlePage, boxColor: e.target.value },
-                  })
-                }
-                className="flex-1 font-mono text-sm"
-              />
-            </div>
-          </div>
-
-          <div>
-            <Label className="text-sm font-medium">Solution Highlight</Label>
-            <div className="flex items-center gap-2 mt-1">
-              <Input
-                type="color"
-                value={colorSettings.answerPage.solutionFrameColor}
-                onChange={(e) =>
-                  setColorSettings({
-                    ...colorSettings,
-                    answerPage: { ...colorSettings.answerPage, solutionFrameColor: e.target.value },
-                  })
-                }
-                className="w-12 h-10 p-1 cursor-pointer"
-              />
-              <Input
-                value={colorSettings.answerPage.solutionFrameColor}
-                onChange={(e) =>
-                  setColorSettings({
-                    ...colorSettings,
-                    answerPage: { ...colorSettings.answerPage, solutionFrameColor: e.target.value },
-                  })
-                }
-                className="flex-1 font-mono text-sm"
-              />
-            </div>
-          </div>
-
-          <Button
-            variant="outline"
-            onClick={() =>
-              setColorSettings({
-                puzzlePage: {
-                  backgroundColor: '#ffffff',
-                  titleColor: '#1f2937',
-                  subtitleColor: '#6b7280',
-                  boxColor: '#1f2937',
-                  puzzleColor: '#1f2937',
-                  wordListTitleColor: '#374151',
-                  wordListColor: '#4b5563',
-                },
-                answerPage: {
-                  backgroundColor: '#ffffff',
-                  titleColor: '#1f2937',
-                  boxColor: '#1f2937',
-                  lettersInSolutionColor: '#22c55e',
-                  lettersNotInSolutionColor: '#d1d5db',
-                  solutionStrokeThickness: 12,
-                  solutionStrokePadding: 2,
-                  solutionFrameColor: '#22c55e',
-                  solutionFrameStyle: 'rounded',
-                  solutionFrameRadius: 6,
-                  solutionHighlightAlpha: 30,
-                  answerTitlePrefix: 'Solution',
-                  answerTitleFontFamily: 'Arial',
-                  answerTitleFontSize: 20,
-                  answerTitleAlignment: 'center',
-                  showAnswerNumber: true,
-                },
-              })
-            }
-            className="w-full"
-          >
-            Reset to Defaults
-          </Button>
-        </TabsContent>
-      </Tabs>
-      
-      {/* Fixed Generate Button at Bottom */}
-      <div className="border-t border-gray-200 p-4 bg-white">
-        <Button onClick={handleGenerate} className="w-full">
-          <Grid3X3 className="w-4 h-4 mr-2" />
           Generate {currentPuzzleType === 'cryptogram' ? 'Cryptogram' : currentPuzzleType === 'sudoku' ? 'Sudoku' : 'Puzzle'}
         </Button>
       </div>

@@ -10,6 +10,7 @@ import {
   UnifiedPageLayout,
 } from '@/lib/word-search-page-layout';
 import { WordSearchGrid } from './WordSearchGrid';
+import { resolveShapeMaskImageSrc } from '@/lib/puzzles/word-search-shape-mask';
 
 interface WordSearchPagePreviewProps {
   puzzle: WordSearchPuzzle;
@@ -53,7 +54,7 @@ function WordListPreview({ layout }: { layout: UnifiedPageLayout }) {
           style={{
             position: 'relative',
             minWidth: layoutPtToCss(wl.columnWidthsPt[colIdx]),
-            width: 'auto',
+            width: layoutPtToCss(wl.columnWidthsPt[colIdx]),
             flex: '0 0 auto',
             height: layoutPtToCss(col.length * wl.lineHeightPt),
             overflow: 'visible',
@@ -68,7 +69,7 @@ function WordListPreview({ layout }: { layout: UnifiedPageLayout }) {
                 top: layoutPtToCss(getWordListRowTopOffsetPt(rowIdx, wl.lineHeightPt)),
                 left: 0,
                 height: layoutPtToCss(wl.lineHeightPt),
-                lineHeight: `${layoutPtToCss(wl.fontSizePt)}px`,
+                lineHeight: `${layoutPtToCss(wl.lineHeightPt)}px`,
                 fontWeight: 400,
                 gap: layoutPtToCss(wl.checkboxGapPt),
               }}
@@ -201,11 +202,40 @@ export function WordSearchPagePreview({
             gridBorderPadding={layoutPtToCss(grid.framePaddingPt || 0)}
             borderRadius={settings.core.borderCornerRadius ?? 4}
             puzzleColor={grid.letterColor}
+            letterStrokeColor={grid.letterStrokeColor}
+            letterStrokeThickness={layoutPtToCss(grid.letterStrokeThicknessPt)}
             boxColor={grid.boxColor}
+            solutionStrokeColor={settings.colors.answerPage.solutionFrameColor}
+            solutionStrokeThickness={layoutPtToCss(
+              settings.colors.answerPage.solutionStrokeThickness || 12
+            )}
+            solutionStrokePadding={layoutPtToCss(
+              settings.colors.answerPage.solutionStrokePadding || 0
+            )}
+            solutionHighlightStrokeColor={
+              settings.colors.answerPage.solutionHighlightStrokeColor || '#000000'
+            }
+            solutionHighlightStrokeThickness={
+              settings.colors.answerPage.solutionHighlightStrokeThickness ?? 0
+            }
+            solutionHighlightAlpha={settings.colors.answerPage.solutionHighlightAlpha ?? 30}
             puzzleGridFontSize={layoutPtToCss(grid.fontSizePt)}
             puzzleGridFontFamily={grid.fontFamily}
             answerGridFontSize={showSolution ? layoutPtToCss(grid.fontSizePt) : undefined}
             answerGridFontFamily={showSolution ? grid.fontFamily : undefined}
+            shapeImageSrc={
+              settings.core.shapeWordSearchEnabled
+                ? resolveShapeMaskImageSrc(
+                    settings.core,
+                    puzzle.puzzleIndexInDocument ?? 0
+                  )
+                : undefined
+            }
+            shapeImageShow={Boolean(
+              settings.core.shapeWordSearchEnabled && settings.core.shapeMaskShowImage
+            )}
+            shapeImageOpacity={settings.core.shapeMaskImageOpacity ?? 35}
+            shapeImageFit={settings.core.shapeMaskFit ?? 'contain'}
           />
         </div>
 
