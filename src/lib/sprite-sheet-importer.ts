@@ -5,7 +5,7 @@
  * (background removal, black and white) are applied to a working copy.
  */
 
-export type SpriteSheetKind = 'characters' | 'elements' | 'rooms';
+export type SpriteSheetKind = 'characters' | 'elements' | 'rooms' | 'maze';
 
 export type SpriteNormalizeMode =
   | 'original'
@@ -32,6 +32,9 @@ export interface PixelBuffer {
   data: Uint8ClampedArray;
   width: number;
   height: number;
+  /** Natural size of the file before any working-raster cap. */
+  sourceWidth?: number;
+  sourceHeight?: number;
 }
 
 export interface Rect {
@@ -53,6 +56,14 @@ export interface SlotCropBox {
   y: number;
   w: number;
   h: number;
+  /** Flattened x,y pairs tracing the illustration. Manual edits clear this. */
+  outline?: number[];
+  /** More shape borders added with the polygonal lasso. */
+  extraOutlines?: number[][];
+  /** Areas the user drew. Every pixel inside these polygons is kept. */
+  includePolygons?: number[][];
+  /** Areas the user drew to punch out of the crop. */
+  excludePolygons?: number[][];
 }
 
 export interface SpriteSheetCropConfig {
@@ -71,6 +82,9 @@ export interface SpriteSheetCropConfig {
   grayscale: boolean;
   gridRows?: number;
   gridCols?: number;
+  /** Pixel size of the sheet the crop boxes were measured on. */
+  sourceWidth?: number;
+  sourceHeight?: number;
 }
 
 export interface SlotAssetStatus {
@@ -1050,15 +1064,108 @@ export async function loadImageBuffer(src: string, maxSide = 0): Promise<PixelBu
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Could not read sprite sheet.');
   ctx.drawImage(img, 0, 0, width, height);
-  return imageDataToBuffer(ctx.getImageData(0, 0, width, height));
+  const buffer = imageDataToBuffer(ctx.getImageData(0, 0, width, height));
+  buffer.sourceWidth = img.naturalWidth;
+  buffer.sourceHeight = img.naturalHeight;
+  return buffer;
 }
 
-const PROCESS_MAX_SIDE = 1280;
+export function sheetPreviewSrc(
+  originalSrc: string,
+  original: PixelBuffer,
+  working: PixelBuffer
+): string {
+  if (working !== original) return bufferToDataUrl(working);
+  const nativeW = original.sourceWidth ?? original.width;
+  const nativeH = original.sourceHeight ?? original.height;
+  if (nativeW !== original.width || nativeH !== original.height) {
+    return bufferToDataUrl(working);
+  }
+  return originalSrc;
+}
+
+/** Safety cap only. Analysis still uses `analysisMaxSide`. */
+export const SHEET_WORKING_MAX_SIDE = 4096;
+/** Older Edit Cropping sessions stored boxes on a 1280-wide working raster. */
+export const LEGACY_SHEET_PROCESS_MAX_SIDE = 1280;
+
+function scalePairValues(values: number[] | undefined, sx: number, sy: number): number[] | undefined {
+  if (!values?.length) return values;
+  return values.map((value, index) => value * (index % 2 === 0 ? sx : sy));
+}
+
+export function scaleSlotCropBox(box: SlotCropBox, sx: number, sy: number): SlotCropBox {
+  return {
+    ...box,
+    x: box.x * sx,
+    y: box.y * sy,
+    w: box.w * sx,
+    h: box.h * sy,
+    outline: scalePairValues(box.outline, sx, sy),
+    extraOutlines: box.extraOutlines?.map((polygon) => scalePairValues(polygon, sx, sy) ?? polygon),
+    includePolygons: box.includePolygons?.map((polygon) => scalePairValues(polygon, sx, sy) ?? polygon),
+    excludePolygons: box.excludePolygons?.map((polygon) => scalePairValues(polygon, sx, sy) ?? polygon),
+  };
+}
+
+/**
+ * Map saved crop boxes onto the sheet that is actually loaded.
+ * Older projects stored boxes in the 1280 working-raster space.
+ */
+export function scaleCropConfigToImage(
+  config: SpriteSheetCropConfig,
+  width: number,
+  height: number
+): SpriteSheetCropConfig {
+  const storedW = Number(config.sourceWidth);
+  const storedH = Number(config.sourceHeight);
+  const boxes = config.boxes ?? [];
+  const extentW = boxes.reduce((max, box) => Math.max(max, box.x + box.w), 0);
+  const extentH = boxes.reduce((max, box) => Math.max(max, box.y + box.h), 0);
+  const long = Math.max(width, height);
+  const expectedLegacyW = width * (LEGACY_SHEET_PROCESS_MAX_SIDE / long);
+  const expectedLegacyH = height * (LEGACY_SHEET_PROCESS_MAX_SIDE / long);
+  const looksLegacy =
+    boxes.length > 0 &&
+    extentW > 0 &&
+    extentH > 0 &&
+    long > LEGACY_SHEET_PROCESS_MAX_SIDE + 8 &&
+    Math.max(extentW, extentH) <= LEGACY_SHEET_PROCESS_MAX_SIDE + 8 &&
+    extentW >= expectedLegacyW * 0.7 &&
+    extentH >= expectedLegacyH * 0.7;
+  let fromW = 0;
+  let fromH = 0;
+  if (looksLegacy) {
+    const scale = LEGACY_SHEET_PROCESS_MAX_SIDE / long;
+    fromW = Math.max(1, Math.round(width * scale));
+    fromH = Math.max(1, Math.round(height * scale));
+  } else if (storedW > 0 && storedH > 0) {
+    fromW = storedW;
+    fromH = storedH;
+  } else {
+    fromW = width;
+    fromH = height;
+  }
+  const sx = fromW === width ? 1 : width / fromW;
+  const sy = fromH === height ? 1 : height / fromH;
+  if (Math.abs(sx - 1) < 0.001 && Math.abs(sy - 1) < 0.001) {
+    return { ...config, sourceWidth: width, sourceHeight: height };
+  }
+  return {
+    ...config,
+    xs: (config.xs ?? []).map((value) => value * sx),
+    ys: (config.ys ?? []).map((value) => value * sy),
+    boxes: (config.boxes ?? []).map((box) => scaleSlotCropBox(box, sx, sy)),
+    sourceWidth: width,
+    sourceHeight: height,
+  };
+}
 
 const sessionSheetUrls: Record<SpriteSheetKind, string> = {
   characters: '',
   elements: '',
   rooms: '',
+  maze: '',
 };
 
 export function rememberUploadedSheet(kind: SpriteSheetKind, file: File): string {
@@ -1128,6 +1235,98 @@ export interface ExtractedAsset {
   blank: boolean;
   width: number;
   height: number;
+  /** Unenhanced crop. Auto Enhance always reprocesses from this. */
+  sourceDataUrl?: string;
+  sourceWidth?: number;
+  sourceHeight?: number;
+  autoEnhanced?: boolean;
+  /** Coloring-page SVG. Maze canvas preview uses this; print rasterizes it. */
+  previewSvg?: string;
+}
+
+/** Draw `src` into `dest` so it fills the crop box. */
+export function stampBufferIntoBox(
+  dest: PixelBuffer,
+  src: PixelBuffer,
+  box: { x: number; y: number; w: number; h: number }
+): void {
+  const x0 = Math.max(0, Math.round(box.x));
+  const y0 = Math.max(0, Math.round(box.y));
+  const boxW = Math.max(1, Math.round(box.w));
+  const boxH = Math.max(1, Math.round(box.h));
+  const x1 = Math.min(dest.width, x0 + boxW);
+  const y1 = Math.min(dest.height, y0 + boxH);
+  for (let y = y0; y < y1; y++) {
+    const sy = Math.min(src.height - 1, Math.floor(((y - y0) * src.height) / boxH));
+    for (let x = x0; x < x1; x++) {
+      const sx = Math.min(src.width - 1, Math.floor(((x - x0) * src.width) / boxW));
+      const si = (sy * src.width + sx) * 4;
+      const di = (y * dest.width + x) * 4;
+      dest.data[di] = src.data[si];
+      dest.data[di + 1] = src.data[si + 1];
+      dest.data[di + 2] = src.data[si + 2];
+      dest.data[di + 3] = src.data[si + 3];
+    }
+  }
+}
+
+/** Tight crop around the subject in one image. Same path as first-load Edit Cropping. */
+export function autoCropBoxForBuffer(src: PixelBuffer): Rect {
+  const boxes = tightInkBoxes(src, [{ slotId: 'auto', name: 'auto' }], 1, 1);
+  const box = boxes[0];
+  if (!box) return { x: 0, y: 0, w: src.width, h: src.height };
+  return { x: box.x, y: box.y, w: box.w, h: box.h };
+}
+
+export function clearBufferRect(dest: PixelBuffer, box: Rect): void {
+  const x0 = Math.max(0, Math.round(box.x));
+  const y0 = Math.max(0, Math.round(box.y));
+  const x1 = Math.min(dest.width, x0 + Math.max(0, Math.round(box.w)));
+  const y1 = Math.min(dest.height, y0 + Math.max(0, Math.round(box.h)));
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * dest.width + x) * 4;
+      dest.data[i] = 0;
+      dest.data[i + 1] = 0;
+      dest.data[i + 2] = 0;
+      dest.data[i + 3] = 0;
+    }
+  }
+}
+
+/**
+ * Replace one slot: discard the old crop, auto-crop the new image, and place
+ * only that slot's new box. Other slots stay unchanged.
+ */
+export function replaceSlotImage(
+  sheet: PixelBuffer,
+  src: PixelBuffer,
+  slotId: string,
+  items: SpriteSheetItem[],
+  cols: number,
+  rows: number,
+  oldBox: SlotCropBox
+): { sheet: PixelBuffer; box: SlotCropBox } {
+  const local = autoCropBoxForBuffer(src);
+  const cropped = cropBuffer(src, local);
+  const cells = buildEqualSlotBoxes(items, sheet.width, sheet.height, cols, rows);
+  const cell = cells.find((item) => item.slotId === slotId) ?? oldBox;
+  const scale = Math.min(1, cell.w / Math.max(1, cropped.width), cell.h / Math.max(1, cropped.height));
+  const dw = Math.max(1, Math.round(cropped.width * scale));
+  const dh = Math.max(1, Math.round(cropped.height * scale));
+  const dx = cell.x + (cell.w - dw) / 2;
+  const dy = cell.y + (cell.h - dh) / 2;
+  const next = cloneBuffer(sheet);
+  clearBufferRect(next, oldBox);
+  clearBufferRect(next, cell);
+  stampBufferIntoBox(next, cropped, { x: dx, y: dy, w: dw, h: dh });
+  return {
+    sheet: next,
+    box: {
+      slotId,
+      ...clampBox({ x: dx, y: dy, w: dw, h: dh }, sheet.width, sheet.height),
+    },
+  };
 }
 
 function blitRect(
@@ -1203,8 +1402,756 @@ export function boxesOverlap(a: Rect, b: Rect): boolean {
     a.x < b.x + b.w - 0.5 &&
     a.x + a.w > b.x + 0.5 &&
     a.y < b.y + b.h - 0.5 &&
-    a.y + b.h > b.y + 0.5
+    a.y + a.h > b.y + 0.5
   );
+}
+
+/** Opaque pixels that are not blank paper. Transparent and near-white pixels are empty. */
+export function isInkPixel(r: number, g: number, b: number, a: number): boolean {
+  if (a < 16) return false;
+  return r < 245 || g < 245 || b < 245;
+}
+
+export function inkBoundsInRect(src: PixelBuffer, rect: Rect, pad = 1): Rect | null {
+  const x0 = Math.max(0, Math.floor(rect.x));
+  const y0 = Math.max(0, Math.floor(rect.y));
+  const x1 = Math.min(src.width, Math.ceil(rect.x + rect.w));
+  const y1 = Math.min(src.height, Math.ceil(rect.y + rect.h));
+  let minX = x1;
+  let minY = y1;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * src.width + x) * 4;
+      if (!isInkPixel(src.data[i], src.data[i + 1], src.data[i + 2], src.data[i + 3])) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return null;
+  const x = Math.max(x0, minX - pad);
+  const y = Math.max(y0, minY - pad);
+  const right = Math.min(x1, maxX + 1 + pad);
+  const bottom = Math.min(y1, maxY + 1 + pad);
+  return { x, y, w: Math.max(1, right - x), h: Math.max(1, bottom - y) };
+}
+
+function edgeGap(a: Rect, b: Rect): number {
+  const dx = Math.max(0, Math.max(a.x, b.x) - Math.min(a.x + a.w, b.x + b.w));
+  const dy = Math.max(0, Math.max(a.y, b.y) - Math.min(a.y + a.h, b.y + b.h));
+  if (dx === 0 && dy === 0) return 0;
+  if (dx === 0) return dy;
+  if (dy === 0) return dx;
+  return Math.hypot(dx, dy);
+}
+
+/** Edge-connected transparent and near-white pixels. Enclosed fill stays out of this mask. */
+export function exteriorBackgroundMask(src: PixelBuffer): Uint8Array {
+  const { data, width, height } = src;
+  const exterior = new Uint8Array(width * height);
+  const stack = new Int32Array(width * height);
+  let sp = 0;
+  const push = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    const p = y * width + x;
+    if (exterior[p]) return;
+    const i = p * 4;
+    const alpha = data[i + 3];
+    if (alpha >= 16 && (data[i] < 248 || data[i + 1] < 248 || data[i + 2] < 248)) return;
+    exterior[p] = 1;
+    stack[sp++] = p;
+  };
+  for (let x = 0; x < width; x++) {
+    push(x, 0);
+    push(x, height - 1);
+  }
+  for (let y = 0; y < height; y++) {
+    push(0, y);
+    push(width - 1, y);
+  }
+  while (sp > 0) {
+    const p = stack[--sp];
+    const x = p % width;
+    const y = (p / width) | 0;
+    push(x + 1, y);
+    push(x - 1, y);
+    push(x, y + 1);
+    push(x, y - 1);
+  }
+  return exterior;
+}
+
+function dilateBinary(mask: Uint8Array, width: number, height: number, radius: number, bounds: Rect): void {
+  const seeds: number[] = [];
+  const x0 = Math.max(0, Math.floor(bounds.x) - radius);
+  const y0 = Math.max(0, Math.floor(bounds.y) - radius);
+  const x1 = Math.min(width - 1, Math.ceil(bounds.x + bounds.w) + radius);
+  const y1 = Math.min(height - 1, Math.ceil(bounds.y + bounds.h) + radius);
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      if (mask[y * width + x]) seeds.push(y * width + x);
+    }
+  }
+  for (const p of seeds) {
+    const x = p % width;
+    const y = (p / width) | 0;
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < x0 || ny < y0 || nx > x1 || ny > y1) continue;
+        mask[ny * width + nx] = 1;
+      }
+    }
+  }
+}
+
+/** Outer silhouette of one drawing, including the fill enclosed by its outline. */
+function silhouetteMask(labels: Int32Array, width: number, height: number, id: number, bounds: Rect): Uint8Array {
+  const mask = new Uint8Array(width * height);
+  for (let p = 0; p < labels.length; p++) if (labels[p] === id) mask[p] = 1;
+  dilateBinary(mask, width, height, 2, bounds);
+  const x0 = Math.max(0, Math.floor(bounds.x) - 3);
+  const y0 = Math.max(0, Math.floor(bounds.y) - 3);
+  const x1 = Math.min(width - 1, Math.ceil(bounds.x + bounds.w) + 3);
+  const y1 = Math.min(height - 1, Math.ceil(bounds.y + bounds.h) + 3);
+  const outside = new Uint8Array(width * height);
+  const stack = new Int32Array((x1 - x0 + 1) * (y1 - y0 + 1));
+  let sp = 0;
+  const push = (x: number, y: number) => {
+    if (x < x0 || y < y0 || x > x1 || y > y1) return;
+    const p = y * width + x;
+    if (outside[p] || mask[p]) return;
+    outside[p] = 1;
+    stack[sp++] = p;
+  };
+  for (let x = x0; x <= x1; x++) {
+    push(x, y0);
+    push(x, y1);
+  }
+  for (let y = y0; y <= y1; y++) {
+    push(x0, y);
+    push(x1, y);
+  }
+  while (sp > 0) {
+    const p = stack[--sp];
+    const x = p % width;
+    const y = (p / width) | 0;
+    push(x + 1, y);
+    push(x - 1, y);
+    push(x, y + 1);
+    push(x, y - 1);
+  }
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const p = y * width + x;
+      if (!outside[p]) mask[p] = 1;
+    }
+  }
+  return mask;
+}
+
+function traceIllustrationOutline(labels: Int32Array, width: number, height: number, id: number): number[] {
+  let start = -1;
+  for (let p = 0; p < labels.length; p++) {
+    if (labels[p] === id) {
+      start = p;
+      break;
+    }
+  }
+  if (start < 0) return [];
+  const dirs = [
+    [1, 0],
+    [1, 1],
+    [0, 1],
+    [-1, 1],
+    [-1, 0],
+    [-1, -1],
+    [0, -1],
+    [1, -1],
+  ];
+  const sx = start % width;
+  const sy = (start / width) | 0;
+  let x = sx;
+  let y = sy;
+  let dir = 0;
+  const points: number[] = [];
+  const maxSteps = width * height;
+  for (let step = 0; step < maxSteps; step++) {
+    if (points.length < 4000) {
+      points.push(x, y);
+    }
+    let turned = (dir + 6) % 8;
+    let found = false;
+    for (let k = 0; k < 8; k++) {
+      const nx = x + dirs[turned][0];
+      const ny = y + dirs[turned][1];
+      if (nx >= 0 && ny >= 0 && nx < width && ny < height && labels[ny * width + nx] === id) {
+        x = nx;
+        y = ny;
+        dir = turned;
+        found = true;
+        break;
+      }
+      turned = (turned + 1) % 8;
+    }
+    if (!found || (x === sx && y === sy && points.length > 4)) break;
+  }
+  if (points.length < 8) return [];
+  const simplified: number[] = [];
+  const stride = Math.max(1, Math.floor(points.length / 2 / 180));
+  for (let i = 0; i < points.length; i += stride * 2) {
+    simplified.push(points[i], points[i + 1]);
+  }
+  return simplified;
+}
+
+function traceBinaryOutline(mask: Uint8Array, width: number, height: number): number[] {
+  const labels = new Int32Array(mask.length);
+  for (let p = 0; p < mask.length; p++) if (mask[p]) labels[p] = 1;
+  return traceIllustrationOutline(labels, width, height, 1);
+}
+
+/**
+ * Rectangular crop whose visible pixels follow one illustration.
+ * Pixels outside that shape, including other drawings inside the rectangle, become transparent.
+ */
+export function pointInPolygon(x: number, y: number, polygon: number[]): boolean {
+  if (polygon.length < 6) return false;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 2; i < polygon.length; j = i, i += 2) {
+    const xi = polygon[i];
+    const yi = polygon[i + 1];
+    const xj = polygon[j];
+    const yj = polygon[j + 1];
+    const crosses = (yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi || 1e-9) + xi;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+function fillPolygon(mask: Uint8Array, width: number, height: number, polygon: number[]): void {
+  if (polygon.length < 6) return;
+  const count = polygon.length / 2;
+  let minY = height;
+  let maxY = 0;
+  for (let index = 0; index < count; index++) {
+    const y = polygon[index * 2 + 1];
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  }
+  const yStart = Math.max(0, Math.floor(minY));
+  const yEnd = Math.min(height - 1, Math.ceil(maxY));
+  for (let y = yStart; y <= yEnd; y++) {
+    const scan = y + 0.5;
+    const hits: number[] = [];
+    for (let index = 0; index < count; index++) {
+      const next = (index + 1) % count;
+      const y1 = polygon[index * 2 + 1];
+      const y2 = polygon[next * 2 + 1];
+      if ((y1 <= scan && y2 > scan) || (y2 <= scan && y1 > scan)) {
+        const t = (scan - y1) / (y2 - y1 || 1e-9);
+        hits.push(polygon[index * 2] + t * (polygon[next * 2] - polygon[index * 2]));
+      }
+    }
+    hits.sort((a, b) => a - b);
+    const row = y * width;
+    for (let index = 0; index + 1 < hits.length; index += 2) {
+      const from = Math.max(0, Math.ceil(hits[index] - 0.001));
+      const to = Math.min(width, Math.floor(hits[index + 1] + 0.001));
+      for (let x = from; x < to; x++) mask[row + x] = 1;
+    }
+  }
+}
+/** Keep every pixel inside any polygon. Pixels outside all of them become transparent. */
+export function keepPixelsInsidePolygons(src: PixelBuffer, polygons: number[][]): PixelBuffer {
+  return maskOutsidePolygons(src, polygons);
+}
+
+function maskOutsidePolygons(src: PixelBuffer, polygons: number[][]): PixelBuffer {
+  const valid = polygons.filter((polygon) => polygon.length >= 6);
+  if (!valid.length) return src;
+  const buf = cloneBuffer(src);
+  const { data, width, height } = buf;
+  const inside = new Uint8Array(width * height);
+  for (const polygon of valid) fillPolygon(inside, width, height, polygon);
+  for (let p = 0, i = 3; p < inside.length; p++, i += 4) {
+    if (!inside[p]) data[i] = 0;
+  }
+  return buf;
+}
+
+/** Ink inside the lasso, plus a short step through connected ink so a circled part is kept. */
+export function captureShapesInPolygon(
+  src: PixelBuffer,
+  polygon: number[]
+): Array<{ bounds: Rect; outline: number[] }> {
+  const { data, width, height } = src;
+  const ink = new Uint8Array(width * height);
+  for (let p = 0, i = 0; p < ink.length; p++, i += 4) {
+    const alpha = data[i + 3];
+    if (alpha >= 16 && (data[i] < 248 || data[i + 1] < 248 || data[i + 2] < 248)) ink[p] = 1;
+  }
+  const region = new Uint8Array(width * height);
+  fillPolygon(region, width, height, polygon);
+  const labels = new Int32Array(width * height);
+  const parts: Array<{ id: number; cx: number; cy: number }> = [];
+  const stack = new Int32Array(width * height);
+  let nextId = 1;
+  for (let start = 0; start < ink.length; start++) {
+    if (!ink[start] || labels[start]) continue;
+    let sp = 0;
+    stack[sp++] = start;
+    labels[start] = nextId;
+    let area = 0;
+    let sumX = 0;
+    let sumY = 0;
+    while (sp > 0) {
+      const p = stack[--sp];
+      area += 1;
+      sumX += p % width;
+      sumY += (p / width) | 0;
+      const x = p % width;
+      const y = (p / width) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const np = ny * width + nx;
+          if (!ink[np] || labels[np]) continue;
+          labels[np] = nextId;
+          stack[sp++] = np;
+        }
+      }
+    }
+    if (area >= 8) parts.push({ id: nextId, cx: sumX / area, cy: sumY / area });
+    else {
+      for (let p = 0; p < labels.length; p++) if (labels[p] === nextId) labels[p] = 0;
+    }
+    nextId += 1;
+  }
+  const selected = new Uint8Array(width * height);
+  const whole = new Set(parts.filter((part) => pointInPolygon(part.cx, part.cy, polygon)).map((part) => part.id));
+  for (let p = 0; p < labels.length; p++) {
+    if (whole.has(labels[p])) selected[p] = 1;
+  }
+  const reach = 32;
+  const dist = new Int16Array(width * height);
+  dist.fill(-1);
+  let head = 0;
+  let tail = 0;
+  for (let p = 0; p < ink.length; p++) {
+    if (!ink[p] || !region[p] || whole.has(labels[p])) continue;
+    dist[p] = 0;
+    stack[tail++] = p;
+  }
+  while (head < tail) {
+    const p = stack[head++];
+    const step = dist[p];
+    selected[p] = 1;
+    if (step >= reach) continue;
+    const x = p % width;
+    const y = (p / width) | 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const np = ny * width + nx;
+        if (!ink[np] || dist[np] >= 0) continue;
+        dist[np] = step + 1;
+        stack[tail++] = np;
+      }
+    }
+  }
+  return detectConnectedComponents(selected, width, height, 8).map((part) => {
+    const mask = new Uint8Array(width * height);
+    const seen = new Uint8Array(width * height);
+    let seed = -1;
+    const x0 = Math.max(0, Math.floor(part.x));
+    const y0 = Math.max(0, Math.floor(part.y));
+    const x1 = Math.min(width - 1, Math.ceil(part.x + part.w) - 1);
+    const y1 = Math.min(height - 1, Math.ceil(part.y + part.h) - 1);
+    for (let y = y0; y <= y1 && seed < 0; y++) {
+      for (let x = x0; x <= x1; x++) {
+        if (selected[y * width + x]) {
+          seed = y * width + x;
+          break;
+        }
+      }
+    }
+    if (seed >= 0) {
+      let sp = 0;
+      stack[sp++] = seed;
+      seen[seed] = 1;
+      while (sp > 0) {
+        const p = stack[--sp];
+        mask[p] = 1;
+        const x = p % width;
+        const y = (p / width) | 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+            const np = ny * width + nx;
+            if (!selected[np] || seen[np]) continue;
+            seen[np] = 1;
+            stack[sp++] = np;
+          }
+        }
+      }
+    }
+    const silhouette = silhouetteMask(Int32Array.from(mask), width, height, 1, {
+      x: part.x,
+      y: part.y,
+      w: part.w,
+      h: part.h,
+    });
+    return {
+      bounds: { x: part.x, y: part.y, w: part.w, h: part.h },
+      outline: traceBinaryOutline(silhouette, width, height),
+    };
+  });
+}
+
+export function cropToIllustrationShape(src: PixelBuffer, keepPolygons: number[][] = []): PixelBuffer {
+  const buf = cloneBuffer(src);
+  const { data, width, height } = buf;
+  const ink = new Uint8Array(width * height);
+  for (let p = 0, i = 0; p < ink.length; p++, i += 4) {
+    const alpha = data[i + 3];
+    if (alpha >= 16 && (data[i] < 248 || data[i + 1] < 248 || data[i + 2] < 248)) ink[p] = 1;
+  }
+  const parts = detectConnectedComponents(ink, width, height, 1);
+  if (!parts.length) return buf;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  let main = parts[0];
+  for (const part of parts) {
+    const closer = Math.hypot(part.cx - centerX, part.cy - centerY) < Math.hypot(main.cx - centerX, main.cy - centerY);
+    if (part.area > main.area || (part.area > main.area * 0.65 && closer)) main = part;
+  }
+  const bridge = Math.max(4, Math.min(24, Math.round(Math.min(main.w, main.h) * 0.28)));
+  const keepPart = parts.filter((part) => {
+    if (keepPolygons.length) return keepPolygons.some((polygon) => pointInPolygon(part.cx, part.cy, polygon));
+    if (part === main) return true;
+    const touchesEdge =
+      part.x <= 1 || part.y <= 1 || part.x + part.w >= width - 1 || part.y + part.h >= height - 1;
+    if (touchesEdge) return false;
+    const inside =
+      part.cx >= main.x - 2 &&
+      part.cy >= main.y - 2 &&
+      part.cx <= main.x + main.w + 2 &&
+      part.cy <= main.y + main.h + 2;
+    return part.area < main.area * 0.4 && (inside || edgeGap(part, main) <= bridge);
+  });
+  const keep = new Uint8Array(width * height);
+  const seen = new Uint8Array(width * height);
+  const stack = new Int32Array(width * height);
+  let partIndex = 0;
+  const kept = new Set(keepPart);
+  for (let start = 0; start < ink.length; start++) {
+    if (!ink[start] || seen[start]) continue;
+    const part = parts[partIndex];
+    partIndex += 1;
+    const mark = part ? kept.has(part) : false;
+    let sp = 0;
+    stack[sp++] = start;
+    seen[start] = 1;
+    while (sp > 0) {
+      const p = stack[--sp];
+      if (mark) keep[p] = 1;
+      const x = p % width;
+      const y = (p / width) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const np = ny * width + nx;
+          if (!ink[np] || seen[np]) continue;
+          seen[np] = 1;
+          stack[sp++] = np;
+        }
+      }
+    }
+  }
+  dilateBinary(keep, width, height, 1, { x: 0, y: 0, w: width, h: height });
+  const outside = new Uint8Array(width * height);
+  let sp = 0;
+  const push = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    const p = y * width + x;
+    if (outside[p] || keep[p]) return;
+    outside[p] = 1;
+    stack[sp++] = p;
+  };
+  for (let x = 0; x < width; x++) {
+    push(x, 0);
+    push(x, height - 1);
+  }
+  for (let y = 0; y < height; y++) {
+    push(0, y);
+    push(width - 1, y);
+  }
+  while (sp > 0) {
+    const p = stack[--sp];
+    const x = p % width;
+    const y = (p / width) | 0;
+    push(x + 1, y);
+    push(x - 1, y);
+    push(x, y + 1);
+    push(x, y - 1);
+  }
+  for (let p = 0, i = 0; p < outside.length; p++, i += 4) {
+    if (outside[p]) data[i + 3] = 0;
+  }
+  return buf;
+}
+
+interface IllustrationCluster extends Rect {
+  area: number;
+  id: number;
+}
+
+/**
+ * Crop boxes from the transparent gutter around each drawing.
+ * Disconnected parts of one drawing stay together. A drawing is never sliced to fit a grid cell.
+ */
+export function tightInkBoxes(
+  src: PixelBuffer,
+  items: SpriteSheetItem[],
+  cols: number,
+  rows: number
+): SlotCropBox[] {
+  const { width, height } = src;
+  const exterior = exteriorBackgroundMask(src);
+  const artwork = new Uint8Array(width * height);
+  for (let p = 0; p < artwork.length; p++) artwork[p] = exterior[p] ? 0 : 1;
+  const parts = detectConnectedComponents(artwork, width, height, 1);
+  if (!parts.length || !items.length) {
+    return buildEqualSlotBoxes(items, width, height, cols, rows);
+  }
+
+  const byArea = [...parts].sort((a, b) => b.area - a.area);
+  const referenceArea = byArea[Math.min(byArea.length - 1, Math.max(0, items.length - 1))]?.area || 1;
+  const majorMin = Math.max(8, referenceArea * 0.18);
+  const majorIndexes = parts
+    .map((part, index) => ({ index, area: part.area }))
+    .filter((part) => part.area >= majorMin)
+    .sort((a, b) => b.area - a.area)
+    .map((part) => part.index);
+  const fragmentIndexes = parts.map((_, index) => index).filter((index) => !majorIndexes.includes(index));
+  while (majorIndexes.length > items.length) fragmentIndexes.push(majorIndexes.pop() as number);
+
+  const members = majorIndexes.map((index) => [index]);
+  for (const fragment of fragmentIndexes) {
+    let best = -1;
+    let bestGap = Infinity;
+    let secondGap = Infinity;
+    for (let index = 0; index < majorIndexes.length; index++) {
+      const gap = edgeGap(parts[fragment], parts[majorIndexes[index]]);
+      if (gap < bestGap) {
+        secondGap = bestGap;
+        bestGap = gap;
+        best = index;
+      } else if (gap < secondGap) secondGap = gap;
+    }
+    if (best < 0) continue;
+    const major = parts[majorIndexes[best]];
+    const bridge = Math.max(4, Math.min(24, Math.round(Math.min(major.w, major.h) * 0.28)));
+    if (bestGap <= bridge && bestGap + 2 < secondGap) members[best].push(fragment);
+  }
+
+  const illustrations: Array<IllustrationCluster & { partIndexes: number[] }> = members.map((group, groupIndex) => {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let area = 0;
+    for (const index of group) {
+      const part = parts[index];
+      minX = Math.min(minX, part.x);
+      minY = Math.min(minY, part.y);
+      maxX = Math.max(maxX, part.x + part.w);
+      maxY = Math.max(maxY, part.y + part.h);
+      area += part.area;
+    }
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY, area, id: groupIndex + 1, partIndexes: group };
+  });
+
+  const partToIllustration = new Map<number, number>();
+  for (const illustration of illustrations) {
+    for (const partIndex of illustration.partIndexes) partToIllustration.set(partIndex, illustration.id);
+  }
+  const labels = new Int32Array(width * height);
+  const seen = new Uint8Array(artwork.length);
+  const stack = new Int32Array(artwork.length);
+  let componentIndex = 0;
+  for (let start = 0; start < artwork.length; start++) {
+    if (!artwork[start] || seen[start]) continue;
+    const id = partToIllustration.get(componentIndex) ?? 0;
+    componentIndex += 1;
+    let sp = 0;
+    stack[sp++] = start;
+    seen[start] = 1;
+    while (sp > 0) {
+      const p = stack[--sp];
+      if (id) labels[p] = id;
+      const x = p % width;
+      const y = (p / width) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const np = ny * width + nx;
+          if (!artwork[np] || seen[np]) continue;
+          seen[np] = 1;
+          stack[sp++] = np;
+        }
+      }
+    }
+  }
+
+  const gridCols = Math.max(1, cols);
+  const gridRows = Math.max(1, rows);
+  const cellW = width / gridCols;
+  const cellH = height / gridRows;
+  const slotOf = new Array<IllustrationCluster | null>(items.length).fill(null);
+  const used = new Set<number>();
+  const scored = illustrations.flatMap((illustration) => {
+    const matches: Array<{ illustration: IllustrationCluster; slot: number; overlap: number }> = [];
+    for (let row = 0; row < gridRows; row++) {
+      for (let col = 0; col < gridCols; col++) {
+        const slot = row * gridCols + col;
+        if (slot >= items.length) continue;
+        const overlap = overlapArea(illustration, { x: col * cellW, y: row * cellH, w: cellW, h: cellH });
+        if (overlap > 0) matches.push({ illustration, slot, overlap });
+      }
+    }
+    return matches;
+  });
+  scored.sort((a, b) => b.overlap - a.overlap);
+  for (const match of scored) {
+    if (used.has(match.illustration.id) || slotOf[match.slot]) continue;
+    slotOf[match.slot] = match.illustration;
+    used.add(match.illustration.id);
+  }
+  const emptySlots: number[] = [];
+  for (let index = 0; index < items.length; index++) {
+    if (!slotOf[index]) emptySlots.push(index);
+  }
+  const unused = illustrations.filter((illustration) => !used.has(illustration.id)).sort((a, b) => b.area - a.area);
+  for (const illustration of unused) {
+    if (!emptySlots.length) break;
+    const cx = illustration.x + illustration.w / 2;
+    const cy = illustration.y + illustration.h / 2;
+    let best = 0;
+    let bestDist = Infinity;
+    for (let index = 0; index < emptySlots.length; index++) {
+      const slot = emptySlots[index];
+      const col = slot % gridCols;
+      const row = Math.floor(slot / gridCols);
+      const dist = Math.hypot(cx - (col + 0.5) * cellW, cy - (row + 0.5) * cellH);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = index;
+      }
+    }
+    const slot = emptySlots.splice(best, 1)[0];
+    slotOf[slot] = illustration;
+    used.add(illustration.id);
+  }
+
+  const boxes: Array<SlotCropBox | null> = new Array(items.length).fill(null);
+  for (let index = 0; index < items.length; index++) {
+    const cluster = slotOf[index];
+    if (!cluster) continue;
+    const pad = Math.max(3, Math.min(8, Math.round(Math.min(cluster.w, cluster.h) * 0.05)));
+    let left = cluster.x - pad;
+    let top = cluster.y - pad;
+    let right = cluster.x + cluster.w + pad;
+    let bottom = cluster.y + cluster.h + pad;
+    for (const other of illustrations) {
+      if (other.id === cluster.id) continue;
+      const verticalOverlap = cluster.y < other.y + other.h && cluster.y + cluster.h > other.y;
+      const horizontalOverlap = cluster.x < other.x + other.w && cluster.x + cluster.w > other.x;
+      if (verticalOverlap && other.x >= cluster.x + cluster.w) right = Math.min(right, other.x);
+      if (verticalOverlap && other.x + other.w <= cluster.x) left = Math.max(left, other.x + other.w);
+      if (horizontalOverlap && other.y >= cluster.y + cluster.h) bottom = Math.min(bottom, other.y);
+      if (horizontalOverlap && other.y + other.h <= cluster.y) top = Math.max(top, other.y + other.h);
+    }
+    left = Math.max(0, left);
+    top = Math.max(0, top);
+    right = Math.min(width, Math.max(left + 1, right));
+    bottom = Math.min(height, Math.max(top + 1, bottom));
+    boxes[index] = {
+      slotId: items[index].slotId,
+      x: left,
+      y: top,
+      w: right - left,
+      h: bottom - top,
+      outline: traceBinaryOutline(silhouetteMask(labels, width, height, cluster.id, cluster), width, height),
+    };
+  }
+
+  if (boxes.some((box) => !box)) {
+    const equal = buildEqualSlotBoxes(items, width, height, cols, rows);
+    for (let index = 0; index < items.length; index++) {
+      if (boxes[index]) continue;
+      const cell = equal[index];
+      boxes[index] = { slotId: items[index].slotId, x: cell.x, y: cell.y, w: cell.w, h: cell.h };
+    }
+  }
+  return boxes.filter((box): box is SlotCropBox => box != null);
+}
+
+/** Makes the gutter around a cropped illustration transparent without erasing enclosed fill. */
+export function punchExteriorBackground(src: PixelBuffer): PixelBuffer {
+  const buf = cloneBuffer(src);
+  const { data, width, height } = buf;
+  const seen = new Uint8Array(width * height);
+  const stack = new Int32Array(width * height);
+  let sp = 0;
+  const push = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    const p = y * width + x;
+    if (seen[p]) return;
+    const i = p * 4;
+    if (data[i + 3] >= 16 && (data[i] < 248 || data[i + 1] < 248 || data[i + 2] < 248)) return;
+    seen[p] = 1;
+    data[i + 3] = 0;
+    stack[sp++] = p;
+  };
+  for (let x = 0; x < width; x++) {
+    push(x, 0);
+    push(x, height - 1);
+  }
+  for (let y = 0; y < height; y++) {
+    push(0, y);
+    push(width - 1, y);
+  }
+  while (sp > 0) {
+    const p = stack[--sp];
+    const x = p % width;
+    const y = (p / width) | 0;
+    push(x + 1, y);
+    push(x - 1, y);
+    push(x, y + 1);
+    push(x, y - 1);
+  }
+  return buf;
 }
 
 export function anyBoxesOverlap(boxes: SlotCropBox[]): boolean {
@@ -1377,6 +2324,47 @@ function savedBoxesMatchItems(saved: SlotCropBox[], items: SpriteSheetItem[]): b
   return saved.every((box) => ids.has(box.slotId));
 }
 
+/** Keep the user's crop edits. Auto-detect only fills a sheet that has no saved boxes. */
+export function chooseMazeCropBoxes(
+  saved: SlotCropBox[],
+  detected: SlotCropBox[],
+  items: SpriteSheetItem[]
+): SlotCropBox[] {
+  return savedBoxesMatchItems(saved, items) ? saved : detected;
+}
+
+function drawingIsOutlined(box: SlotCropBox, art: SlotCropBox): boolean {
+  if (!box.outline || box.outline.length < 6) return false;
+  return pointInPolygon(art.x + art.w / 2, art.y + art.h / 2, box.outline);
+}
+
+/** Keep edited crops, and give a free slot to any drawing the saved outlines missed. */
+function mergeMissedDrawings(saved: SlotCropBox[], detected: SlotCropBox[]): SlotCropBox[] {
+  const missed = detected.filter((art) => art.outline && art.outline.length >= 6 && !saved.some((box) => drawingIsOutlined(box, art)));
+  if (!missed.length) return saved;
+  const boxes = saved.map((box) => ({ ...box }));
+  const holdsArt = boxes.map((box) => detected.some((art) => drawingIsOutlined(box, art)));
+  for (const art of missed) {
+    const cx = art.x + art.w / 2;
+    const cy = art.y + art.h / 2;
+    let best = -1;
+    let bestDist = Infinity;
+    for (let index = 0; index < boxes.length; index++) {
+      if (holdsArt[index]) continue;
+      const box = boxes[index];
+      const dist = Math.hypot(cx - (box.x + box.w / 2), cy - (box.y + box.h / 2));
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = index;
+      }
+    }
+    if (best < 0) continue;
+    boxes[best] = { ...art, slotId: boxes[best].slotId };
+    holdsArt[best] = true;
+  }
+  return boxes;
+}
+
 /** Always one crop box per item. Prefer a valid saved crop, then detected art, then an equal packed grid. */
 export function cropBoxesForItems(
   items: SpriteSheetItem[],
@@ -1501,6 +2489,36 @@ export function buildSlotBoxes(
   return boxes;
 }
 
+/** Crop one maze slot. A hand-drawn polygon keeps every pixel inside it. */
+export function cropMazeSlot(content: PixelBuffer, box: SlotCropBox): PixelBuffer {
+  const originX = Math.max(0, Math.floor(box.x));
+  const originY = Math.max(0, Math.floor(box.y));
+  const toLocal = (polygon: number[]) =>
+    polygon.map((value, index) => value - (index % 2 === 0 ? originX : originY));
+  const shapes = [
+    ...(box.outline && box.outline.length >= 6 ? [box.outline] : []),
+    ...(box.extraOutlines ?? []).filter((polygon) => polygon.length >= 6),
+    ...(box.includePolygons ?? []).filter((polygon) => polygon.length >= 6),
+  ].map(toLocal);
+  const kept = shapes.length ? keepPixelsInsidePolygons(content, shapes) : cropToIllustrationShape(content);
+  const exclude = (box.excludePolygons ?? []).filter((polygon) => polygon.length >= 6).map(toLocal);
+  return exclude.length ? punchPolygons(kept, exclude) : kept;
+}
+
+/** Make every pixel inside any polygon transparent. */
+export function punchPolygons(src: PixelBuffer, polygons: number[][]): PixelBuffer {
+  const valid = polygons.filter((polygon) => polygon.length >= 6);
+  if (!valid.length) return src;
+  const buf = cloneBuffer(src);
+  const { data, width, height } = buf;
+  const punch = new Uint8Array(width * height);
+  for (const polygon of valid) fillPolygon(punch, width, height, polygon);
+  for (let p = 0, i = 3; p < punch.length; p++, i += 4) {
+    if (punch[p]) data[i] = 0;
+  }
+  return buf;
+}
+
 export function extractSlotAssets(
   working: PixelBuffer,
   items: SpriteSheetItem[],
@@ -1522,9 +2540,11 @@ export function extractSlotAssets(
       pieces.push({ item: items[i], content: null, bbox: null });
       continue;
     }
+    let content = cropBuffer(working, { x: box.x, y: box.y, w: box.w, h: box.h });
+    if (_kind === 'maze') content = cropMazeSlot(content, box);
     pieces.push({
       item: items[i],
-      content: cropBuffer(working, { x: box.x, y: box.y, w: box.w, h: box.h }),
+      content,
       bbox: { x: box.x, y: box.y, w: box.w, h: box.h },
     });
   }
@@ -1543,6 +2563,9 @@ export function extractSlotAssets(
         blank: true,
         width: 64,
         height: 64,
+        sourceDataUrl: emptyPng(64, 64),
+        sourceWidth: 64,
+        sourceHeight: 64,
       };
     }
     let out = content;
@@ -1561,13 +2584,17 @@ export function extractSlotAssets(
     } else if (useMode === 'custom') {
       out = scaleBufferNearest(content, config.customScale || 1);
     }
+    const dataUrl = bufferToDataUrl(out);
     return {
       slotId: item.slotId,
       name: item.name,
-      dataUrl: bufferToDataUrl(out),
+      dataUrl,
       blank: false,
       width: out.width,
       height: out.height,
+      sourceDataUrl: dataUrl,
+      sourceWidth: out.width,
+      sourceHeight: out.height,
     };
   });
 }
@@ -1599,39 +2626,47 @@ export async function runSpriteSheetPipeline(
 }> {
   onStatus?.('Analyzing artwork...');
   await yieldFrame();
-  const original = await loadImageBuffer(originalSrc, PROCESS_MAX_SIDE);
+  const original = await loadImageBuffer(originalSrc, SHEET_WORKING_MAX_SIDE);
   await yieldFrame();
-  const config: SpriteSheetCropConfig = {
-    ...DEFAULT_CROP_CONFIG,
-    normalizeMode: defaultNormalizeMode(kind),
-    ...options,
-  };
+  const config: SpriteSheetCropConfig = scaleCropConfigToImage(
+    {
+      ...DEFAULT_CROP_CONFIG,
+      normalizeMode: defaultNormalizeMode(kind),
+      ...options,
+    },
+    original.width,
+    original.height
+  );
   const cache = buildAnalysisCache(original, config);
 
   onStatus?.('Finding crop lines...');
   await yieldFrame();
-  const grid = resolveSheetGrid(original.width, original.height, items.length, cols, rows);
+  const grid =
+    kind === 'maze' && cols * rows >= items.length
+      ? { columns: cols, rows }
+      : resolveSheetGrid(original.width, original.height, items.length, cols, rows);
   const gridCols = grid.columns;
   const gridRows = grid.rows;
   const crop = autoFixCrop(cache, items, gridCols, gridRows, config);
-  const savedBoxes = options.boxes ?? [];
-  const detected = buildSlotBoxes(cache, items, gridCols, gridRows, crop.xs, crop.ys, config.padPercent);
-  const boxes = cropBoxesForItems(
-    items,
-    original.width,
-    original.height,
-    gridCols,
-    gridRows,
-    detected,
-    savedBoxes
-  );
+  const savedBoxes = config.boxes ?? [];
+  const keepSavedMaze = kind === 'maze' && savedBoxesMatchItems(savedBoxes, items);
+  const detected = keepSavedMaze
+    ? savedBoxes
+    : kind === 'maze'
+      ? tightInkBoxes(original, items, gridCols, gridRows)
+      : buildSlotBoxes(cache, items, gridCols, gridRows, crop.xs, crop.ys, config.padPercent);
+  const boxes = keepSavedMaze
+    ? savedBoxes
+    : kind === 'maze'
+      ? detected
+      : cropBoxesForItems(items, original.width, original.height, gridCols, gridRows, detected, savedBoxes);
 
   onStatus?.('Creating crops...');
   await yieldFrame();
   const working = applySheetEffects(original, config);
   const nextConfig = { ...config, xs: crop.xs, ys: crop.ys, boxes, gridCols, gridRows };
   const assets = extractSlotAssets(working, items, gridCols, gridRows, crop.xs, crop.ys, nextConfig, kind);
-  const workingSrc = working === original ? originalSrc : bufferToDataUrl(working);
+  const workingSrc = sheetPreviewSrc(originalSrc, original, working);
   await yieldFrame();
   onStatus?.('Ready');
 

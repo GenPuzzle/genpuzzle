@@ -123,6 +123,33 @@
   color: #94a3b8;
 }
 
+.app-busy-overlay__cancel {
+  margin-top: 0.35rem;
+  padding: 0.4rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  background: #fff;
+  color: #0f172a;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.app-busy-overlay__cancel:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.dark .app-busy-overlay__cancel {
+  background: #1e293b;
+  border-color: rgba(100, 116, 139, 0.7);
+  color: #f1f5f9;
+}
+
+.dark .app-busy-overlay__cancel:hover {
+  background: #334155;
+}
+
 @keyframes app-busy-spin {
   to {
     transform: rotate(360deg);

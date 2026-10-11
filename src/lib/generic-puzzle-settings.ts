@@ -15,13 +15,27 @@ import type {
 } from './puzzles/types';
 import type { SudokuSize } from './puzzles/sudoku';
 import { SUDOKU_SIZES, isSudokuSize } from './puzzles/sudoku';
+import {
+  defaultMazeStartEndImages,
+  normalizeMazeStartEndImages,
+  type MazeStartEndImagesSettings,
+} from './maze-start-end-images';
+
+export type { MazeStartEndImagesSettings };
 
 export type GenericPuzzleModuleType =
   | 'sudoku'
   | 'maze'
   | 'cryptogram'
   | 'word-scramble'
-  | 'trivia';
+  | 'trivia'
+  | 'codewords'
+  | 'binairo'
+  | 'kakuro'
+  | 'math-maze'
+  | 'word-fill'
+  | 'number-fill'
+  | 'snake';
 
 export function isGenericPuzzleModuleType(type: string): type is GenericPuzzleModuleType {
   return (
@@ -29,8 +43,32 @@ export function isGenericPuzzleModuleType(type: string): type is GenericPuzzleMo
     type === 'maze' ||
     type === 'cryptogram' ||
     type === 'word-scramble' ||
-    type === 'trivia'
+    type === 'trivia' ||
+    type === 'codewords' ||
+    type === 'binairo' ||
+    type === 'kakuro' ||
+    type === 'math-maze' ||
+    type === 'word-fill' ||
+    type === 'number-fill' ||
+    type === 'snake'
   );
+}
+
+/** Word Fill-In and Number Fill-In share one grid engine; this tells them apart. */
+export function isFillModuleType(type: string): type is 'word-fill' | 'number-fill' {
+  return type === 'word-fill' || type === 'number-fill';
+}
+
+/**
+ * Projects saved before the split stored a single `fill` module whose mode
+ * lived in `core.fillMode`. Map it to the dedicated module id.
+ */
+export function migrateLegacyModuleType(
+  type: string,
+  core?: Partial<Pick<GenericPuzzleCoreSettings, 'fillMode'>> | null
+): string {
+  if (type === 'fill') return core?.fillMode === 'number' ? 'number-fill' : 'word-fill';
+  return type;
 }
 
 export type GenericPuzzleNumberingStyle = 'prefix' | 'suffix' | 'none';
@@ -45,7 +83,15 @@ export type SudokuDifficultyMode = Difficulty | 'mixed';
 /** Where (or whether) the difficulty label appears relative to the grid / title. */
 export type SudokuDifficultyPlacement = 'bottom' | 'top' | 'in_title' | 'none';
 /** Top-level Sudoku document mode. Absent on older projects → standard. */
-export type SudokuPuzzleMode = 'standard' | 'calcudoku' | 'mixed';
+export type SudokuPuzzleMode = 'standard' | 'calcudoku' | 'x' | 'greater-than' | 'mixed';
+/** Per-batch Sudoku family used in type plans (not Calcudoku cages). */
+export type SudokuLatinKind = 'standard' | 'x' | 'greater-than';
+/** How Sudoku X marks the two main diagonals. */
+export type SudokuXMarkStyle = 'boxes' | 'lines';
+
+export function isSudokuXMarkStyle(value: unknown): value is SudokuXMarkStyle {
+  return value === 'boxes' || value === 'lines';
+}
 export type CalcudokuGridSize = 4 | 5 | 6 | 7 | 8 | 9;
 export type CalcudokuGridSizeMode = CalcudokuGridSize | 'mixed';
 export type CalcudokuDifficultyMode = 'easy' | 'medium' | 'hard' | 'expert' | 'mixed';
@@ -53,7 +99,31 @@ export type CalcudokuDifficultyMode = 'easy' | 'medium' | 'hard' | 'expert' | 'm
 export const CALCUDOKU_GRID_SIZES: CalcudokuGridSize[] = [4, 5, 6, 7, 8, 9];
 
 export function isSudokuPuzzleMode(value: unknown): value is SudokuPuzzleMode {
-  return value === 'standard' || value === 'calcudoku' || value === 'mixed';
+  return (
+    value === 'standard' ||
+    value === 'calcudoku' ||
+    value === 'x' ||
+    value === 'greater-than' ||
+    value === 'mixed'
+  );
+}
+
+export function sudokuModeUsesLatinSettings(core: {
+  sudokuPuzzleMode?: SudokuPuzzleMode;
+  sudokuMixedIncludeStandard?: boolean;
+  sudokuMixedIncludeX?: boolean;
+  sudokuMixedIncludeGreaterThan?: boolean;
+}): boolean {
+  const mode = isSudokuPuzzleMode(core.sudokuPuzzleMode) ? core.sudokuPuzzleMode : 'standard';
+  if (mode === 'standard' || mode === 'x' || mode === 'greater-than') return true;
+  if (mode === 'mixed') {
+    return (
+      core.sudokuMixedIncludeStandard !== false ||
+      core.sudokuMixedIncludeX === true ||
+      core.sudokuMixedIncludeGreaterThan === true
+    );
+  }
+  return false;
 }
 
 export function isCalcudokuDifficulty(value: unknown): value is CalcudokuDifficultyMode {
@@ -433,9 +503,17 @@ export function resolveCalcudokuDifficulties(
 export function sudokuModeGenerationBlockMessage(core: GenericPuzzleCoreSettings): string | null {
   const mode = isSudokuPuzzleMode(core.sudokuPuzzleMode) ? core.sudokuPuzzleMode : 'standard';
   const includeStandard = core.sudokuMixedIncludeStandard !== false;
+  const includeX = core.sudokuMixedIncludeX === true;
+  const includeGreaterThan = core.sudokuMixedIncludeGreaterThan === true;
   const includeCalcudoku = core.sudokuMixedIncludeCalcudoku !== false;
-  if (mode === 'mixed' && !includeStandard && !includeCalcudoku) {
-    return 'Select at least one puzzle type to mix (Standard Sudoku and/or Calcudoku).';
+  if (
+    mode === 'mixed' &&
+    !includeStandard &&
+    !includeX &&
+    !includeGreaterThan &&
+    !includeCalcudoku
+  ) {
+    return 'Select at least one puzzle type to mix (Standard, Sudoku X, Greater Than, and/or Calcudoku).';
   }
   const usesCalcudoku =
     mode === 'calcudoku' || (mode === 'mixed' && includeCalcudoku);
@@ -544,13 +622,20 @@ export type GenericLetterCase = 'upper' | 'lower';
 export type CryptogramFormat = 'lines' | 'boxes';
 export type ScrambleSeparator = 'equal' | 'blank';
 export type ScrambleAnswerStyle = 'dash' | 'underline' | 'blank' | 'boxes';
-export type GenericTitleAlign = 'left' | 'center';
+export type GenericTitleAlign = 'left' | 'center' | 'right';
 export type TriviaLayoutFormat = 'single-column' | 'two-column' | 'compact';
 export type TriviaCheckboxStyle = 'circle' | 'square';
 /** How answer suggestions are arranged under each question. */
 export type TriviaSuggestionsColumns = 'single' | 'two';
 /** How many answer columns on trivia solution pages (each column is # | Answer). */
 export type TriviaSolutionColumns = 1 | 2 | 3 | 4;
+export type CodewordDifficulty = 'easy' | 'medium' | 'hard' | 'very-hard';
+export type CodewordHintPlacement = 'all-occurrences' | 'single-occurrence';
+export type CodewordGridSizeMode = 11 | 13 | 15 | 17 | 19 | 21 | 'custom';
+export type BinairoDifficulty = 'easy' | 'medium' | 'hard';
+export type BinairoSymbols = '01' | 'xo';
+export type BinairoGridSize = 4 | 6 | 8 | 10 | 12 | 14;
+export type { KakuroDifficulty, KakuroPattern, KakuroGridSize } from './puzzles/kakuro';
 
 export interface GenericPuzzleCoreSettings {
   numberOfPuzzles: number;
@@ -569,12 +654,21 @@ export interface GenericPuzzleCoreSettings {
   autoBalanceFont: boolean;
   // --- Sudoku ---
   /**
-   * Standard Sudoku, Calcudoku, or a mix of both types.
+   * Standard Sudoku, Sudoku X, Greater Than, Calcudoku, or a mix of types.
    * Older projects omit this field and are treated as `standard`.
    */
   sudokuPuzzleMode: SudokuPuzzleMode;
   /** When sudokuPuzzleMode === 'mixed': include Standard Sudoku. */
   sudokuMixedIncludeStandard: boolean;
+  /** When sudokuPuzzleMode === 'mixed': include Sudoku X (diagonals). */
+  sudokuMixedIncludeX: boolean;
+  /** When sudokuPuzzleMode === 'mixed': include Greater Than Sudoku. */
+  sudokuMixedIncludeGreaterThan: boolean;
+  /**
+   * Greater Than: when true, include a few prefilled digits (hybrid).
+   * Default false = traditional inequality-only (no givens).
+   */
+  sudokuGreaterThanHybrid: boolean;
   /** When sudokuPuzzleMode === 'mixed': include Calcudoku. */
   sudokuMixedIncludeCalcudoku: boolean;
   /** Calcudoku board size, or mixed 4–9. */
@@ -617,6 +711,15 @@ export interface GenericPuzzleCoreSettings {
   sudokuPuzzleLineThickness: number;
   /** Cell-line thickness on solution pages (percent of default). */
   sudokuSolutionLineThickness: number;
+  /**
+   * Sudoku X diagonal mark: shaded diagonal cells (`boxes`) or crossing lines (`lines`).
+   * Older projects omit this and default to `boxes`.
+   */
+  sudokuXMarkStyle: SudokuXMarkStyle;
+  /** Diagonal line thickness when sudokuXMarkStyle === 'lines' (percent of default). */
+  sudokuXLineThickness: number;
+  /** Diagonal line transparency 0–100 (0 = solid) when mark style is lines. */
+  sudokuXLineTransparency: number;
   // --- Maze ---
   /** Fixed size, or mixed easy→hard levels. */
   mazeSize: MazeSizeMode;
@@ -663,6 +766,8 @@ export interface GenericPuzzleCoreSettings {
   mazeSolutionPathStyle: MazeSolutionPathStyle;
   /** Solution path thickness as a percent of cell size. */
   mazeSolutionPathThickness: number;
+  /** Per-maze start and end illustrations extracted from reference sheets. */
+  mazeStartEndImages: MazeStartEndImagesSettings;
   // --- Shape Mazes ---
   shapeMazeEnabled?: boolean;
   shapeMaskMode?: 'common' | 'per-puzzle';
@@ -698,10 +803,9 @@ export interface GenericPuzzleCoreSettings {
   wordBankTitle: string;
   // --- Trivia ---
   /**
-   * For trivia docs, `numberOfPuzzles` is the total number of questions
-   * (page count = ceil(numberOfPuzzles / questionsPerPage)).
+  * For trivia docs, `numberOfPuzzles` is the total number of themes/puzzles.
    */
-  /** How many questions appear on each trivia page. */
+  /** How many questions belong to each trivia puzzle/theme. */
   questionsPerPage: number;
   /** How many multiple-choice suggestions each question has. */
   suggestionsPerQuestion: number;
@@ -726,29 +830,219 @@ export interface GenericPuzzleCoreSettings {
    * (`solutionsPerPage` is answers per column).
    */
   triviaSolutionColumns: TriviaSolutionColumns;
-  // --- Shared (cryptogram + word scramble) ---
+  // --- Codewords ---
+  /** Language code for dictionary (en first). */
+  codewordsLanguage: string;
+  /** Square grid size preset, or custom. */
+  codewordsGridSize: CodewordGridSizeMode;
+  /** Custom N when codewordsGridSize === 'custom' (11–21 odd preferred). */
+  codewordsCustomSize: number;
+  codewordsDifficulty: CodewordDifficulty;
+  /** Distinct hint letters; overrides difficulty default when set by user. */
+  codewordsHintCount: number;
+  /** Whether the user explicitly set hint count (skip difficulty default). */
+  codewordsHintCountManual: boolean;
+  codewordsHintPlacement: CodewordHintPlacement;
+  showCodewordsCodeBox: boolean;
+  codewordsBlockedCellColor: string;
+  codewordsPlayableCellColor: string;
+  codewordsGridLineColor: string;
+  codewordsGridStrokeWidth: number;
+  codewordsNumberColor: string;
+  codewordsLetterColor: string;
+  /** Generation seed (persisted for reproducibility). */
+  codewordsSeed: number;
+  // --- Binairo ---
+  binairoGridSize: BinairoGridSize;
+  binairoDifficulty: BinairoDifficulty;
+  binairoSymbols: BinairoSymbols;
+  binairoGridLineColor: string;
+  binairoGridStrokeWidth: number;
+  binairoSymbolColor: string;
+  binairoSeed: number;
+  // --- Kakuro ---
+  kakuroGridSize: import('./puzzles/kakuro').KakuroGridSize;
+  kakuroDifficulty: import('./puzzles/kakuro').KakuroDifficulty;
+  kakuroPattern: import('./puzzles/kakuro').KakuroPattern;
+  kakuroGridLineColor: string;
+  /** @deprecated Ignored — outer edges use grid line color. Kept for saved projects. */
+  kakuroOuterBorderColor?: string;
+  kakuroBlockFill: string;
+  kakuroClueCellFill: string;
+  kakuroPlayableFill: string;
+  kakuroClueTextColor: string;
+  kakuroDigitColor: string;
+  /** Primary line thickness for cell borders, perimeter, and clue diagonals (pt). */
+  kakuroGridLineWidth: number;
+  /** @deprecated Prefer kakuroGridLineWidth. */
+  kakuroInnerLineWidth?: number;
+  /** @deprecated Unused — perimeter uses kakuroGridLineWidth. */
+  kakuroOuterBorderWidth?: number;
+  /** @deprecated Unused — diagonals use kakuroGridLineWidth. */
+  kakuroDiagonalWidth?: number;
+  kakuroCluePadding: number;
+  kakuroCellPadding: number;
+  kakuroSeed: number;
+  // --- Math Maze ---
+  mathMazeEquationsAcross: number;
+  mathMazeEquationsDown: number;
+  mathMazeMaxDigits: number;
+  mathMazeMaxDividendDigits: number;
+  mathMazeMaxDivisorDigits: number;
+  mathMazeMaxAnswerDigits: number;
+  mathMazeNumbersPerEquation: 2 | 3 | 4;
+  mathMazeOpAdd: boolean;
+  mathMazeOpSub: boolean;
+  mathMazeOpMul: boolean;
+  mathMazeOpDiv: boolean;
+  mathMazeAllowNegative: boolean;
+  mathMazeUseParentheses: boolean;
+  mathMazeParenthesesMode: 'all' | 'random';
+  mathMazeStartText: string;
+  mathMazeEndText: string;
+  mathMazeCornerRoundingPercent: number;
+  mathMazeChannelSizePercent: number;
+  mathMazeSolutionPathColor: string;
+  /** Fill color for equation boxes on the solution route. */
+  mathMazeSolutionCellFill: string;
+  mathMazeSeed: number;
+  // --- Fill (word/number) ---
+  fillMode: 'word' | 'number';
+  fillGridWidth: number;
+  fillGridHeight: number;
+  fillWordsPerPuzzle: number;
+  /** Like crossword exactClueCount — keep retrying until all words place (slow). Default off. */
+  fillExactWordCount: boolean;
+  fillLettersToShow: number;
+  fillIncludeStarterWord: boolean;
+  fillDigitCount2: number;
+  fillDigitCount3: number;
+  fillDigitCount4: number;
+  fillDigitCount5: number;
+  fillDigitCount6: number;
+  fillDigitCount7: number;
+  fillDigitCount8: number;
+  fillDigitCount9: number;
+  fillGridLineWidth: number;
+  fillGridLineColor: string;
+  fillBlockFill: string;
+  fillPlayableFill: string;
+  fillSeed: number;
+  fillWordsText: string;
+  // --- Snake (word/number) ---
+  snakeMode: 'word' | 'number';
+  snakeGridWidth: number;
+  snakeGridHeight: number;
+  snakeWordsPerPuzzle: number;
+  snakeAllowNumbersInGrid: boolean;
+  snakeNoBoxAroundPuzzle: boolean;
+  snakeAddGridLines: boolean;
+  snakeIncludeFiller: string;
+  snakeExcludeFiller: string;
+  snakeDigitCount2: number;
+  snakeDigitCount3: number;
+  snakeDigitCount4: number;
+  snakeDigitCount5: number;
+  snakeDigitCount6: number;
+  snakeDigitCount7: number;
+  snakeDigitCount8: number;
+  snakeDigitCount9: number;
+  snakeGridLineWidth: number;
+  snakeGridLineColor: string;
+  snakeSolutionPathColor: string;
+  snakeNonPathColor: string;
+  /** Solution path highlight thickness as a percent of cell size (5–80). */
+  snakeSolutionPathThickness: number;
+  /** Solution path highlight opacity 0–100 (100 = opaque). */
+  snakeSolutionPathOpacity: number;
+  snakeSeed: number;
+  snakeWordsText: string;
+  /** Word list columns (1–4), same control as Word Search. */
+  snakeWordListColumns: number;
+  /** Horizontal gap between word-list columns (Word Search Space Horizontal). */
+  snakeWordSpacingHorizontal: number;
+  /** Vertical gap between word-list rows (Word Search Space Vertical). */
+  snakeWordSpacingVertical: number;
+  // --- Shared (cryptogram + word scramble + codewords) ---
   letterCase: GenericLetterCase;
 }
 
 export interface GenericPuzzleTypographySettings {
   selectTitleOption: GenericPuzzleTitleOption;
   titleText: string;
+  /** Trivia puzzle-page subtitle / fun facts, one line per puzzle. */
+  includeFunFacts: boolean;
+  funFactsText: string;
   /** One title per line when selectTitleOption === 'custom_per_puzzle'. */
   differentTitles: string;
   puzzleNumberingStyle: GenericPuzzleNumberingStyle;
   puzzleTitleFontFamily: string;
   puzzleTitleFontSize: number;
+  puzzleTitleItalic?: boolean;
+  /** Puzzle page title weight (default bold). */
+  puzzleTitleBold?: boolean;
+  titleTextEffect?: import('./text-effects').TextEffectStyle;
+  puzzleTextEffect?: import('./text-effects').TextEffectStyle;
+  /** Solution page title font family (canvas format bar on Solutions). */
+  answerTitleFontFamily: string;
   answerTitleFontSize: number;
+  /** Solution page title alignment. */
+  answerTitleAlign?: GenericTitleAlign;
   /** Body/content font family (cryptogram cipher text, scramble list…). */
   puzzleFontFamily: string;
   /** Body/content font size (cryptogram text, scramble list…). */
   puzzleFontSize: number;
+  puzzleBold?: boolean;
+  puzzleItalic?: boolean;
   /** Solution body font family. */
   answerFontFamily: string;
   /** Body/content font size on solution pages. */
   answerFontSize: number;
-  /** Answer-key table font family (size is fixed at 18pt). */
+  /** Cryptogram alphabet answer-key table font family. */
   answerKeyFontFamily: string;
+  /** Cryptogram alphabet answer-key font size (pt). */
+  answerKeyFontSize: number;
+  answerKeyBold?: boolean;
+  answerKeyItalic?: boolean;
+  /** Codewords: code-number font (grid + alphabet box). */
+  codewordsNumberFontFamily?: string;
+  codewordsNumberFontSize?: number;
+  codewordsNumberBold?: boolean;
+  codewordsNumberItalic?: boolean;
+  /** Codewords: letter font (hints / solutions / alphabet box). */
+  codewordsLetterFontFamily?: string;
+  codewordsLetterFontSize?: number;
+  codewordsLetterBold?: boolean;
+  codewordsLetterItalic?: boolean;
+  /** Kakuro: clue triangle font (grid). */
+  kakuroClueFontFamily?: string;
+  kakuroClueFontSize?: number;
+  kakuroClueBold?: boolean;
+  /** Math Maze typography */
+  mathMazeEquationFontFamily?: string;
+  mathMazeChannelFontFamily?: string;
+  mathMazeStartEndFontFamily?: string;
+  mathMazeStartFontSize?: number;
+  mathMazeEndFontSize?: number;
+  mathMazeAnswerStartFontSize?: number;
+  mathMazeAnswerEndFontSize?: number;
+  mathMazeEquationFontSize?: number;
+  mathMazeChannelFontSize?: number;
+  mathMazeAnswerEquationFontSize?: number;
+  mathMazeAnswerChannelFontSize?: number;
+  /** Fill-In / Word Snake: word (number) list under the grid; edited via the shared text bar. */
+  wordListFontFamily?: string;
+  wordListFontSize?: number;
+  wordListBold?: boolean;
+  wordListItalic?: boolean;
+  /** Gap between solution grids on multi-solution pages (px). */
+  solutionToSolutionGapPx?: number;
+  /** Trivia suggestion / multiple-choice option font family. */
+  suggestionFontFamily?: string;
+  /** Trivia suggestion / multiple-choice option font size (pt). */
+  suggestionFontSize?: number;
+  suggestionTextEffect?: import('./text-effects').TextEffectStyle;
+  suggestionItalic?: boolean;
   /** Distance from page top to title (inches). */
   titleStartAt: number;
   /** Gap between title and puzzle / answer key (inches). */
@@ -771,8 +1065,15 @@ export interface GenericPuzzleTypographySettings {
   triviaSpaceAfterQuestion: number;
   /** Trivia solutions: gap between question–answer rows (pt). */
   triviaSolutionSpaceBetween: number;
+  /** Trivia solutions: horizontal gap between answer columns (pt). */
+  triviaSolutionColumnSpaceBetween: number;
   /** Title alignment on the page / multi-puzzle blocks. */
   puzzleTitleAlign: GenericTitleAlign;
+  /**
+   * Free placement deltas (pt) for native canvas elements (title / grid / clues).
+   * Applied in generic page layout so preview / PDF / PPTX stay matching.
+   */
+  canvasLayoutOffsets?: import('./canvas-element-position').CanvasLayoutOffsets;
   solutionTitleStyle: GenericSolutionTitleStyle;
   customSolutionTitle: string;
   solutionNumberingStyle: GenericPuzzleNumberingStyle;
@@ -782,9 +1083,17 @@ export interface GenericPuzzleTypographySettings {
 export interface GenericPuzzleColorSettings {
   backgroundColor: string;
   titleColor: string;
+  /** Solution page title color (falls back to titleColor). */
+  answerTitleColor?: string;
   gridColor: string;
+  /** Fill-In / Word Snake word list text color (defaults to grid color). */
+  wordListColor?: string;
   /** Maze solution path stroke color. */
   solutionPathColor: string;
+  /** Sudoku X diagonal cell fill when mark style is boxes. */
+  sudokuXBoxColor: string;
+  /** Sudoku X diagonal line stroke when mark style is lines. */
+  sudokuXLineColor: string;
 }
 
 export interface GenericPuzzleSettings {
@@ -799,6 +1108,13 @@ const DEFAULT_MODULE_TITLES: Record<GenericPuzzleModuleType, string> = {
   cryptogram: 'Cryptogram',
   'word-scramble': 'Word Scramble',
   trivia: 'Trivia',
+  codewords: 'Puzzle',
+  binairo: 'Binairo',
+  kakuro: 'Kakuro',
+  'math-maze': 'Math Maze',
+  'word-fill': 'Word Fill-In',
+  'number-fill': 'Number Fill-In',
+  snake: 'Word Snake',
 };
 
 export function getGenericModuleDefaultTitle(moduleType: GenericPuzzleModuleType): string {
@@ -810,16 +1126,40 @@ export function getDefaultGenericPuzzleSettings(
 ): GenericPuzzleSettings {
   return {
     core: {
-      numberOfPuzzles: 10,
+      numberOfPuzzles:
+        moduleType === 'codewords' ||
+        moduleType === 'binairo' ||
+        moduleType === 'kakuro' ||
+        moduleType === 'math-maze' ||
+        moduleType === 'word-fill' ||
+        moduleType === 'number-fill' ||
+        moduleType === 'snake'
+          ? 80
+          : 10,
       puzzlesStartingNumber: 1,
       puzzlesPerPage: 1,
       puzzleGridScale: 100,
       solutionGridScale: 100,
-      solutionsPerPage: moduleType === 'sudoku' ? 4 : moduleType === 'trivia' ? 20 : 2,
+      solutionsPerPage:
+        moduleType === 'sudoku' ||
+        moduleType === 'codewords' ||
+        moduleType === 'binairo' ||
+        moduleType === 'kakuro' ||
+        moduleType === 'math-maze' ||
+        moduleType === 'word-fill' ||
+        moduleType === 'number-fill' ||
+        moduleType === 'snake'
+          ? 4
+          : moduleType === 'trivia'
+            ? 20
+            : 2,
       autoBalanceGrid: false,
       autoBalanceFont: false,
       sudokuPuzzleMode: 'standard',
       sudokuMixedIncludeStandard: true,
+      sudokuMixedIncludeX: false,
+      sudokuMixedIncludeGreaterThan: false,
+      sudokuGreaterThanHybrid: false,
       sudokuMixedIncludeCalcudoku: true,
       calcudokuGridSize: 6,
       calcudokuMix4: true,
@@ -848,6 +1188,9 @@ export function getDefaultGenericPuzzleSettings(
       sudokuDifficultyPlacement: 'bottom',
       sudokuPuzzleLineThickness: 100,
       sudokuSolutionLineThickness: 100,
+      sudokuXMarkStyle: 'boxes',
+      sudokuXLineThickness: 100,
+      sudokuXLineTransparency: 35,
       mazeSize: 'medium',
       mazeMixedEasyCount: 2,
       mazeMixedMediumCount: 3,
@@ -873,6 +1216,7 @@ export function getDefaultGenericPuzzleSettings(
       mazeEndImage: '',
       mazeSolutionPathStyle: 'solid',
       mazeSolutionPathThickness: 34,
+      mazeStartEndImages: defaultMazeStartEndImages(),
       shapeMazeEnabled: false,
       shapeMaskMode: 'common',
       shapeMaskImage: undefined,
@@ -903,28 +1247,191 @@ export function getDefaultGenericPuzzleSettings(
       triviaCheckboxStyle: 'circle',
       triviaSuggestionsColumns: 'single',
       triviaSolutionColumns: 3,
+      codewordsLanguage: 'en',
+      codewordsGridSize: 15,
+      codewordsCustomSize: 15,
+      codewordsDifficulty: 'medium',
+      codewordsHintCount: 3,
+      codewordsHintCountManual: false,
+      codewordsHintPlacement: 'all-occurrences',
+      showCodewordsCodeBox: true,
+      codewordsBlockedCellColor: '#888888',
+      codewordsPlayableCellColor: '#FFFFFF',
+      codewordsGridLineColor: '#000000',
+      codewordsGridStrokeWidth: 1,
+      codewordsNumberColor: '#000000',
+      codewordsLetterColor: '#000000',
+      codewordsSeed: 0,
+      binairoGridSize: 10,
+      binairoDifficulty: 'medium',
+      binairoSymbols: '01',
+      binairoGridLineColor: '#000000',
+      binairoGridStrokeWidth: 1,
+      binairoSymbolColor: '#000000',
+      binairoSeed: 0,
+      kakuroGridSize: 9,
+      kakuroDifficulty: 'medium',
+      kakuroPattern: 'asymmetric',
+      kakuroGridLineColor: '#d4d4d4',
+      kakuroBlockFill: '#000000',
+      kakuroClueCellFill: '#000000',
+      kakuroPlayableFill: '#ffffff',
+      kakuroClueTextColor: '#ffffff',
+      kakuroDigitColor: '#000000',
+      kakuroGridLineWidth: 0.75,
+      kakuroCluePadding: 0.1,
+      kakuroCellPadding: 0.06,
+      kakuroSeed: 0,
+      mathMazeEquationsAcross: 4,
+      mathMazeEquationsDown: 5,
+      mathMazeMaxDigits: 2,
+      mathMazeMaxDividendDigits: 3,
+      mathMazeMaxDivisorDigits: 1,
+      mathMazeMaxAnswerDigits: 3,
+      mathMazeNumbersPerEquation: 2,
+      mathMazeOpAdd: true,
+      mathMazeOpSub: true,
+      mathMazeOpMul: false,
+      mathMazeOpDiv: false,
+      mathMazeAllowNegative: false,
+      mathMazeUseParentheses: false,
+      mathMazeParenthesesMode: 'random',
+      mathMazeStartText: 'Start',
+      mathMazeEndText: 'End',
+      mathMazeCornerRoundingPercent: 15,
+      mathMazeChannelSizePercent: 60,
+      mathMazeSolutionPathColor: '#6b7280',
+      mathMazeSolutionCellFill: '#e5e7eb',
+      mathMazeSeed: 0,
+      fillMode: moduleType === 'number-fill' ? 'number' : 'word',
+      fillGridWidth: 13,
+      fillGridHeight: 13,
+      fillWordsPerPuzzle: 16,
+      fillExactWordCount: false,
+      fillLettersToShow: 0,
+      fillIncludeStarterWord: true,
+      fillDigitCount2: 4,
+      fillDigitCount3: 4,
+      fillDigitCount4: 2,
+      fillDigitCount5: 0,
+      fillDigitCount6: 0,
+      fillDigitCount7: 0,
+      fillDigitCount8: 0,
+      fillDigitCount9: 0,
+      fillGridLineWidth: 0.75,
+      fillGridLineColor: '#111111',
+      fillBlockFill: '#111111',
+      fillPlayableFill: '#ffffff',
+      fillSeed: 0,
+      fillWordsText: '',
+      snakeMode: 'word',
+      snakeGridWidth: 12,
+      snakeGridHeight: 12,
+      snakeWordsPerPuzzle: 5,
+      snakeAllowNumbersInGrid: false,
+      snakeNoBoxAroundPuzzle: false,
+      snakeAddGridLines: true,
+      snakeIncludeFiller: '',
+      snakeExcludeFiller: '',
+      snakeDigitCount2: 3,
+      snakeDigitCount3: 3,
+      snakeDigitCount4: 2,
+      snakeDigitCount5: 0,
+      snakeDigitCount6: 0,
+      snakeDigitCount7: 0,
+      snakeDigitCount8: 0,
+      snakeDigitCount9: 0,
+      snakeGridLineWidth: 0.75,
+      snakeGridLineColor: '#111111',
+      snakeSolutionPathColor: '#111111',
+      snakeNonPathColor: '#111111',
+      snakeSolutionPathThickness: 18,
+      snakeSolutionPathOpacity: 100,
+      snakeSeed: 0,
+      snakeWordsText: '',
+      snakeWordListColumns: 2,
+      snakeWordSpacingHorizontal: 50,
+      snakeWordSpacingVertical: 8,
       letterCase: 'upper',
     },
     typography: {
       selectTitleOption: 'custom',
       titleText: getGenericModuleDefaultTitle(moduleType),
+      includeFunFacts: false,
+      funFactsText: '',
       differentTitles: '',
-      puzzleNumberingStyle: 'prefix',
+      puzzleNumberingStyle: moduleType === 'codewords' ? 'suffix' : 'prefix',
       puzzleTitleFontFamily: 'Arial',
       puzzleTitleFontSize: 24,
+      answerTitleFontFamily: 'Arial',
       answerTitleFontSize: 18,
+      answerTitleAlign: 'center',
       puzzleFontFamily: 'Arial',
       puzzleFontSize:
-        moduleType === 'sudoku'
+        moduleType === 'sudoku' ||
+        moduleType === 'binairo' ||
+        moduleType === 'kakuro' ||
+        moduleType === 'word-fill' ||
+        moduleType === 'number-fill' ||
+        moduleType === 'snake'
           ? 18
-          : moduleType === 'cryptogram'
-            ? 16
-            : moduleType === 'trivia'
-              ? 14
-              : 14,
+          : moduleType === 'math-maze'
+            ? 11
+            : moduleType === 'cryptogram'
+              ? 16
+              : moduleType === 'trivia'
+                ? 14
+                : 14,
       answerFontFamily: 'Arial',
-      answerFontSize: moduleType === 'sudoku' ? 16 : moduleType === 'cryptogram' ? 16 : 12,
+      answerFontSize:
+        moduleType === 'sudoku' ||
+        moduleType === 'binairo' ||
+        moduleType === 'kakuro' ||
+        moduleType === 'word-fill' ||
+        moduleType === 'number-fill' ||
+        moduleType === 'snake'
+          ? 16
+          : moduleType === 'math-maze'
+            ? 11
+            : moduleType === 'cryptogram'
+              ? 16
+              : 12,
+      wordListFontFamily: 'Arial',
+      wordListFontSize:
+        moduleType === 'word-fill' || moduleType === 'number-fill' || moduleType === 'snake'
+          ? 16
+          : 12,
+      wordListBold: false,
+      wordListItalic: false,
       answerKeyFontFamily: 'Arial',
+      answerKeyFontSize: 18,
+      answerKeyBold: true,
+      answerKeyItalic: false,
+      codewordsNumberFontFamily: 'Arial',
+      codewordsNumberFontSize: 9,
+      codewordsNumberBold: false,
+      codewordsNumberItalic: false,
+      codewordsLetterFontFamily: 'Arial',
+      codewordsLetterFontSize: 14,
+      codewordsLetterBold: true,
+      codewordsLetterItalic: false,
+      kakuroClueFontFamily: 'Arial',
+      kakuroClueFontSize: 7,
+      kakuroClueBold: true,
+      mathMazeEquationFontFamily: 'Arial',
+      mathMazeChannelFontFamily: 'Arial',
+      mathMazeStartEndFontFamily: 'Arial',
+      mathMazeStartFontSize: 11,
+      mathMazeEndFontSize: 13,
+      mathMazeAnswerStartFontSize: 11,
+      mathMazeAnswerEndFontSize: 13,
+      mathMazeEquationFontSize: 11,
+      mathMazeChannelFontSize: 9,
+      mathMazeAnswerEquationFontSize: 11,
+      mathMazeAnswerChannelFontSize: 9,
+      solutionToSolutionGapPx: 14,
+      suggestionFontFamily: 'Arial',
+      suggestionFontSize: 13,
       titleStartAt: 0.5,
       spaceBetweenTitleAndPuzzle: 0.3,
       spaceBetweenAnswerKeyAndPuzzle: 0.25,
@@ -936,6 +1443,7 @@ export function getDefaultGenericPuzzleSettings(
       triviaSpaceBetweenSuggestions: 6,
       triviaSpaceAfterQuestion: 8,
       triviaSolutionSpaceBetween: 12,
+      triviaSolutionColumnSpaceBetween: 24,
       puzzleTitleAlign: 'center',
       solutionTitleStyle: 'same_as_puzzle',
       customSolutionTitle: 'Solution',
@@ -945,8 +1453,11 @@ export function getDefaultGenericPuzzleSettings(
     colors: {
       backgroundColor: '#ffffff',
       titleColor: '#333333',
+      answerTitleColor: '#1f2937',
       gridColor: '#333333',
       solutionPathColor: '#e11d48',
+      sudokuXBoxColor: '#e6e6e6',
+      sudokuXLineColor: '#6b7280',
     },
   };
 }
@@ -983,6 +1494,17 @@ export function normalizeGenericPuzzleSettings(
   core.mazeWallThickness = clampInt(core.mazeWallThickness, 10, 100, 45);
   core.sudokuPuzzleLineThickness = clampInt(core.sudokuPuzzleLineThickness, 25, 250, 100);
   core.sudokuSolutionLineThickness = clampInt(core.sudokuSolutionLineThickness, 25, 250, 100);
+  if (!isSudokuXMarkStyle(core.sudokuXMarkStyle)) {
+    core.sudokuXMarkStyle = 'boxes';
+  }
+  core.sudokuXLineThickness = clampInt(core.sudokuXLineThickness, 25, 300, 100);
+  core.sudokuXLineTransparency = clampInt(core.sudokuXLineTransparency, 0, 100, 35);
+  if (typeof colors.sudokuXBoxColor !== 'string' || !colors.sudokuXBoxColor.trim()) {
+    colors.sudokuXBoxColor = def.colors.sudokuXBoxColor;
+  }
+  if (typeof colors.sudokuXLineColor !== 'string' || !colors.sudokuXLineColor.trim()) {
+    colors.sudokuXLineColor = def.colors.sudokuXLineColor;
+  }
 
   // Migrate legacy showDifficultyLabel → placement when placement missing/invalid.
   if (
@@ -999,6 +1521,9 @@ export function normalizeGenericPuzzleSettings(
     core.sudokuPuzzleMode = 'standard';
   }
   core.sudokuMixedIncludeStandard = core.sudokuMixedIncludeStandard !== false;
+  core.sudokuMixedIncludeX = core.sudokuMixedIncludeX === true;
+  core.sudokuMixedIncludeGreaterThan = core.sudokuMixedIncludeGreaterThan === true;
+  core.sudokuGreaterThanHybrid = core.sudokuGreaterThanHybrid === true;
   core.sudokuMixedIncludeCalcudoku = core.sudokuMixedIncludeCalcudoku !== false;
   if (core.calcudokuGridSize !== 'mixed' && !isCalcudokuGridSize(core.calcudokuGridSize)) {
     core.calcudokuGridSize = 6;
@@ -1030,7 +1555,8 @@ export function normalizeGenericPuzzleSettings(
     core.sudokuDifficulty !== 'mixed' &&
     core.sudokuDifficulty !== 'easy' &&
     core.sudokuDifficulty !== 'medium' &&
-    core.sudokuDifficulty !== 'hard'
+    core.sudokuDifficulty !== 'hard' &&
+    core.sudokuDifficulty !== 'expert'
   ) {
     core.sudokuDifficulty = 'medium';
   }
@@ -1054,7 +1580,10 @@ export function normalizeGenericPuzzleSettings(
     600,
     sudokuLevelDefaults.hard
   );
-  if (core.sudokuDifficulty === 'mixed' && core.sudokuPuzzleMode === 'standard') {
+  if (
+    core.sudokuDifficulty === 'mixed' &&
+    (core.sudokuPuzzleMode === 'standard' || core.sudokuPuzzleMode === 'x')
+  ) {
     const sum =
       core.sudokuMixedEasyCount + core.sudokuMixedMediumCount + core.sudokuMixedHardCount;
     if (sum > 0) {
@@ -1075,7 +1604,10 @@ export function normalizeGenericPuzzleSettings(
   core.sudokuMixedSize12 = clampInt(core.sudokuMixedSize12, 0, 600, sudokuSizeDefaults[12]);
   core.sudokuMixedSize16 = clampInt(core.sudokuMixedSize16, 0, 600, sudokuSizeDefaults[16]);
   core.sudokuMixedSize25 = clampInt(core.sudokuMixedSize25, 0, 600, sudokuSizeDefaults[25]);
-  if (core.sudokuSize === 'mixed' && core.sudokuPuzzleMode === 'standard') {
+  if (
+    core.sudokuSize === 'mixed' &&
+    (core.sudokuPuzzleMode === 'standard' || core.sudokuPuzzleMode === 'x')
+  ) {
     const sizeSum = sumMixedSudokuSizeCounts({
       4: core.sudokuMixedSize4,
       6: core.sudokuMixedSize6,
@@ -1291,9 +1823,233 @@ export function normalizeGenericPuzzleSettings(
     core.mazeSolutionPathStyle = 'solid';
   }
   core.mazeSolutionPathThickness = clampInt(core.mazeSolutionPathThickness, 5, 100, 34);
+  core.mazeStartEndImages = normalizeMazeStartEndImages(core.mazeStartEndImages);
   // Drop legacy showMazeSolutionPath if present on older snapshots.
   delete (core as { showMazeSolutionPath?: boolean }).showMazeSolutionPath;
   core.hintLettersCount = clampInt(core.hintLettersCount, 0, 25, 1);
+  // Codewords settings
+  if (typeof core.codewordsLanguage !== 'string' || !core.codewordsLanguage) {
+    core.codewordsLanguage = 'en';
+  }
+  const cwSize = core.codewordsGridSize;
+  if (
+    cwSize !== 'custom' &&
+    cwSize !== 11 &&
+    cwSize !== 13 &&
+    cwSize !== 15 &&
+    cwSize !== 17 &&
+    cwSize !== 19 &&
+    cwSize !== 21
+  ) {
+    core.codewordsGridSize = 15;
+  }
+  core.codewordsCustomSize = clampInt(core.codewordsCustomSize, 11, 21, 15);
+  if (
+    core.codewordsDifficulty !== 'easy' &&
+    core.codewordsDifficulty !== 'medium' &&
+    core.codewordsDifficulty !== 'hard' &&
+    core.codewordsDifficulty !== 'very-hard'
+  ) {
+    core.codewordsDifficulty = 'medium';
+  }
+  core.codewordsHintCount = clampInt(core.codewordsHintCount, 0, 26, 3);
+  core.codewordsHintCountManual = core.codewordsHintCountManual === true;
+  if (
+    core.codewordsHintPlacement !== 'all-occurrences' &&
+    core.codewordsHintPlacement !== 'single-occurrence'
+  ) {
+    core.codewordsHintPlacement = 'all-occurrences';
+  }
+  core.showCodewordsCodeBox = core.showCodewordsCodeBox !== false;
+  if (typeof core.codewordsBlockedCellColor !== 'string') core.codewordsBlockedCellColor = '#888888';
+  if (typeof core.codewordsPlayableCellColor !== 'string') core.codewordsPlayableCellColor = '#FFFFFF';
+  if (typeof core.codewordsGridLineColor !== 'string') core.codewordsGridLineColor = '#000000';
+  core.codewordsGridStrokeWidth = Math.max(0.5, Math.min(4, Number(core.codewordsGridStrokeWidth) || 1));
+  if (typeof core.codewordsNumberColor !== 'string') core.codewordsNumberColor = '#000000';
+  if (typeof core.codewordsLetterColor !== 'string') core.codewordsLetterColor = '#000000';
+  core.codewordsSeed = clampInt(core.codewordsSeed, 0, 2147483647, 0);
+  // Binairo settings
+  const binSizes = [4, 6, 8, 10, 12, 14] as const;
+  if (!(binSizes as readonly number[]).includes(Number(core.binairoGridSize))) {
+    core.binairoGridSize = 10;
+  } else {
+    core.binairoGridSize = Number(core.binairoGridSize) as BinairoGridSize;
+  }
+  if (
+    core.binairoDifficulty !== 'easy' &&
+    core.binairoDifficulty !== 'medium' &&
+    core.binairoDifficulty !== 'hard'
+  ) {
+    core.binairoDifficulty = 'medium';
+  }
+  if (core.binairoSymbols !== '01' && core.binairoSymbols !== 'xo') {
+    core.binairoSymbols = '01';
+  }
+  if (typeof core.binairoGridLineColor !== 'string') core.binairoGridLineColor = '#000000';
+  {
+    const stroke = Number(core.binairoGridStrokeWidth);
+    core.binairoGridStrokeWidth =
+      Number.isFinite(stroke) && stroke > 0 ? Math.max(0.5, Math.min(4, stroke)) : 1;
+  }
+  if (typeof core.binairoSymbolColor !== 'string') core.binairoSymbolColor = '#000000';
+  core.binairoSeed = clampInt(core.binairoSeed, 0, 2147483647, 0);
+  // Kakuro settings
+  const kakSizes = [7, 8, 9, 10, 12, 15] as const;
+  if (!(kakSizes as readonly number[]).includes(Number(core.kakuroGridSize))) {
+    core.kakuroGridSize = 9;
+  } else {
+    core.kakuroGridSize = Number(core.kakuroGridSize) as import('./puzzles/kakuro').KakuroGridSize;
+  }
+  if (
+    core.kakuroDifficulty !== 'easy' &&
+    core.kakuroDifficulty !== 'medium' &&
+    core.kakuroDifficulty !== 'hard'
+  ) {
+    core.kakuroDifficulty = 'medium';
+  }
+  if (core.kakuroPattern !== 'asymmetric' && core.kakuroPattern !== 'rotational') {
+    core.kakuroPattern = 'asymmetric';
+  }
+  if (typeof core.kakuroGridLineColor !== 'string') core.kakuroGridLineColor = '#d4d4d4';
+  if (typeof core.kakuroBlockFill !== 'string') core.kakuroBlockFill = '#000000';
+  if (typeof core.kakuroClueCellFill !== 'string') core.kakuroClueCellFill = '#000000';
+  if (typeof core.kakuroPlayableFill !== 'string') core.kakuroPlayableFill = '#ffffff';
+  if (typeof core.kakuroClueTextColor !== 'string') core.kakuroClueTextColor = '#ffffff';
+  if (typeof core.kakuroDigitColor !== 'string') core.kakuroDigitColor = '#000000';
+  {
+    // Prefer kakuroGridLineWidth; migrate from legacy inner/outer/diagonal if needed.
+    const legacy =
+      Number(core.kakuroGridLineWidth) ||
+      Number(core.kakuroInnerLineWidth) ||
+      Number(core.kakuroDiagonalWidth) ||
+      Number(core.kakuroOuterBorderWidth) ||
+      0;
+    core.kakuroGridLineWidth =
+      Number.isFinite(legacy) && legacy > 0 ? Math.max(0.35, Math.min(3, legacy)) : 0.75;
+    // Keep legacy fields in sync so older code paths stay harmless.
+    core.kakuroInnerLineWidth = core.kakuroGridLineWidth;
+    const cluePad = Number(core.kakuroCluePadding);
+    core.kakuroCluePadding =
+      Number.isFinite(cluePad) && cluePad > 0
+        ? Math.max(0.04, Math.min(0.28, cluePad))
+        : 0.1;
+    const cellPad = Number(core.kakuroCellPadding);
+    core.kakuroCellPadding =
+      Number.isFinite(cellPad) && cellPad > 0 ? Math.max(0.02, Math.min(0.2, cellPad)) : 0.06;
+  }
+  core.kakuroSeed = clampInt(core.kakuroSeed, 0, 2147483647, 0);
+  // Math Maze
+  core.mathMazeEquationsAcross = clampInt(core.mathMazeEquationsAcross, 2, 12, 4);
+  core.mathMazeEquationsDown = clampInt(core.mathMazeEquationsDown, 2, 15, 5);
+  core.mathMazeMaxDigits = clampInt(core.mathMazeMaxDigits, 1, 4, 2);
+  core.mathMazeMaxDividendDigits = clampInt(core.mathMazeMaxDividendDigits, 1, 6, 3);
+  core.mathMazeMaxDivisorDigits = clampInt(core.mathMazeMaxDivisorDigits, 1, 4, 1);
+  core.mathMazeMaxAnswerDigits = clampInt(core.mathMazeMaxAnswerDigits, 1, 6, 3);
+  {
+    const n = Math.round(Number(core.mathMazeNumbersPerEquation));
+    core.mathMazeNumbersPerEquation = (n === 3 || n === 4 ? n : 2) as 2 | 3 | 4;
+  }
+  core.mathMazeOpAdd = core.mathMazeOpAdd !== false;
+  core.mathMazeOpSub = core.mathMazeOpSub === true;
+  core.mathMazeOpMul = core.mathMazeOpMul === true;
+  core.mathMazeOpDiv = core.mathMazeOpDiv === true;
+  core.mathMazeAllowNegative = core.mathMazeAllowNegative === true;
+  core.mathMazeUseParentheses = core.mathMazeUseParentheses === true;
+  core.mathMazeParenthesesMode =
+    core.mathMazeParenthesesMode === 'all' ? 'all' : 'random';
+  if (typeof core.mathMazeStartText !== 'string' || !core.mathMazeStartText.trim()) {
+    core.mathMazeStartText = 'Start';
+  }
+  if (typeof core.mathMazeEndText !== 'string' || !core.mathMazeEndText.trim()) {
+    core.mathMazeEndText = 'End';
+  }
+  core.mathMazeCornerRoundingPercent = clampInt(core.mathMazeCornerRoundingPercent, 0, 50, 15);
+  core.mathMazeChannelSizePercent = clampInt(core.mathMazeChannelSizePercent, 20, 100, 60);
+  if (
+    typeof core.mathMazeSolutionPathColor !== 'string' ||
+    core.mathMazeSolutionPathColor === '#22c55e' ||
+    core.mathMazeSolutionPathColor === '#16a34a'
+  ) {
+    core.mathMazeSolutionPathColor = '#6b7280';
+  }
+  if (
+    typeof core.mathMazeSolutionCellFill !== 'string' ||
+    !core.mathMazeSolutionCellFill.trim() ||
+    core.mathMazeSolutionCellFill === '#ecfdf5' ||
+    core.mathMazeSolutionCellFill === '#dcfce7'
+  ) {
+    core.mathMazeSolutionCellFill = '#e5e7eb';
+  }
+  core.mathMazeSeed = clampInt(core.mathMazeSeed, 0, 2147483647, 0);
+  // Fill — the mode is implied by the module (Word Fill-In / Number Fill-In).
+  core.fillMode =
+    moduleType === 'number-fill'
+      ? 'number'
+      : moduleType === 'word-fill'
+        ? 'word'
+        : core.fillMode === 'number'
+          ? 'number'
+          : 'word';
+  core.fillGridWidth = clampInt(core.fillGridWidth, 5, 30, 13);
+  core.fillGridHeight = clampInt(core.fillGridHeight, 5, 30, 13);
+  core.fillWordsPerPuzzle = clampInt(core.fillWordsPerPuzzle, 1, 100, 16);
+  core.fillExactWordCount = core.fillExactWordCount === true;
+  core.fillLettersToShow = clampInt(core.fillLettersToShow, 0, 500, 0);
+  core.fillIncludeStarterWord = core.fillIncludeStarterWord !== false;
+  for (const k of [2, 3, 4, 5, 6, 7, 8, 9] as const) {
+    const key = `fillDigitCount${k}` as const;
+    core[key] = clampInt(core[key], 0, 100, core[key] ?? 0);
+  }
+  {
+    const w = Number(core.fillGridLineWidth);
+    core.fillGridLineWidth =
+      Number.isFinite(w) && w > 0 ? Math.max(0.35, Math.min(3, w)) : 0.75;
+  }
+  if (typeof core.fillGridLineColor !== 'string') core.fillGridLineColor = '#111111';
+  if (typeof core.fillBlockFill !== 'string') core.fillBlockFill = '#111111';
+  if (typeof core.fillPlayableFill !== 'string') core.fillPlayableFill = '#ffffff';
+  core.fillSeed = clampInt(core.fillSeed, 0, 2147483647, 0);
+  if (typeof core.fillWordsText !== 'string') core.fillWordsText = '';
+  // Snake
+  core.snakeMode = core.snakeMode === 'number' ? 'number' : 'word';
+  core.snakeGridWidth = clampInt(core.snakeGridWidth, 3, 30, 12);
+  core.snakeGridHeight = clampInt(core.snakeGridHeight, 3, 30, 12);
+  core.snakeWordsPerPuzzle = clampInt(core.snakeWordsPerPuzzle, 1, 100, 5);
+  core.snakeAllowNumbersInGrid = core.snakeAllowNumbersInGrid === true;
+  core.snakeNoBoxAroundPuzzle = core.snakeNoBoxAroundPuzzle === true;
+  core.snakeAddGridLines = core.snakeAddGridLines !== false;
+  if (typeof core.snakeIncludeFiller !== 'string') core.snakeIncludeFiller = '';
+  if (typeof core.snakeExcludeFiller !== 'string') core.snakeExcludeFiller = '';
+  for (const k of [2, 3, 4, 5, 6, 7, 8, 9] as const) {
+    const key = `snakeDigitCount${k}` as const;
+    core[key] = clampInt(core[key], 0, 100, core[key] ?? 0);
+  }
+  {
+    const w = Number(core.snakeGridLineWidth);
+    core.snakeGridLineWidth =
+      Number.isFinite(w) && w > 0 ? Math.max(0.35, Math.min(3, w)) : 0.75;
+  }
+  if (typeof core.snakeGridLineColor !== 'string') core.snakeGridLineColor = '#111111';
+  // Migrate the old green path defaults to black/white.
+  if (
+    typeof core.snakeSolutionPathColor !== 'string' ||
+    core.snakeSolutionPathColor === '#16a34a'
+  ) {
+    core.snakeSolutionPathColor = '#111111';
+  }
+  if (
+    typeof core.snakeNonPathColor !== 'string' ||
+    core.snakeNonPathColor === '#94a3b8'
+  ) {
+    core.snakeNonPathColor = '#111111';
+  }
+  core.snakeSolutionPathThickness = clampInt(core.snakeSolutionPathThickness, 5, 80, 18);
+  core.snakeSolutionPathOpacity = clampInt(core.snakeSolutionPathOpacity, 0, 100, 100);
+  core.snakeSeed = clampInt(core.snakeSeed, 0, 2147483647, 0);
+  if (typeof core.snakeWordsText !== 'string') core.snakeWordsText = '';
+  core.snakeWordListColumns = clampInt(core.snakeWordListColumns, 1, 4, 2);
+  core.snakeWordSpacingHorizontal = clampInt(core.snakeWordSpacingHorizontal, 0, 100, 50);
+  core.snakeWordSpacingVertical = clampInt(core.snakeWordSpacingVertical, 0, 40, 8);
   const keyLines = clampInt(core.cryptogramAnswerKeyLines, 1, 3, 2);
   core.cryptogramAnswerKeyLines = (keyLines === 1 || keyLines === 3 ? keyLines : 2) as 1 | 2 | 3;
   core.wordsPerPuzzle = clampInt(core.wordsPerPuzzle, 1, 50, 10);
@@ -1336,6 +2092,139 @@ export function normalizeGenericPuzzleSettings(
   typography.answerTitleFontSize = clampInt(typography.answerTitleFontSize, 1, 72, 18);
   typography.puzzleFontSize = clampInt(typography.puzzleFontSize, 1, 72, 14);
   typography.answerFontSize = clampInt(typography.answerFontSize, 1, 72, 12);
+  typography.wordListFontSize = clampInt(
+    typography.wordListFontSize,
+    10,
+    28,
+    def.typography.wordListFontSize ?? 16
+  );
+  typography.wordListBold = typography.wordListBold === true;
+  typography.wordListItalic = typography.wordListItalic === true;
+  typography.answerKeyFontSize = clampInt(
+    typography.answerKeyFontSize,
+    1,
+    72,
+    def.typography.answerKeyFontSize
+  );
+  typography.answerKeyBold = typography.answerKeyBold !== false;
+  typography.answerKeyItalic = typography.answerKeyItalic === true;
+  typography.codewordsNumberFontSize = clampInt(
+    typography.codewordsNumberFontSize,
+    5,
+    72,
+    def.typography.codewordsNumberFontSize ?? 9
+  );
+  typography.codewordsLetterFontSize = clampInt(
+    typography.codewordsLetterFontSize,
+    6,
+    72,
+    def.typography.codewordsLetterFontSize ?? 14
+  );
+  if (
+    typeof typography.codewordsNumberFontFamily !== 'string' ||
+    !typography.codewordsNumberFontFamily.trim()
+  ) {
+    typography.codewordsNumberFontFamily = 'Arial';
+  }
+  if (
+    typeof typography.codewordsLetterFontFamily !== 'string' ||
+    !typography.codewordsLetterFontFamily.trim()
+  ) {
+    typography.codewordsLetterFontFamily = 'Arial';
+  }
+  typography.codewordsNumberBold = typography.codewordsNumberBold === true;
+  typography.codewordsNumberItalic = typography.codewordsNumberItalic === true;
+  typography.codewordsLetterBold = typography.codewordsLetterBold !== false;
+  typography.codewordsLetterItalic = typography.codewordsLetterItalic === true;
+  typography.kakuroClueFontSize = clampInt(
+    typography.kakuroClueFontSize,
+    4,
+    72,
+    def.typography.kakuroClueFontSize ?? 7
+  );
+  if (
+    typeof typography.kakuroClueFontFamily !== 'string' ||
+    !typography.kakuroClueFontFamily.trim()
+  ) {
+    typography.kakuroClueFontFamily = 'Arial';
+  }
+  if (
+    typeof typography.mathMazeEquationFontFamily !== 'string' ||
+    !typography.mathMazeEquationFontFamily.trim()
+  ) {
+    typography.mathMazeEquationFontFamily = 'Arial';
+  }
+  if (
+    typeof typography.mathMazeChannelFontFamily !== 'string' ||
+    !typography.mathMazeChannelFontFamily.trim()
+  ) {
+    typography.mathMazeChannelFontFamily = 'Arial';
+  }
+  if (
+    typeof typography.mathMazeStartEndFontFamily !== 'string' ||
+    !typography.mathMazeStartEndFontFamily.trim()
+  ) {
+    typography.mathMazeStartEndFontFamily = 'Arial';
+  }
+  typography.mathMazeEquationFontSize = clampInt(
+    typography.mathMazeEquationFontSize,
+    6,
+    48,
+    def.typography.mathMazeEquationFontSize ?? 11
+  );
+  typography.mathMazeChannelFontSize = clampInt(
+    typography.mathMazeChannelFontSize,
+    5,
+    36,
+    def.typography.mathMazeChannelFontSize ?? 9
+  );
+  typography.mathMazeStartFontSize = clampInt(
+    typography.mathMazeStartFontSize,
+    6,
+    48,
+    def.typography.mathMazeStartFontSize ?? 11
+  );
+  typography.mathMazeEndFontSize = clampInt(
+    typography.mathMazeEndFontSize,
+    6,
+    48,
+    def.typography.mathMazeEndFontSize ?? 13
+  );
+  typography.mathMazeAnswerEquationFontSize = clampInt(
+    typography.mathMazeAnswerEquationFontSize,
+    6,
+    48,
+    def.typography.mathMazeAnswerEquationFontSize ?? 11
+  );
+  typography.mathMazeAnswerChannelFontSize = clampInt(
+    typography.mathMazeAnswerChannelFontSize,
+    5,
+    36,
+    def.typography.mathMazeAnswerChannelFontSize ?? 9
+  );
+  typography.mathMazeAnswerStartFontSize = clampInt(
+    typography.mathMazeAnswerStartFontSize,
+    6,
+    48,
+    def.typography.mathMazeAnswerStartFontSize ?? 11
+  );
+  typography.mathMazeAnswerEndFontSize = clampInt(
+    typography.mathMazeAnswerEndFontSize,
+    6,
+    48,
+    def.typography.mathMazeAnswerEndFontSize ?? 13
+  );
+  typography.kakuroClueBold = typography.kakuroClueBold !== false;
+  typography.solutionToSolutionGapPx = clampInt(
+    typography.solutionToSolutionGapPx,
+    0,
+    120,
+    def.typography.solutionToSolutionGapPx ?? 14
+  );
+  typography.puzzleTitleBold = typography.puzzleTitleBold !== false;
+  typography.puzzleBold = typography.puzzleBold === true;
+  typography.puzzleItalic = typography.puzzleItalic === true;
+  typography.suggestionItalic = typography.suggestionItalic === true;
   const titleStart =
     typeof typography.titleStartAt === 'number' && Number.isFinite(typography.titleStartAt)
       ? typography.titleStartAt
@@ -1389,8 +2278,32 @@ export function normalizeGenericPuzzleSettings(
     72,
     def.typography.triviaSolutionSpaceBetween
   );
-  if (typography.puzzleTitleAlign !== 'left' && typography.puzzleTitleAlign !== 'center') {
+  typography.triviaSolutionColumnSpaceBetween = clampInt(
+    typography.triviaSolutionColumnSpaceBetween,
+    0,
+    72,
+    def.typography.triviaSolutionColumnSpaceBetween
+  );
+  if (
+    typography.puzzleTitleAlign !== 'left' &&
+    typography.puzzleTitleAlign !== 'center' &&
+    typography.puzzleTitleAlign !== 'right'
+  ) {
     typography.puzzleTitleAlign = 'center';
+  }
+  if (
+    typography.answerTitleAlign !== 'left' &&
+    typography.answerTitleAlign !== 'center' &&
+    typography.answerTitleAlign !== 'right'
+  ) {
+    typography.answerTitleAlign = 'center';
+  }
+  if (typeof typography.answerTitleFontFamily !== 'string' || !typography.answerTitleFontFamily.trim()) {
+    typography.answerTitleFontFamily =
+      typography.puzzleTitleFontFamily || def.typography.answerTitleFontFamily || 'Arial';
+  }
+  if (typeof colors.answerTitleColor !== 'string' || !colors.answerTitleColor.trim()) {
+    colors.answerTitleColor = colors.titleColor || def.colors.answerTitleColor || '#1f2937';
   }
   // Drop legacy scramble↔blank gap if present on older snapshots.
   delete (typography as { scrambleSpaceBetweenScrambleAndBlank?: number })
@@ -1403,6 +2316,19 @@ export function normalizeGenericPuzzleSettings(
   }
   if (typeof typography.answerKeyFontFamily !== 'string' || !typography.answerKeyFontFamily.trim()) {
     typography.answerKeyFontFamily = 'Arial';
+  }
+  if (typeof typography.suggestionFontFamily !== 'string' || !typography.suggestionFontFamily.trim()) {
+    typography.suggestionFontFamily = typography.puzzleFontFamily || 'Arial';
+  }
+  if (
+    typeof typography.suggestionFontSize !== 'number' ||
+    !Number.isFinite(typography.suggestionFontSize) ||
+    typography.suggestionFontSize <= 0
+  ) {
+    typography.suggestionFontSize = Math.max(
+      10,
+      Math.round((typography.puzzleFontSize || def.typography.puzzleFontSize) * 0.95)
+    );
   }
   const titleGap =
     typeof typography.spaceBetweenTitleAndPuzzle === 'number' &&

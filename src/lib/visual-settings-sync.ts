@@ -4,7 +4,11 @@
  * Also supports applying full Layout settings to every puzzle document type.
  */
 
-import type { BookCanvasSettings, WordSearchSettings } from './puzzles/types';
+import {
+  normalizeAnswersPerPage,
+  type BookCanvasSettings,
+  type WordSearchSettings,
+} from './puzzles/types';
 import type { DocumentPage, PuzzleModuleSettings } from './document-model';
 import { isPuzzleModuleType } from './document-model';
 import { isGenericPuzzleModuleType } from './generic-puzzle-settings';
@@ -75,10 +79,13 @@ export function mergeDocumentSettingsPreservingLayout(
   documentWs: WordSearchSettings,
   layoutSource: WordSearchSettings
 ): WordSearchSettings {
-  return applyLayoutSettingsToWordSearch(
-    documentWs,
-    layoutSource,
-    getFullLayoutSyncScope()
+  return mergeWordSearchSettingsUpdate(
+    applyLayoutSettingsToWordSearch(
+      documentWs,
+      layoutSource,
+      getFullLayoutSyncScope()
+    ),
+    {}
   );
 }
 
@@ -573,12 +580,25 @@ export function mergeWordSearchSettingsUpdate(
   prev: WordSearchSettings,
   updates: Partial<WordSearchSettings>
 ): WordSearchSettings {
+  const bookCanvas = { ...prev.bookCanvas, ...updates.bookCanvas };
+  bookCanvas.answersPerPage = normalizeAnswersPerPage(bookCanvas.answersPerPage);
   return {
     ...prev,
     ...updates,
-    bookCanvas: { ...prev.bookCanvas, ...updates.bookCanvas },
+    bookCanvas,
     core: { ...prev.core, ...updates.core },
-    typography: { ...prev.typography, ...updates.typography },
+    typography: {
+      ...prev.typography,
+      ...updates.typography,
+      ...(updates.typography?.pageNumber
+        ? {
+            pageNumber: {
+              ...prev.typography.pageNumber,
+              ...updates.typography.pageNumber,
+            },
+          }
+        : {}),
+    },
     wordList: { ...prev.wordList, ...updates.wordList },
     colors: updates.colors
       ? {

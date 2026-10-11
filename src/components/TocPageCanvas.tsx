@@ -18,6 +18,11 @@ import {
   resolveTocLayoutMetricsForEntries,
 } from '@/lib/toc-layout';
 import { PageBackgroundImage } from '@/components/puzzle/PageBackgroundImage';
+import {
+  PageVariableOverlay,
+  type PageVariableEditorState,
+} from '@/components/PageVariableOverlay';
+import { CanvasChrome } from '@/components/CanvasSelectable';
 
 function PageFrameOverlay({
   frame,
@@ -208,6 +213,9 @@ export function TocPageCanvas({
   textEditEnabled = false,
   onSettingsChange,
   onCanvasClick,
+  pageVariableEditor = null,
+  frontMatterTarget = null,
+  onFrontMatterTargetChange,
 }: {
   page: DocumentPage;
   settings: TextModuleSettings;
@@ -225,6 +233,9 @@ export function TocPageCanvas({
   textEditEnabled?: boolean;
   onSettingsChange?: (updates: Partial<TextModuleSettings>) => void;
   onCanvasClick?: () => void;
+  pageVariableEditor?: PageVariableEditorState | null;
+  frontMatterTarget?: 'title' | 'body' | 'toc-title' | 'toc-entries' | null;
+  onFrontMatterTargetChange?: (target: 'toc-title' | 'toc-entries') => void;
 }) {
   const titleRef = useRef<HTMLDivElement>(null);
   const tocSettings = normalizeTocSettings(settings.tocSettings);
@@ -385,6 +396,16 @@ export function TocPageCanvas({
           pointerEvents: isEditing ? 'auto' : 'none',
         }}
       >
+        <CanvasChrome
+          label="TOC title"
+          active={frontMatterTarget === 'toc-title'}
+          onSelect={
+            isEditing && onFrontMatterTargetChange
+              ? () => onFrontMatterTargetChange('toc-title')
+              : undefined
+          }
+          className="w-full shrink-0"
+        >
         <div
           ref={titleRef}
           className="w-full outline-none shrink-0 whitespace-nowrap overflow-hidden text-ellipsis"
@@ -399,8 +420,12 @@ export function TocPageCanvas({
           contentEditable={isEditing && tocPageIndex === 0}
           suppressContentEditableWarning
           onInput={handleHeadingInput}
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (isEditing) onFrontMatterTargetChange?.('toc-title');
+          }}
         />
+        </CanvasChrome>
 
         {entries.length === 0 ? (
           <p className="italic opacity-60 text-sm" style={{ fontSize: entryFontPx, color: entryColor }}>
@@ -409,6 +434,16 @@ export function TocPageCanvas({
               : 'Add documents after the Table of Contents — titles will appear here automatically.'}
           </p>
         ) : (
+          <CanvasChrome
+            label="TOC entries"
+            active={frontMatterTarget === 'toc-entries'}
+            onSelect={
+              isEditing && onFrontMatterTargetChange
+                ? () => onFrontMatterTargetChange('toc-entries')
+                : undefined
+            }
+            className="w-full flex-1 min-h-0"
+          >
           <div
             className="w-full flex flex-1 min-h-0"
             style={{
@@ -422,12 +457,30 @@ export function TocPageCanvas({
                 ? `${tocSettings.entryLetterSpacingPx}px`
                 : undefined,
             }}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (isEditing) onFrontMatterTargetChange?.('toc-entries');
+            }}
           >
             {renderColumn(left, 0)}
             {right.length > 0 && renderColumn(right, left.length)}
           </div>
+          </CanvasChrome>
         )}
       </div>
+      {pageVariableEditor ? (
+        <PageVariableOverlay
+          editor={pageVariableEditor}
+          context={{
+            contentIndex: tocPageIndex,
+            bookPageNumber: (bookPageIndex ?? 0) + 1,
+            puzzleNumber: 1,
+            pageWidthPt,
+            pageHeightPt,
+            ptToPx,
+          }}
+        />
+      ) : null}
     </div>
   );
 }

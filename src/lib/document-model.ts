@@ -11,7 +11,10 @@ import {
   getDefaultWordSearchSettings,
 } from './puzzles/types';
 import { getDefaultCrosswordSettings } from './crossword-settings';
-import { getDefaultGenericPuzzleSettings } from './generic-puzzle-settings';
+import {
+  getDefaultGenericPuzzleSettings,
+  migrateLegacyModuleType,
+} from './generic-puzzle-settings';
 import { getDefaultMurdokuSettings } from './murdoku-settings';
 import { DEFAULT_TOC_SETTINGS } from './toc-settings';
 
@@ -31,7 +34,14 @@ export type DocumentModuleType =
   | 'cryptogram'
   | 'word-scramble'
   | 'trivia'
-  | 'murdoku';
+  | 'murdoku'
+  | 'codewords'
+  | 'binairo'
+  | 'kakuro'
+  | 'math-maze'
+  | 'word-fill'
+  | 'number-fill'
+  | 'snake';
 
 /** Kinds shown in the + add-document menus (includes virtual empty/chapter inserts). */
 export type InsertableDocumentKind =
@@ -49,6 +59,13 @@ export type PuzzleModuleType = Extract<
   | 'word-scramble'
   | 'trivia'
   | 'murdoku'
+  | 'codewords'
+  | 'binairo'
+  | 'kakuro'
+  | 'math-maze'
+  | 'word-fill'
+  | 'number-fill'
+  | 'snake'
 >;
 
 export interface BaseModuleSettings {
@@ -180,6 +197,8 @@ export interface TextModuleSettings extends BaseModuleSettings {
   chapterLayoutId?: string;
   /** Preserved chapter image when showImage is temporarily off */
   chapterImageSrc?: string;
+  /** Canvas Workspace overlays: text, images, and shapes. */
+  pageVariables?: import('./page-variables').PageVariableField[];
 }
 
 export interface PuzzleModuleSettings extends BaseModuleSettings {
@@ -193,6 +212,8 @@ export interface PuzzleModuleSettings extends BaseModuleSettings {
   murdokuSettings?: import('./murdoku-settings').MurdokuSettings;
   /** Per-document settings for the generic modules (sudoku, maze, cryptogram, word scramble). */
   genericPuzzleSettings?: import('./generic-puzzle-settings').GenericPuzzleSettings;
+  /** Canvas overlays: text and image variables. */
+  pageVariables?: import('./page-variables').PageVariableField[];
   /** 0-based chapter this puzzle document belongs to (after divide-into-chapters). */
   chapterIndex?: number;
 }
@@ -238,6 +259,13 @@ export const PUZZLE_MODULES: Array<{ type: DocumentModuleType; name: string }> =
   { type: 'cryptogram', name: 'Cryptograms' },
   { type: 'word-scramble', name: 'Word Scramble' },
   { type: 'trivia', name: 'Trivia' },
+  { type: 'codewords', name: 'Codewords' },
+  { type: 'binairo', name: 'Binairo' },
+  { type: 'kakuro', name: 'Kakuro' },
+  { type: 'math-maze', name: 'Math Mazes' },
+  { type: 'word-fill', name: 'Word Fill-In' },
+  { type: 'number-fill', name: 'Number Fill-In' },
+  { type: 'snake', name: 'Word Snake' },
   { type: 'murdoku', name: 'Murdoku' },
 ];
 
@@ -269,6 +297,13 @@ export function isPuzzleModuleType(type: DocumentModuleType): type is PuzzleModu
     type === 'cryptogram' ||
     type === 'word-scramble' ||
     type === 'trivia' ||
+    type === 'codewords' ||
+    type === 'binairo' ||
+    type === 'kakuro' ||
+    type === 'math-maze' ||
+    type === 'word-fill' ||
+    type === 'number-fill' ||
+    type === 'snake' ||
     type === 'murdoku'
   );
 }
@@ -363,10 +398,49 @@ export function getDefaultPuzzleModuleSettings(type: PuzzleModuleType): PuzzleMo
       type === 'maze' ||
       type === 'cryptogram' ||
       type === 'word-scramble' ||
-      type === 'trivia'
+      type === 'trivia' ||
+      type === 'codewords' ||
+      type === 'binairo' ||
+      type === 'kakuro' ||
+      type === 'math-maze' ||
+      type === 'word-fill' ||
+      type === 'number-fill' ||
+      type === 'snake'
         ? getDefaultGenericPuzzleSettings(type)
         : undefined,
   };
+}
+
+/**
+ * Upgrade pages saved before the Fill split (`moduleType: 'fill'` + `core.fillMode`)
+ * to the dedicated Word Fill-In / Number Fill-In modules. Returns the same array
+ * when nothing needs to change so callers can keep referential equality.
+ */
+export function migrateLegacyDocumentPages(pages: DocumentPage[]): DocumentPage[] {
+  let changed = false;
+  const out = pages.map((page) => {
+    const rawType = page.moduleType as string;
+    if (rawType !== 'fill') return page;
+    const settings = page.settings as PuzzleModuleSettings;
+    const nextType = migrateLegacyModuleType(
+      rawType,
+      settings?.genericPuzzleSettings?.core
+    ) as DocumentModuleType;
+    changed = true;
+    const nextName =
+      page.name === 'Fill' || !page.name
+        ? PUZZLE_MODULES.find((m) => m.type === nextType)?.name ?? page.name
+        : page.name;
+    return {
+      ...page,
+      moduleType: nextType,
+      name: nextName,
+      settings: settings
+        ? ({ ...settings, puzzleType: nextType as PuzzleType } as PuzzleModuleSettings)
+        : page.settings,
+    };
+  });
+  return changed ? out : pages;
 }
 
 export function createDocumentPage(type: DocumentModuleType): DocumentPage {

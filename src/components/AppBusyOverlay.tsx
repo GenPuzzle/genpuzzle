@@ -13,6 +13,7 @@ export function AppBusyOverlay() {
 
   const hasPct = typeof busy.progress === 'number' && Number.isFinite(busy.progress);
   const pct = hasPct ? Math.max(0, Math.min(100, busy.progress as number)) : undefined;
+  const canCancel = typeof busy.onCancel === 'function';
 
   return (
     <div className="app-busy-overlay" role="status" aria-live="polite" aria-busy="true">
@@ -41,6 +42,15 @@ export function AppBusyOverlay() {
             />
           </div>
           {pct !== undefined && <p className="app-busy-overlay__pct">{Math.round(pct)}%</p>}
+          {canCancel ? (
+            <button
+              type="button"
+              className="app-busy-overlay__cancel"
+              onClick={() => busy.onCancel?.()}
+            >
+              Cancel
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

@@ -10,11 +10,13 @@ import {
   resolvePageContentTopInsetPt,
 } from './header-assembly/geometry';
 import { measureHeaderAssemblyHeightPt } from './header-assembly/measure';
+import { resolveFittedHeaderTitleFontSizePt } from './header-assembly/fit-title';
+import { computeHeaderRowMetrics } from './header-assembly/compute-row';
 import { cssPxToPoints } from './puzzle-layout';
 import type { UnifiedHeaderAssemblyBlock } from './word-search-page-layout';
 import type { HeaderTextParts } from './header-assembly/resolve-parts';
 
-function wrapSubtitleLines(
+export function wrapSubtitleLines(
   text: string,
   fontSizePt: number,
   fontFamily: string,
@@ -26,16 +28,44 @@ function wrapSubtitleLines(
   const maxWidthPx = maxWidthPt * ptToPx;
   const fontPx = fontSizePt * ptToPx;
 
+  const rawParagraphs = trimmed.split(/\r?\n/);
+
   if (typeof document === 'undefined') {
     // SSR / export fallback — rough character estimate.
     const avgCharPx = fontPx * 0.55;
     const charsPerLine = Math.max(8, Math.floor(maxWidthPx / avgCharPx));
-    const words = trimmed.split(/\s+/);
     const lines: string[] = [];
+    for (const para of rawParagraphs) {
+      const pTrim = para.trim();
+      if (!pTrim) continue;
+      const words = pTrim.split(/\s+/);
+      let current = '';
+      for (const word of words) {
+        const next = current ? `${current} ${word}` : word;
+        if (next.length > charsPerLine && current) {
+          lines.push(current);
+          current = word;
+        } else {
+          current = next;
+        }
+      }
+      if (current) lines.push(current);
+    }
+    return lines;
+  }
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return [trimmed];
+  ctx.font = `${fontPx}px ${fontFamily}`;
+  const lines: string[] = [];
+  for (const para of rawParagraphs) {
+    const pTrim = para.trim();
+    if (!pTrim) continue;
+    const words = pTrim.split(/\s+/);
     let current = '';
     for (const word of words) {
       const next = current ? `${current} ${word}` : word;
-      if (next.length > charsPerLine && current) {
+      if (ctx.measureText(next).width > maxWidthPx && current) {
         lines.push(current);
         current = word;
       } else {
@@ -43,25 +73,7 @@ function wrapSubtitleLines(
       }
     }
     if (current) lines.push(current);
-    return lines;
   }
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return [trimmed];
-  ctx.font = `${fontPx}px ${fontFamily}`;
-  const words = trimmed.split(/\s+/);
-  const lines: string[] = [];
-  let current = '';
-  for (const word of words) {
-    const next = current ? `${current} ${word}` : word;
-    if (ctx.measureText(next).width > maxWidthPx && current) {
-      lines.push(current);
-      current = word;
-    } else {
-      current = next;
-    }
-  }
-  if (current) lines.push(current);
   return lines;
 }
 
@@ -129,7 +141,7 @@ export function buildGenericHeaderAssembly(options: {
   if (!parts.titleText && !parts.showNumber && !parts.subtitleText) return null;
 
   const { typography, colors } = settings;
-  const fittedTitleSizePt = titleFontSizePt ?? typography.puzzleTitleFontSize ?? 24;
+  const baseTitleSizePt = titleFontSizePt ?? typography.puzzleTitleFontSize ?? 24;
   const subtitleSizePt = (subtitleFontSizePt ?? typography.subtitleFontSize) || 14;
   const subtitleToTitleGapPt = customSubtitleToTitleGapPt ?? typography.subtitleToTitleGap ?? 10;
   const subtitleBoxMarginPt = customSubtitleBoxMarginPt ?? typography.subtitleBoxMargin ?? 0;
@@ -145,6 +157,31 @@ export function buildGenericHeaderAssembly(options: {
 
   const contentTopPt = resolvePageContentTopInsetPt(settings);
   const headerGeometry = resolveHeaderBlockGeometry(pageWidthPt, settings);
+  let fittedTitleSizePt = baseTitleSizePt;
+  if (parts.titleText) {
+    const initialMetrics = computeHeaderRowMetrics(
+      headerGeometry.widthPt,
+      baseTitleSizePt,
+      parts
+    );
+    fittedTitleSizePt = resolveFittedHeaderTitleFontSizePt(
+      parts.titleText,
+      baseTitleSizePt,
+      initialMetrics.titleTextMaxWidthPt,
+      titleFontFamily
+    );
+    const fittedMetrics = computeHeaderRowMetrics(
+      headerGeometry.widthPt,
+      fittedTitleSizePt,
+      parts
+    );
+    fittedTitleSizePt = resolveFittedHeaderTitleFontSizePt(
+      parts.titleText,
+      fittedTitleSizePt,
+      fittedMetrics.titleTextMaxWidthPt,
+      titleFontFamily
+    );
+  }
   const subtitleTextWidthPt = resolveHeaderSubtitleTextWidthPt(
     headerGeometry.widthPt,
     subtitleMaxWidthPercent,

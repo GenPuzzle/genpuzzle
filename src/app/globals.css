@@ -770,7 +770,7 @@ input[type="range"]::-moz-range-thumb:active {
 }
 
 /* Modern buttons — global default */
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.custom-checkbox-input):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading) {
+button:not(.gp-btn):not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.custom-checkbox-input):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading) {
   appearance: none;
   background-color: var(--gp-white);
   color: var(--gp-black);
@@ -785,13 +785,18 @@ button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
 }
 
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading):focus,
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading):focus-visible {
+button:not(.gp-btn):not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.custom-checkbox-input):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading) svg {
+  color: inherit;
+  stroke: currentColor;
+}
+
+button:not(.gp-btn):not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading):focus,
+button:not(.gp-btn):not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading):focus-visible {
   outline: none !important;
   box-shadow: 0 0 0 2px rgba(26, 90, 140, 0.25);
 }
 
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading):hover {
+button:not(.gp-btn):not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading):hover {
   background-color: var(--gp-grey-50);
   color: var(--gp-blue);
   border-color: var(--gp-blue);
@@ -799,9 +804,24 @@ button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not
   transform: translateY(-1px);
 }
 
-button:not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading):active {
+button:not(.gp-btn):not(.modern-tabs-trigger):not([class*="btn"]):not(.header-expand-btn):not(.doc-tab__select):not(.doc-tab__remove):not(.canvas-edit-tab__remove):not(.doc-tabs-add):not(.canvas-hit-zone):not(.canvas-context-panel__close):not(.gp-alert-close):not(.direction-toggle):not(.gp-icon-toggle):not(.gp-adjust-btn):not(.gp-adjust-step):not(.sidebar-rail-heading):active {
   transform: translateY(0);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+button.gp-btn-selected {
+  background-color: #dbeafe !important;
+  color: #1e3a8a !important;
+  border-color: #60a5fa !important;
+  box-shadow: inset 0 0 0 2px #60a5fa !important;
+}
+
+button.gp-icon-danger {
+  color: #b91c1c !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
 }
 
 /* ===== MOBILE RESPONSIVENESS FIXES ===== */

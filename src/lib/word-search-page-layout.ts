@@ -23,6 +23,7 @@ import {
   resolvePuzzleGridBorder,
   resolveSolutionGridBorder,
 } from './grid-border-settings';
+import { readCanvasOffset } from './canvas-element-position';
 import {
   normalizeHeaderAssemblySettings,
   migrateLegacyHeaderLayout,
@@ -48,6 +49,8 @@ export interface UnifiedTitleBlock {
   align: 'left' | 'center' | 'right';
   color: string;
   fontFamily: string;
+  italic?: boolean;
+  textEffect?: import('./text-effects').TextEffectStyle;
 }
 
 export interface UnifiedSubtitleBlock {
@@ -62,6 +65,7 @@ export interface UnifiedSubtitleBlock {
   leftPt: number;
   /** Width of the subtitle box (pt) */
   widthPt: number;
+  textEffect?: import('./text-effects').TextEffectStyle;
 }
 
 /** Modular header assembly (number + title + subtitle shape containers). */
@@ -105,6 +109,8 @@ export interface UnifiedGridBlock {
   gridLinesColor: string;
   /** Padding between outer frame and letters, in points */
   framePaddingPt: number;
+  italic?: boolean;
+  textEffect?: import('./text-effects').TextEffectStyle;
 }
 
 export interface UnifiedWordListBlock {
@@ -132,6 +138,7 @@ export interface UnifiedWordListBlock {
   checkboxSizePt: number;
   checkboxGapPt: number;
   checkboxColor: string;
+  textEffect?: import('./text-effects').TextEffectStyle;
 }
 
 /** Shared layout consumed by PreviewCanvas and pdf-export. */
@@ -574,6 +581,8 @@ export function computeWordSearchPageLayout(
       align: titleAlign,
       color: pageColors.titleColor || '#000000',
       fontFamily: titleFontFamily,
+      italic: !!typography.puzzleTitleItalic,
+      textEffect: typography.titleTextEffect,
     };
     yPt += titleSizePt;
   }
@@ -674,6 +683,7 @@ export function computeWordSearchPageLayout(
         wrappedLines,
         leftPt: startX,
         widthPt: subtitleMaxWidthPt,
+        textEffect: typography.subtitleTextEffect,
       };
       
       yPt += subtitleHeightPt + spaceTitleToGridPt;
@@ -687,7 +697,7 @@ export function computeWordSearchPageLayout(
 
   // ===== CALCULATE GRID DIMENSIONS =====
   const gridRows = puzzle.grid.length;
-  const gridCols = puzzle.grid[0].length;
+  const gridCols = puzzle.grid[0]?.length ?? 0;
   const maxAvailableWidthPt = contentWidthPt;
   const scaleFactor = Math.max(0.5, Math.min(puzzleScale / 100, 2.0));
   const scaledGridWidthPt = maxAvailableWidthPt * scaleFactor;
@@ -696,7 +706,7 @@ export function computeWordSearchPageLayout(
   // The grid size is ONLY determined by the puzzleGridScale slider.
   // It does NOT change based on title size, word list font size, vertical spacing, etc.
 
-  const cellSizePt = scaledGridWidthPt / gridCols;
+  const cellSizePt = gridCols > 0 ? scaledGridWidthPt / gridCols : 0;
   const gridWidthPt = cellSizePt * gridCols;
   const gridHeightPt = cellSizePt * gridRows;
 
@@ -775,6 +785,8 @@ export function computeWordSearchPageLayout(
     gridLinesThicknessPt: core.gridLinesStrokeThickness ?? 0,
     gridLinesColor: pageColors.gridLinesColor || pageColors.boxColor || '#d1d5db',
     framePaddingPt: activeGridBorder.paddingPx / PT_TO_CSS_PX,
+    italic: !!typography.puzzleGridItalic,
+    textEffect: typography.gridTextEffect,
   };
 
   // CRITICAL: Position word list relative to scaled grid bottom + constant gap
@@ -828,6 +840,43 @@ export function computeWordSearchPageLayout(
       checkboxSizePt: 10,
       checkboxGapPt: 8,
       checkboxColor: pageColors.boxColor || '#000000',
+      textEffect: typography.wordListTextEffect,
+    };
+  }
+
+  // Apply free canvas placement offsets (move / center controls) last so stack layout stays intact.
+  const offsets = typography.canvasLayoutOffsets;
+  const titleOffset = readCanvasOffset(offsets, 'title');
+  const subtitleOffset = readCanvasOffset(offsets, 'subtitle');
+  const gridOffset = readCanvasOffset(offsets, 'grid');
+  const wordListOffset = readCanvasOffset(offsets, 'word-list');
+
+  if (title) {
+    title = { ...title, topPt: title.topPt + titleOffset.offsetYPt };
+  }
+  if (headerAssembly) {
+    headerAssembly = {
+      ...headerAssembly,
+      topPt: headerAssembly.topPt + titleOffset.offsetYPt,
+      leftPt: headerAssembly.leftPt + titleOffset.offsetXPt,
+    };
+  }
+  if (subtitle) {
+    subtitle = {
+      ...subtitle,
+      topPt: subtitle.topPt + subtitleOffset.offsetYPt,
+      leftPt: subtitle.leftPt + subtitleOffset.offsetXPt,
+    };
+  }
+  grid.topPt += gridOffset.offsetYPt;
+  grid.leftPt += gridOffset.offsetXPt;
+  if (wordListBlock) {
+    wordListBlock = {
+      ...wordListBlock,
+      topPt: wordListBlock.topPt + wordListOffset.offsetYPt,
+      leftPt: wordListBlock.leftPt + wordListOffset.offsetXPt,
+      centeredLeftPt: wordListBlock.centeredLeftPt + wordListOffset.offsetXPt,
+      contentLeftPt: wordListBlock.contentLeftPt + wordListOffset.offsetXPt,
     };
   }
 

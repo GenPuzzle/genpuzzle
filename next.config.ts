@@ -22,6 +22,11 @@ function getLanDevOrigins(): string[] {
 
 const nextConfig: NextConfig = {
   outputFileTracingRoot: projectRoot,
+  serverExternalPackages: [
+    '@napi-rs/canvas',
+    '@napi-rs/canvas-win32-x64-msvc',
+    '@visioncortex/vtracer',
+  ],
   eslint: {
     ignoreDuringBuilds: true,
   },
@@ -47,10 +52,29 @@ const nextConfig: NextConfig = {
       http: { browser: "./src/lib/empty.ts" },
       "image-size": { browser: "./src/lib/empty.ts" },
       express: { browser: "./src/lib/empty.ts" },
+      "@napi-rs/canvas": { browser: "./src/lib/empty.ts" },
+      "@napi-rs/canvas-win32-x64-msvc": { browser: "./src/lib/empty.ts" },
     },
   },
   webpack: (config, { webpack, isServer }) => {
-    if (!isServer) {
+    const nativePkgs = ['@napi-rs/canvas', '@napi-rs/canvas-win32-x64-msvc', '@visioncortex/vtracer'];
+    if (isServer) {
+      config.externals = [
+        ...(Array.isArray(config.externals) ? config.externals : config.externals ? [config.externals] : []),
+        ({ request }: { request?: string }, callback: (err?: Error | null, result?: string) => void) => {
+          if (request && nativePkgs.some((pkg) => request === pkg || request.startsWith(`${pkg}/`))) {
+            callback(null, `commonjs ${request}`);
+            return;
+          }
+          callback();
+        },
+      ];
+    } else {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        '@napi-rs/canvas': path.resolve(projectRoot, 'src/lib/empty.ts'),
+        '@napi-rs/canvas-win32-x64-msvc': false,
+      };
       config.plugins.push(
         new webpack.NormalModuleReplacementPlugin(/^node:/, (resource: any) => {
           resource.request = resource.request.replace(/^node:/, '');

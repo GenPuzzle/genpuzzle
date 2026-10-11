@@ -104,3 +104,6 @@ export function writeDivideListsPreference(pref: DivideListsPreference): void {
     // Ignore quota / private-mode failures.
   }
 }
+
+/** Re-export for panels that import chapter helpers from this module. */
+export { evenChapterPuzzleCounts } from './split-puzzle-document-by-chapters';

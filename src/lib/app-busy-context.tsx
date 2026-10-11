@@ -14,18 +14,26 @@ export type AppBusyState = {
   label: string;
   /** 0–100 when known; omit for indeterminate top bar */
   progress?: number;
+  /** When set, the center overlay shows a Cancel button. */
+  onCancel?: (() => void) | null;
+};
+
+export type ShowBusyOptions = {
+  onCancel?: (() => void) | null;
 };
 
 type AppBusyContextValue = {
   busy: AppBusyState;
-  showBusy: (label: string, progress?: number) => void;
-  updateBusy: (patch: Partial<Pick<AppBusyState, 'label' | 'progress'>>) => void;
+  showBusy: (label: string, progress?: number, options?: ShowBusyOptions) => void;
+  updateBusy: (
+    patch: Partial<Pick<AppBusyState, 'label' | 'progress' | 'onCancel'>>
+  ) => void;
   hideBusy: () => void;
   /** Run async work under the busy overlay; always clears when finished. */
   withBusy: <T>(label: string, work: () => Promise<T> | T) => Promise<T>;
 };
 
-const DEFAULT_BUSY: AppBusyState = { active: false, label: '' };
+const DEFAULT_BUSY: AppBusyState = { active: false, label: '', onCancel: null };
 
 const AppBusyContext = createContext<AppBusyContextValue | null>(null);
 
@@ -33,17 +41,21 @@ export function AppBusyProvider({ children }: { children: React.ReactNode }) {
   const [busy, setBusy] = useState<AppBusyState>(DEFAULT_BUSY);
   const depthRef = useRef(0);
 
-  const showBusy = useCallback((label: string, progress?: number) => {
-    depthRef.current += 1;
-    setBusy({
-      active: true,
-      label,
-      progress: typeof progress === 'number' ? progress : undefined,
-    });
-  }, []);
+  const showBusy = useCallback(
+    (label: string, progress?: number, options?: ShowBusyOptions) => {
+      depthRef.current += 1;
+      setBusy({
+        active: true,
+        label,
+        progress: typeof progress === 'number' ? progress : undefined,
+        onCancel: options?.onCancel ?? null,
+      });
+    },
+    []
+  );
 
   const updateBusy = useCallback(
-    (patch: Partial<Pick<AppBusyState, 'label' | 'progress'>>) => {
+    (patch: Partial<Pick<AppBusyState, 'label' | 'progress' | 'onCancel'>>) => {
       setBusy((prev) => (prev.active ? { ...prev, ...patch } : prev));
     },
     []

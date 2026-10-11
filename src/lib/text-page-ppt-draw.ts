@@ -36,6 +36,8 @@ import {
 import { resolvePageFrameSettings } from './page-frame-settings';
 import { addPageNumberToSlide } from './page-number-ppt-draw';
 import type { ResolvedTocEntry } from './book-compiler';
+import { drawPageVariablesOnPptSlide } from './page-variables-draw';
+import { normalizePageVariables } from './page-variables';
 import {
   buildTocExportLayout,
   isTocModuleSettings,
@@ -706,5 +708,18 @@ export async function addTextModuleSlide(
     settings.tocMode !== 'manual'
   ) {
     addPageNumberToSlide(slide, pageWidthPt, pageHeightPt, layoutSettings, bookPageIndex);
+  }
+
+  const overlayFields = normalizePageVariables(settings.pageVariables);
+  if (overlayFields.length > 0) {
+    drawPageVariablesOnPptSlide({
+      slide,
+      pageWidthPt,
+      pageHeightPt,
+      fields: overlayFields,
+      contentIndex: settings.tocPageIndex ?? 0,
+      bookPageNumber: bookPageIndex + 1,
+      puzzleNumber: 1,
+    });
   }
 }

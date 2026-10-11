@@ -15,6 +15,12 @@ import {
 } from './generic-puzzle-settings';
 import { addHeaderAssemblyToSlide } from './header-assembly-ppt-draw';
 import { addPageNumberToSlide } from './page-number-ppt-draw';
+import {
+  drawPageVariablesOnPptSlide,
+  pageVariablesFromDocument,
+  resolvePageVariableContext,
+} from './page-variables-draw';
+import { textVariableContextFromDocument } from './ai/text-variable-context';
 import { resolveGenericPageSurfaceColors } from './generic-page-chrome';
 import { cssPxToPoints } from './puzzle-layout';
 import {
@@ -23,12 +29,28 @@ import {
   type CrosswordSettings,
 } from './crossword-settings';
 import { findInteriorUnusedCells } from './puzzles/crossword';
+import { getPageContainerFrameGeom } from './page-frame-geometry';
 
 import {
   computeGenericPageLayout,
   type RectPt,
 } from './generic-puzzle-page-layout';
 import { computeCrosswordPuzzleBodyLayout } from './crossword-puzzle-page-layout';
+import { renderResolvedPpt } from './resolved-layout/render-ppt';
+import { buildMazeElements } from './resolved-layout/maze-elements';
+import { buildSudokuElements } from './resolved-layout/sudoku-elements';
+import { buildCodewordsElements } from './resolved-layout/codewords-elements';
+import { buildBinairoElements } from './resolved-layout/binairo-elements';
+import { buildKakuroElements } from './resolved-layout/kakuro-elements';
+import { buildMathMazeElements } from './resolved-layout/math-maze-elements';
+import { buildFillElements } from './resolved-layout/fill-elements';
+import { buildSnakeElements } from './resolved-layout/snake-elements';
+import {
+  buildCrosswordElements,
+  buildCryptogramElements,
+  buildScrambleElements,
+  buildTriviaElements,
+} from './resolved-layout/book-elements';
 import {
   crosswordCells,
   crosswordLetterFontPt,
@@ -40,7 +62,7 @@ import {
   mazePathPoints,
   mazePathThicknessPt,
   mazeStartDir,
-  mazeWallSegments,
+  mazeWallRuns,
   mazeWallThicknessPt,
   sudokuDigitFillRatio,
   sudokuLineScale,
@@ -50,7 +72,7 @@ import {
 } from './generic-puzzle-geometry';
 import {
   formatTriviaSolutionHeading,
-  resolveTriviaAnswerLabel,
+  resolveTriviaAnswerLetter,
 } from './puzzles/trivia';
 import {
   buildCalcudokuCageIdGrid,
@@ -128,27 +150,20 @@ function addPageContainerFrame(
   pageWIn: number,
   pageHIn: number,
   frame: PageFrameSettings,
-  pageBackgroundColor: string | undefined
+  pageBackgroundColor: string | undefined,
+  hasBackgroundImage: boolean
 ): void {
   if (!frame.enabled) return;
-  const m = frame.marginSizeIn;
-  const strokePt = Math.max(0.5, cssPxToPoints(frame.strokeThicknessPx));
-  const strokeIn = strokePt / 72;
-  const halfIn = strokeIn / 2;
-  const x = m + halfIn;
-  const y = m + halfIn;
-  const w = Math.max(0.01, pageWIn - m * 2 - strokeIn);
-  const h = Math.max(0.01, pageHIn - m * 2 - strokeIn);
-  const rectRadiusIn = Math.max(
-    0,
-    Math.min(frame.cornerRadiusPx / 96, Math.min(w, h) / 2)
+  const { x, y, w, h, shapeType, roundProps, strokePt } = getPageContainerFrameGeom(
+    pageWIn,
+    pageHIn,
+    frame
   );
-  const shapeType = rectRadiusIn > 0 ? 'roundRect' : 'rect';
-  const roundProps = rectRadiusIn > 0 ? { rectRadius: rectRadiusIn } : {};
   const strokeColor = hex6(frame.borderColor);
+  if (strokePt <= 0) return;
 
-  if (pageBackgroundColor) {
-    slide.addShape(shapeType, {
+  if (hasBackgroundImage && pageBackgroundColor) {
+    slide.addShape(shapeType as any, {
       x,
       y,
       w,
@@ -159,7 +174,7 @@ function addPageContainerFrame(
     });
     return;
   }
-  slide.addShape(shapeType, {
+  slide.addShape(shapeType as any, {
     x,
     y,
     w,
@@ -206,6 +221,59 @@ function addLine(
       ...(dashType && dashType !== 'solid' ? { dashType } : {}),
     },
   });
+}
+
+/** Filled pill matching SVG round-cap strokes (PowerPoint line shapes do not emit round caps). */
+function addStadium(
+  slide: PptSlide,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  color: string,
+  thicknessPt: number
+): void {
+  const t = Math.max(pt2in(thicknessPt), 0.012);
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy);
+  const noLine = { type: 'none' as const };
+  if (len < 0.0005) {
+    slide.addShape('ellipse', {
+      x: x1 - t / 2,
+      y: y1 - t / 2,
+      w: t,
+      h: t,
+      fill: { color },
+      line: noLine,
+    });
+    return;
+  }
+  if (Math.abs(dy) <= Math.abs(dx) * 0.02) {
+    slide.addShape('roundRect', {
+      x: Math.min(x1, x2) - t / 2,
+      y: (y1 + y2) / 2 - t / 2,
+      w: len + t,
+      h: t,
+      rectRadius: t / 2,
+      fill: { color },
+      line: noLine,
+    });
+    return;
+  }
+  if (Math.abs(dx) <= Math.abs(dy) * 0.02) {
+    slide.addShape('roundRect', {
+      x: (x1 + x2) / 2 - t / 2,
+      y: Math.min(y1, y2) - t / 2,
+      w: t,
+      h: len + t,
+      rectRadius: t / 2,
+      fill: { color },
+      line: noLine,
+    });
+    return;
+  }
+  addLine(slide, x1, y1, x2, y2, color, thicknessPt);
 }
 
 function addCenteredText(
@@ -263,142 +331,136 @@ function drawSudoku(
   showSolution: boolean,
   preferredCellPt: number
 ): void {
-  const size = sudokuSizeOf(puzzle);
-  const calcudoku = isCalcudokuPuzzle(puzzle);
-  const { boxH, boxW } = calcudoku ? { boxH: size, boxW: size } : sudokuBoxOf(size);
-  const display = showSolution ? puzzle.solution : puzzle.grid;
-  const color = hex6(gp.colors.gridColor, '1F2937');
-  const thicknessPct = showSolution
-    ? gp.core.sudokuSolutionLineThickness ?? 100
-    : gp.core.sudokuPuzzleLineThickness ?? 100;
-  const { thinPt, thickPt, outerPt } = sudokuLineScale(thicknessPct);
-  const fontPt = showSolution
-    ? gp.typography.answerFontSize ?? 16
-    : gp.typography.puzzleFontSize ?? 14;
   const slotPt: RectPt = {
     leftPt: slot.x * 72,
     topPt: slot.y * 72,
     widthPt: slot.w * 72,
     heightPt: slot.h * 72,
   };
-  const grid = fitUniformGrid(size, size, preferredCellPt, slotPt);
-  const box = rectInFromPt(grid);
-  const cell = box.w / size;
-  const digitPt = grid.cellPt * sudokuDigitFillRatio(fontPt);
+  renderResolvedPpt(
+    slide,
+    buildSudokuElements({ puzzle, slot: slotPt, gp, showSolution, preferredCellPt })
+  );
+}
 
-  slide.addShape('rect', {
-    x: box.x,
-    y: box.y,
-    w: box.w,
-    h: box.h,
-    fill: { color: 'FFFFFF' },
-    line: { color, width: outerPt },
-  });
+function drawCodewords(
+  slide: PptSlide,
+  puzzle: import('./puzzles/codewords').CodewordPuzzle,
+  slot: RectIn,
+  gp: GenericPuzzleSettings,
+  showSolution: boolean,
+  preferredCellPt: number
+): void {
+  const slotPt: RectPt = {
+    leftPt: slot.x * 72,
+    topPt: slot.y * 72,
+    widthPt: slot.w * 72,
+    heightPt: slot.h * 72,
+  };
+  renderResolvedPpt(
+    slide,
+    buildCodewordsElements({ puzzle, slot: slotPt, gp, showSolution, preferredCellPt })
+  );
+}
 
-  if (calcudoku) {
-    const cageIds = buildCalcudokuCageIdGrid(size, puzzle.cages);
-    for (let r = 0; r < size; r++) {
-      for (let c = 0; c < size; c++) {
-        const right = calcudokuInternalBorder(cageIds, r, c, 'right');
-        if (right !== 'none') {
-          const x = box.x + (c + 1) * cell;
-          addLine(
-            slide,
-            x,
-            box.y + r * cell,
-            x,
-            box.y + (r + 1) * cell,
-            right === 'thick' ? color : 'D1D5DB',
-            right === 'thick' ? thickPt : thinPt
-          );
-        }
-        const bottom = calcudokuInternalBorder(cageIds, r, c, 'bottom');
-        if (bottom !== 'none') {
-          const y = box.y + (r + 1) * cell;
-          addLine(
-            slide,
-            box.x + c * cell,
-            y,
-            box.x + (c + 1) * cell,
-            y,
-            bottom === 'thick' ? color : 'D1D5DB',
-            bottom === 'thick' ? thickPt : thinPt
-          );
-        }
-      }
-    }
-    for (const cage of puzzle.cages) {
-      const at = calcudokuLabelCell(cage);
-      const text = calcudokuCageLabel(cage);
-      const cageLabelPt = Math.max(
-        5,
-        Math.min(digitPt * 0.42, (grid.cellPt * 0.86) / Math.max(2, text.length))
-      );
-      addCenteredText(
-        slide,
-        text,
-        {
-          x: box.x + at.col * cell + cell * 0.04,
-          y: box.y + at.row * cell + cell * 0.02,
-          w: cell * 0.92,
-          h: cell * 0.32,
-        },
-        {
-          fontSize: cageLabelPt,
-          fontFace: gp.typography.puzzleFontFamily || 'Arial',
-          color,
-          bold: true,
-          align: 'left',
-          valign: 'top',
-        }
-      );
-    }
-  } else {
-    for (let i = 1; i < size; i++) {
-      const isBox = i % boxW === 0;
-      addLine(
-        slide,
-        box.x + i * cell,
-        box.y,
-        box.x + i * cell,
-        box.y + box.h,
-        isBox ? color : 'D1D5DB',
-        isBox ? thickPt : thinPt
-      );
-    }
-    for (let i = 1; i < size; i++) {
-      const isBox = i % boxH === 0;
-      addLine(
-        slide,
-        box.x,
-        box.y + i * cell,
-        box.x + box.w,
-        box.y + i * cell,
-        isBox ? color : 'D1D5DB',
-        isBox ? thickPt : thinPt
-      );
-    }
-  }
+function drawBinairo(
+  slide: PptSlide,
+  puzzle: import('./puzzles/binairo').BinairoPuzzle,
+  slot: RectIn,
+  gp: GenericPuzzleSettings,
+  showSolution: boolean,
+  preferredCellPt: number
+): void {
+  const slotPt: RectPt = {
+    leftPt: slot.x * 72,
+    topPt: slot.y * 72,
+    widthPt: slot.w * 72,
+    heightPt: slot.h * 72,
+  };
+  renderResolvedPpt(
+    slide,
+    buildBinairoElements({ puzzle, slot: slotPt, gp, showSolution, preferredCellPt })
+  );
+}
 
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
-      const num = display[r]?.[c] ?? 0;
-      const glyph = formatSudokuSymbol(num);
-      if (!glyph) continue;
-      const given = (puzzle.grid[r]?.[c] ?? 0) !== 0;
-      addCenteredText(
-        slide,
-        glyph,
-        { x: box.x + c * cell, y: box.y + r * cell, w: cell, h: cell },
-        {
-          fontSize: digitPt,
-          fontFace: gp.typography.puzzleFontFamily || 'Arial',
-          color,
-          bold: given || showSolution,
-        }
-      );
-    }
-  }
+function drawKakuro(
+  slide: PptSlide,
+  puzzle: import('./puzzles/kakuro').KakuroPuzzle,
+  slot: RectIn,
+  gp: GenericPuzzleSettings,
+  showSolution: boolean,
+  preferredCellPt: number
+): void {
+  const slotPt: RectPt = {
+    leftPt: slot.x * 72,
+    topPt: slot.y * 72,
+    widthPt: slot.w * 72,
+    heightPt: slot.h * 72,
+  };
+  renderResolvedPpt(
+    slide,
+    buildKakuroElements({ puzzle, slot: slotPt, gp, showSolution, preferredCellPt })
+  );
+}
+
+function drawMathMaze(
+  slide: PptSlide,
+  puzzle: import('./puzzles/math-maze').MathMazePuzzle,
+  slot: RectIn,
+  gp: GenericPuzzleSettings,
+  showSolution: boolean,
+  preferredCellPt: number
+): void {
+  const slotPt: RectPt = {
+    leftPt: slot.x * 72,
+    topPt: slot.y * 72,
+    widthPt: slot.w * 72,
+    heightPt: slot.h * 72,
+  };
+  renderResolvedPpt(
+    slide,
+    buildMathMazeElements({ puzzle, slot: slotPt, gp, showSolution, preferredCellPt })
+  );
+}
+
+function drawFill(
+  slide: PptSlide,
+  puzzle: import('./puzzles/fill').FillPuzzle,
+  slot: RectIn,
+  gp: GenericPuzzleSettings,
+  showSolution: boolean,
+  preferredCellPt: number
+): void {
+  const slotPt: RectPt = {
+    leftPt: slot.x * 72,
+    topPt: slot.y * 72,
+    widthPt: slot.w * 72,
+    heightPt: slot.h * 72,
+  };
+  renderResolvedPpt(
+    slide,
+    buildFillElements({ puzzle, slot: slotPt, gp, showSolution, preferredCellPt })
+  );
+}
+
+function drawSnake(
+  slide: PptSlide,
+  puzzle: import('./puzzles/snake').SnakePuzzle,
+  slot: RectIn,
+  gp: GenericPuzzleSettings,
+  showSolution: boolean,
+  preferredCellPt: number
+): void {
+  const slotPt: RectPt = {
+    leftPt: slot.x * 72,
+    topPt: slot.y * 72,
+    widthPt: slot.w * 72,
+    heightPt: slot.h * 72,
+  };
+  renderResolvedPpt(
+    slide,
+    buildSnakeElements({ puzzle, slot: slotPt, gp, showSolution, preferredCellPt })
+  );
 }
 
 function mazePptDash(style: string | undefined): 'solid' | 'dash' | 'sysDot' {
@@ -422,87 +484,18 @@ function drawMaze(
     widthPt: slot.w * 72,
     heightPt: slot.h * 72,
   };
-  const layout = layoutMaze(puzzle, slotPt, preferredCellPt, framePt);
-  const wallColor = hex6(gp.colors.gridColor, '1F2937');
-  const pathColor = hex6(gp.colors.solutionPathColor, 'E11D48');
-  const wallPt = mazeWallThicknessPt(layout, gp.core.mazeWallThickness ?? 45);
-  const pathPt = mazePathThicknessPt(layout, gp.core.mazeSolutionPathThickness ?? 34);
-  const markerStyle = gp.core.mazeMarkerStyle ?? 'arrow';
-
-  for (const seg of mazeWallSegments(puzzle, layout)) {
-    addLine(slide, pt2in(seg.x1), pt2in(seg.y1), pt2in(seg.x2), pt2in(seg.y2), wallColor, wallPt);
-  }
-
-  if (showSolution) {
-    const pts = mazePathPoints(puzzle, layout, true);
-    const dash = mazePptDash(gp.core.mazeSolutionPathStyle);
-    for (let i = 0; i < pts.length - 1; i++) {
-      addLine(
-        slide,
-        pt2in(pts[i].xPt),
-        pt2in(pts[i].yPt),
-        pt2in(pts[i + 1].xPt),
-        pt2in(pts[i + 1].yPt),
-        pathColor,
-        pathPt,
-        dash
-      );
-    }
-  }
-
-  const cellIn = pt2in(Math.min(layout.cellWPt, layout.cellHPt));
-  const markerR = Math.max(0.04, cellIn * 0.32);
-  const start = {
-    x: pt2in(layout.leftPt + layout.offsetXPt + (puzzle.start.col + 0.5) * layout.cellWPt),
-    y: pt2in(layout.topPt + layout.offsetYPt + (puzzle.start.row + 0.5) * layout.cellHPt),
-  };
-  const end = {
-    x: pt2in(layout.leftPt + layout.offsetXPt + (puzzle.end.col + 0.5) * layout.cellWPt),
-    y: pt2in(layout.topPt + layout.offsetYPt + (puzzle.end.row + 0.5) * layout.cellHPt),
-  };
-  const startImage = gp.core.mazeStartImage;
-  const endImage = gp.core.mazeEndImage;
-
-  if (markerStyle === 'image' && startImage && slide.addImage) {
-    const s = markerR * 2.4;
-    slide.addImage({ data: startImage, x: start.x - s / 2, y: start.y - s / 2, w: s, h: s });
-  } else if (markerStyle === 'point') {
-    slide.addShape('ellipse', {
-      x: start.x - markerR,
-      y: start.y - markerR,
-      w: markerR * 2,
-      h: markerR * 2,
-      fill: { color: '111111' },
-      line: { color: '111111', width: 0 },
-    });
-  } else {
-    const s = markerR * 2.2;
-    slide.addShape('triangle', {
-      x: start.x - s / 2,
-      y: start.y - s / 2,
-      w: s,
-      h: s,
-      fill: { color: '111111' },
-      line: { color: '111111', width: 0 },
-      rotate: mazeArrowRotate(mazeStartDir(puzzle)),
-    });
-  }
-
-  if (markerStyle === 'image' && endImage && slide.addImage) {
-    const s = markerR * 2.4;
-    slide.addImage({ data: endImage, x: end.x - s / 2, y: end.y - s / 2, w: s, h: s });
-  } else {
-    slide.addShape('ellipse', {
-      x: end.x - markerR,
-      y: end.y - markerR,
-      w: markerR * 2,
-      h: markerR * 2,
-      fill: { color: '111111' },
-      line: { color: '111111', width: 0 },
-    });
-  }
+  renderResolvedPpt(
+    slide,
+    buildMazeElements({
+      puzzle,
+      slot: slotPt,
+      preferredCellPt,
+      framePt,
+      gp,
+      showSolution,
+    })
+  );
 }
-
 function drawCrosswordGrid(
   slide: PptSlide,
   puzzle: CrosswordPuzzle,
@@ -842,90 +835,25 @@ function drawCrossword(
   pageNumberZoneTopPt: number,
   clueGapPt: number
 ): void {
-  const showClues = !showSolution;
-  const showAnswerKey = showSolution && cw.typography.showAnswerKey !== false;
   const slotPt: RectPt = {
     leftPt: slot.x * 72,
     topPt: slot.y * 72,
     widthPt: slot.w * 72,
     heightPt: slot.h * 72,
   };
-  if (!showClues && !showAnswerKey) {
-    drawCrosswordGrid(slide, puzzle, slot, cw, showSolution, preferredCellPt);
-    return;
-  }
-  if (showClues) {
-    const body = computeCrosswordPuzzleBodyLayout({
+  renderResolvedPpt(
+    slide,
+    buildCrosswordElements({
       puzzle,
-      cw,
       slot: slotPt,
+      cw,
+      showSolution,
       preferredCellPt,
       clueGapPt,
+      hideClues: showSolution,
       pageNumberZoneTopPt,
-    });
-    const gridSlot: RectIn = {
-      x: slot.x,
-      y: slot.y,
-      w: slot.w,
-      h: pt2in(body.grid.heightPt + 1),
-    };
-    drawCrosswordGrid(slide, puzzle, gridSlot, cw, showSolution, body.cellPt, true);
-    drawCrosswordClues(slide, puzzle, rectInFromPt(body.cluesRect), cw, body);
-    return;
-  }
-  const gridShare = 0.78;
-  const gridSlot: RectIn = { x: slot.x, y: slot.y, w: slot.w, h: slot.h * gridShare };
-  const { gridBox } = drawCrosswordGrid(slide, puzzle, gridSlot, cw, showSolution, preferredCellPt);
-  const restY = gridBox.y + gridBox.h + px2in(8);
-  const restH = Math.max(0.2, slot.y + slot.h - restY);
-  const formatAnswer = (answer: string) => {
-    if (cw.core.answerCase === 'lower') return answer.toLowerCase();
-    if (cw.core.answerCase === 'original') return answer;
-    return answer.toUpperCase();
-  };
-  const across = puzzle.acrossClues.map((c) => `${c.number}.${formatAnswer(c.answer)}`).join('  ');
-  const down = puzzle.downClues.map((c) => `${c.number}.${formatAnswer(c.answer)}`).join('  ');
-  const keyPt = px2pt(cw.typography.answerKeyFontSize ?? 11);
-  addCenteredText(
-    slide,
-    `Across  ${across}`,
-    { x: gridBox.x, y: restY, w: gridBox.w, h: restH * 0.45 },
-    {
-      fontSize: keyPt,
-      fontFace: cw.typography.clueFontFamily || 'Arial',
-      color: cw.colors.cluesColor,
-      align: 'left',
-      valign: 'top',
-    }
+    })
   );
-  addCenteredText(
-    slide,
-    `Down  ${down}`,
-    { x: gridBox.x, y: restY + restH * 0.48, w: gridBox.w, h: restH * 0.45 },
-    {
-      fontSize: keyPt,
-      fontFace: cw.typography.clueFontFamily || 'Arial',
-      color: cw.colors.cluesColor,
-      align: 'left',
-      valign: 'top',
-    }
-  );
-}
-
-function scrambleWords(puzzle: WordScramblePuzzle): Array<{ original: string; scrambled: string }> {
-  const raw = puzzle.words ?? [];
-  const out: Array<{ original: string; scrambled: string }> = [];
-  for (const entry of raw) {
-    if (typeof entry === 'string') {
-      const original = entry.trim();
-      if (original.length >= 2) out.push({ original, scrambled: original });
-      continue;
-    }
-    const original = String(entry?.original || '').trim();
-    const scrambled = String(entry?.scrambled || original).trim();
-    if (original.length >= 2) out.push({ original, scrambled: scrambled || original });
-  }
-  return out;
 }
 
 function drawWordScramble(
@@ -934,66 +862,28 @@ function drawWordScramble(
   slot: RectIn,
   gp: GenericPuzzleSettings,
   showSolution: boolean,
-  fontSizeOverridePt?: number
+  fontSizeOverridePt?: number,
+  wordGapPt?: number,
+  letterEm?: number
 ): void {
-  const words = scrambleWords(puzzle);
-  const fontPt =
-    fontSizeOverridePt ??
-    (showSolution ? gp.typography.answerFontSize ?? 14 : gp.typography.puzzleFontSize ?? 14);
-  const color = hex6(gp.colors.gridColor, '1F2937');
-  const face = gp.typography.puzzleFontFamily || 'Arial';
-  const letterCase = gp.core.letterCase === 'lower' ? 'lower' : 'upper';
-  const applyCase = (v: string) => (letterCase === 'lower' ? v.toLowerCase() : v.toUpperCase());
-  const rowH = Math.min(pt2in(fontPt * 1.55), slot.h / Math.max(1, words.length + 1));
-  const style = gp.core.answerBlankStyle ?? 'underline';
-
-  words.forEach((word, i) => {
-    const y = slot.y + i * rowH;
-    if (y + rowH > slot.y + slot.h + 0.02) return;
-    if (showSolution) {
-      addCenteredText(
-        slide,
-        `${applyCase(word.scrambled)}  =  ${applyCase(word.original)}`,
-        { x: slot.x, y, w: slot.w, h: rowH },
-        { fontSize: fontPt, fontFace: face, color, align: 'left', bold: true }
-      );
-      return;
-    }
-    const scrambled = applyCase(word.scrambled);
-    const letters = word.original.replace(/[\s-]/g, '').split('');
-    if (style === 'boxes') {
-      addCenteredText(
-        slide,
-        scrambled,
-        { x: slot.x, y, w: slot.w * 0.42, h: rowH },
-        { fontSize: fontPt, fontFace: face, color, align: 'left', bold: true }
-      );
-      const box = Math.min(rowH * 0.72, 0.28);
-      letters.forEach((_, li) => {
-        slide.addShape('rect', {
-          x: slot.x + slot.w * 0.46 + li * (box + 0.04),
-          y: y + (rowH - box) / 2,
-          w: box,
-          h: box,
-          fill: { type: 'none' as const },
-          line: { color, width: 1.1 },
-        });
-      });
-      return;
-    }
-    const blank =
-      style === 'blank'
-        ? ' '
-        : style === 'underline'
-          ? '_'.repeat(Math.max(4, letters.length))
-          : Array.from({ length: Math.max(4, letters.length) }, () => '-').join(' ');
-    addCenteredText(
-      slide,
-      `${scrambled}   ${blank}`,
-      { x: slot.x, y, w: slot.w, h: rowH },
-      { fontSize: fontPt, fontFace: face, color, align: 'left', bold: true }
-    );
-  });
+  const slotPt: RectPt = {
+    leftPt: slot.x * 72,
+    topPt: slot.y * 72,
+    widthPt: slot.w * 72,
+    heightPt: slot.h * 72,
+  };
+  renderResolvedPpt(
+    slide,
+    buildScrambleElements({
+      puzzle,
+      slot: slotPt,
+      gp,
+      showSolution,
+      fontSizePt: fontSizeOverridePt ?? gp.typography.puzzleFontSize ?? 14,
+      wordGapPt: wordGapPt ?? gp.typography.scrambleSpaceBetweenWords ?? 8,
+      letterEm: letterEm ?? gp.typography.scrambleSpaceBetweenLetters ?? 0.12,
+    })
+  );
 }
 
 function drawTrivia(
@@ -1003,85 +893,13 @@ function drawTrivia(
   gp: GenericPuzzleSettings,
   showSolution: boolean
 ): void {
-  const fontPt = showSolution
-    ? gp.typography.answerFontSize ?? 12
-    : gp.typography.puzzleFontSize ?? 12;
-  const color = hex6(gp.colors.gridColor, '1F2937');
-  const face = gp.typography.puzzleFontFamily || 'Arial';
-  const checkbox = gp.core.triviaCheckboxStyle === 'square' ? 'rect' : 'ellipse';
-
-  if (showSolution) {
-    const cols = Math.max(1, Math.min(4, gp.core.triviaSolutionColumns || 3));
-    const colW = slot.w / cols;
-    const sections = puzzles.map((p, i) => ({
-      heading: formatTriviaSolutionHeading(p, i, gp.core.puzzlesStartingNumber),
-      answers: (p.questions ?? [])
-        .filter((q) => (q.prompt || '').trim())
-        .map((q, qi) => `${qi + 1}. ${resolveTriviaAnswerLabel(q)}`),
-    }));
-    const colSections: typeof sections[] = Array.from({ length: cols }, () => []);
-    sections.forEach((s, i) => colSections[i % cols].push(s));
-    colSections.forEach((list, ci) => {
-      let y = slot.y;
-      list.forEach((section) => {
-        addCenteredText(
-          slide,
-          section.heading,
-          { x: slot.x + ci * colW, y, w: colW - 0.08, h: pt2in(fontPt * 1.4) },
-          { fontSize: fontPt, fontFace: face, color, bold: true, align: 'left' }
-        );
-        y += pt2in(fontPt * 1.45);
-        section.answers.forEach((line) => {
-          addCenteredText(
-            slide,
-            line,
-            { x: slot.x + ci * colW, y, w: colW - 0.08, h: pt2in(fontPt * 1.25) },
-            { fontSize: Math.max(8, fontPt * 0.92), fontFace: face, color, align: 'left' }
-          );
-          y += pt2in(fontPt * 1.28);
-        });
-        y += pt2in(6);
-      });
-    });
-    return;
-  }
-
-  const puzzle = puzzles[0];
-  const questions = puzzle?.questions ?? [];
-  const twoCol = gp.core.triviaLayoutFormat === 'two-column';
-  const colCount = twoCol ? 2 : 1;
-  const colW = slot.w / colCount;
-  const box = Math.max(0.12, pt2in(fontPt * 0.85));
-  questions.forEach((q, qi) => {
-    const col = twoCol ? qi % 2 : 0;
-    const row = twoCol ? Math.floor(qi / 2) : qi;
-    const blockH = slot.h / Math.max(1, Math.ceil(questions.length / colCount));
-    const x = slot.x + col * colW;
-    const y = slot.y + row * blockH;
-    addCenteredText(
-      slide,
-      `${qi + 1}. ${q.prompt}`,
-      { x, y, w: colW - 0.06, h: pt2in(fontPt * 1.4) },
-      { fontSize: fontPt, fontFace: face, color, bold: true, align: 'left', valign: 'top' }
-    );
-    (q.suggestions ?? []).forEach((sug, si) => {
-      const sy = y + pt2in(fontPt * 1.5) + si * pt2in(fontPt * 1.35);
-      slide.addShape(checkbox, {
-        x,
-        y: sy + pt2in(2),
-        w: box,
-        h: box,
-        fill: { type: 'none' as const },
-        line: { color: '9CA3AF', width: 1.1 },
-      });
-      addCenteredText(
-        slide,
-        sug,
-        { x: x + box + 0.06, y: sy, w: colW - box - 0.12, h: pt2in(fontPt * 1.25) },
-        { fontSize: Math.max(8, fontPt * 0.92), fontFace: face, color, align: 'left' }
-      );
-    });
-  });
+  const slotPt: RectPt = {
+    leftPt: slot.x * 72,
+    topPt: slot.y * 72,
+    widthPt: slot.w * 72,
+    heightPt: slot.h * 72,
+  };
+  renderResolvedPpt(slide, buildTriviaElements({ puzzles, slot: slotPt, gp, showSolution }));
 }
 
 function drawCryptogram(
@@ -1091,28 +909,13 @@ function drawCryptogram(
   gp: GenericPuzzleSettings,
   showSolution: boolean
 ): void {
-  const fontPt = showSolution
-    ? gp.typography.answerFontSize ?? 14
-    : gp.typography.puzzleFontSize ?? 14;
-  const color = hex6(gp.colors.gridColor, '1F2937');
-  const face = gp.typography.puzzleFontFamily || 'Arial';
-  const text = showSolution && gp.core.cryptogramSolutionOnlyAnswers
-    ? puzzle.originalText
-    : showSolution
-      ? puzzle.originalText
-      : puzzle.encodedText;
-  addCenteredText(
-    slide,
-    text,
-    slot,
-    {
-      fontSize: fontPt,
-      fontFace: face,
-      color,
-      align: 'left',
-      valign: 'top',
-    }
-  );
+  const slotPt: RectPt = {
+    leftPt: slot.x * 72,
+    topPt: slot.y * 72,
+    widthPt: slot.w * 72,
+    heightPt: slot.h * 72,
+  };
+  renderResolvedPpt(slide, buildCryptogramElements({ puzzle, slot: slotPt, gp, showSolution }));
 }
 
 function drawPuzzleBody(
@@ -1129,6 +932,8 @@ function drawPuzzleBody(
     genericCellPt: number;
     mazeFramePt: number | null;
     scrambleFontPt?: number;
+    scrambleWordGapPt?: number;
+    scrambleLetterEm?: number;
     pageNumberZoneTopPt?: number;
     puzzleToCluesGapPt?: number;
   }
@@ -1151,6 +956,72 @@ function drawPuzzleBody(
     drawSudoku(slide, puzzle as SudokuPuzzle, slot, gp, showSolution, metrics.genericCellPt);
     return;
   }
+  if (puzzleType === 'codewords') {
+    drawCodewords(
+      slide,
+      puzzle as import('./puzzles/codewords').CodewordPuzzle,
+      slot,
+      gp,
+      showSolution,
+      metrics.genericCellPt
+    );
+    return;
+  }
+  if (puzzleType === 'binairo') {
+    drawBinairo(
+      slide,
+      puzzle as import('./puzzles/binairo').BinairoPuzzle,
+      slot,
+      gp,
+      showSolution,
+      metrics.genericCellPt
+    );
+    return;
+  }
+  if (puzzleType === 'kakuro') {
+    drawKakuro(
+      slide,
+      puzzle as import('./puzzles/kakuro').KakuroPuzzle,
+      slot,
+      gp,
+      showSolution,
+      metrics.genericCellPt
+    );
+    return;
+  }
+  if (puzzleType === 'math-maze') {
+    drawMathMaze(
+      slide,
+      puzzle as import('./puzzles/math-maze').MathMazePuzzle,
+      slot,
+      gp,
+      showSolution,
+      metrics.genericCellPt
+    );
+    return;
+  }
+  if (puzzleType === 'word-fill' || puzzleType === 'number-fill') {
+    drawFill(
+      slide,
+      puzzle as import('./puzzles/fill').FillPuzzle,
+      slot,
+      gp,
+      showSolution,
+      metrics.genericCellPt
+    );
+    return;
+  }
+  if (puzzleType === 'snake') {
+    drawSnake(
+      slide,
+      puzzle as import('./puzzles/snake').SnakePuzzle,
+      slot,
+      gp,
+      showSolution,
+      metrics.genericCellPt
+    );
+    return;
+  }
   if (puzzleType === 'maze') {
     drawMaze(slide, puzzle as MazePuzzle, slot, gp, showSolution, metrics.genericCellPt, metrics.mazeFramePt);
     return;
@@ -1162,7 +1033,9 @@ function drawPuzzleBody(
       slot,
       gp,
       showSolution,
-      metrics.scrambleFontPt
+      metrics.scrambleFontPt,
+      metrics.scrambleWordGapPt,
+      metrics.scrambleLetterEm
     );
     return;
   }
@@ -1266,6 +1139,7 @@ export async function addNativeGenericOrCrosswordSlide(
     pptBackgroundOptions(pageFrame)
   );
 
+  const hasBackgroundImage = !!pageColors.backgroundImage;
   const slide = prs.addSlide();
   await applyFlattenedBackgroundToSlide(slide, bgConfig, backgroundCache, hex6);
   addPageContainerFrame(
@@ -1273,7 +1147,8 @@ export async function addNativeGenericOrCrosswordSlide(
     pageW,
     pageH,
     pageFrame,
-    pageColors.backgroundColor
+    pageColors.backgroundColor,
+    hasBackgroundImage
   );
 
   if (layout.header) {
@@ -1296,13 +1171,14 @@ export async function addNativeGenericOrCrosswordSlide(
   if (layout.subtitle && layout.subtitleBox) {
     addCenteredText(
       slide,
-      layout.subtitle.text,
+      layout.subtitleLines.length > 0 ? layout.subtitleLines.join('\n') : layout.subtitle.text,
       rectInFromPt(layout.subtitleBox),
       {
         fontSize: layout.subtitle.fontSizePt,
         fontFace: layout.subtitle.fontFamily,
         color: layout.subtitle.color,
         align: layout.subtitle.align,
+        wrap: true,
       }
     );
   }
@@ -1312,6 +1188,8 @@ export async function addNativeGenericOrCrosswordSlide(
     genericCellPt: layout.genericCellPt,
     mazeFramePt: layout.mazeFramePt,
     scrambleFontPt: layout.scrambleFit?.fontSizePt,
+    scrambleWordGapPt: layout.scrambleFit?.wordGapPt,
+    scrambleLetterEm: layout.scrambleFit?.letterEm,
     pageNumberZoneTopPt: layout.pageNumberZoneTopPt,
     puzzleToCluesGapPt: layout.puzzleToCluesGapPt,
   };
@@ -1348,4 +1226,29 @@ export async function addNativeGenericOrCrosswordSlide(
       compiledPage.bookPageIndex
     );
   }
+
+  const variableCtx = resolvePageVariableContext({
+    puzzleIndexInDocument: puzzleIndex,
+    puzzlesPerPage: gp?.core.puzzlesPerPage ?? 1,
+    puzzlesStartingNumber:
+      gp?.core.puzzlesStartingNumber ?? cw?.core.puzzlesStartingNumber ?? 1,
+    bookPageIndex: compiledPage.bookPageIndex,
+  });
+  drawPageVariablesOnPptSlide({
+    slide,
+    pageWidthPt: layout.pageWidthPt,
+    pageHeightPt: layout.pageHeightPt,
+    fields: pageVariablesFromDocument(documentPages, compiledPage.sourceDocumentId),
+    contentIndex: variableCtx.contentIndex,
+    bookPageNumber: variableCtx.bookPageNumber,
+    puzzleNumber: variableCtx.puzzleNumber,
+    resolveContext: textVariableContextFromDocument(
+      documentPages.find((doc) => doc.id === compiledPage.sourceDocumentId),
+      {
+        contentIndex: variableCtx.contentIndex,
+        puzzleNumber: variableCtx.puzzleNumber,
+        pageNumber: variableCtx.bookPageNumber,
+      }
+    ),
+  });
 }

@@ -10,6 +10,7 @@ import {
   buildGenericHeaderAssembly,
   isGlobalHeaderAssemblyEnabled,
   resolveGenericPageContentInsetPt,
+  wrapSubtitleLines,
 } from './generic-page-chrome';
 import {
   getGenericModuleDefaultTitle,
@@ -33,6 +34,9 @@ import {
   crosswordFixedCellPt,
   resolveCrosswordPageNumberZoneTopPt,
 } from './crossword-puzzle-page-layout';
+import { readCanvasOffset } from './canvas-element-position';
+import { fillListReservePt } from './resolved-layout/fill-elements';
+import { snakeListReservePt } from './resolved-layout/snake-elements';
 
 export const GENERIC_FIT_MIN_SCALE = 0.35;
 
@@ -97,6 +101,7 @@ export interface GenericPageLayout {
   pageTitle: GenericTitleStyle | null;
   pageTitleBox: RectPt | null;
   subtitle: GenericTitleStyle | null;
+  subtitleLines: string[];
   subtitleBox: RectPt | null;
   body: RectPt;
   slots: GenericBodySlot[];
@@ -342,7 +347,16 @@ export function computeGenericPageLayout(input: GenericPageLayoutInput): Generic
   const multiShrink = multi ? (answersPerPage >= 4 ? 0.45 : 0.62) : 1;
   const isTextPuzzleType =
     puzzleType === 'word-scramble' || puzzleType === 'cryptogram' || puzzleType === 'trivia';
-  const isSudokuOrMaze = puzzleType === 'sudoku' || puzzleType === 'maze';
+  const isSudokuOrMaze =
+    puzzleType === 'sudoku' ||
+    puzzleType === 'maze' ||
+    puzzleType === 'codewords' ||
+    puzzleType === 'binairo' ||
+    puzzleType === 'kakuro' ||
+    puzzleType === 'math-maze' ||
+    puzzleType === 'word-fill' ||
+    puzzleType === 'number-fill' ||
+    puzzleType === 'snake';
 
   const contentWidthPt = Math.max(60, pageWidthPt - marginPt * 2);
   const contentHeightPt = Math.max(
@@ -351,14 +365,17 @@ export function computeGenericPageLayout(input: GenericPageLayoutInput): Generic
   );
   const solutionGapPt = cw
     ? cssPxToPoints(cw.typography.solutionToSolutionGapPx ?? 14)
-    : puzzleType === 'word-scramble' && multi
-      ? finite(gp?.typography.scrambleSpaceBetweenPuzzles, 18)
+    : gp
+      ? puzzleType === 'word-scramble' && multi
+        ? finite(gp.typography.scrambleSpaceBetweenPuzzles, 18)
+        : cssPxToPoints(gp.typography.solutionToSolutionGapPx ?? 14)
       : 12;
 
   const headerAssemblyEnabled = !showSolution && isGlobalHeaderAssemblyEnabled(layoutSettings);
   const isSolutionPage = showSolution && !!(cw || gp);
 
   const rawSolutionTitleColor =
+    (gp ? gp.colors.answerTitleColor : undefined) ||
     colors.answerPage.titleColor ||
     gp?.colors.titleColor ||
     cw?.colors.titleColor ||
@@ -368,8 +385,10 @@ export function computeGenericPageLayout(input: GenericPageLayoutInput): Generic
     ? solutionTitleColor(rawSolutionTitleColor)
     : cw?.colors.titleColor ?? gp?.colors.titleColor ?? colors.puzzlePage.titleColor ?? '#333333';
   const titleFontFamily = isSolutionPage
-    ? colors.answerPage.answerTitleFontFamily ||
-      gp?.typography.puzzleTitleFontFamily ||
+    ? (gp
+        ? gp.typography.answerTitleFontFamily || gp.typography.puzzleTitleFontFamily
+        : null) ||
+      colors.answerPage.answerTitleFontFamily ||
       cw?.typography.puzzleTitleFontFamily ||
       typography.puzzleTitleFontFamily ||
       'Arial'
@@ -386,10 +405,14 @@ export function computeGenericPageLayout(input: GenericPageLayoutInput): Generic
         typography.puzzleTitleFontSize ??
         24;
   const titleAlign: 'left' | 'center' | 'right' = isSolutionPage
-    ? colors.answerPage.answerTitleAlignment || 'center'
+    ? gp?.typography.answerTitleAlign === 'left' || gp?.typography.answerTitleAlign === 'right'
+      ? gp.typography.answerTitleAlign
+      : colors.answerPage.answerTitleAlignment || 'center'
     : gp?.typography.puzzleTitleAlign === 'left'
       ? 'left'
-      : 'center';
+      : gp?.typography.puzzleTitleAlign === 'right'
+        ? 'right'
+        : 'center';
 
   const first = puzzles[0];
   const pageTitleText =
@@ -475,9 +498,25 @@ export function computeGenericPageLayout(input: GenericPageLayoutInput): Generic
     cw?.typography.subtitleMaxWidthPercent ??
     100;
 
-  const subtitleText: string = cw
-    ? resolveCrosswordSubtitle(cw.typography, puzzleIndex) || ''
-    : '';
+  const triviaFunFactsRaw =
+    gp?.typography.includeFunFacts && gp.typography.funFactsText
+      ? gp.typography.funFactsText
+      : gp?.typography.includeFunFacts && layoutSettings.typography?.funFactsText
+        ? layoutSettings.typography.funFactsText
+        : layoutSettings.typography?.includeFunFacts && layoutSettings.typography?.funFactsText
+          ? layoutSettings.typography.funFactsText
+          : '';
+  const genericFunFacts = triviaFunFactsRaw
+    ? triviaFunFactsRaw
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+    : [];
+  const subtitleText: string = cw && !showSolution
+    ? resolveCrosswordSubtitle(cw.typography, puzzleIndex, layoutSettings.typography) || ''
+    : puzzleType === 'trivia' && !showSolution
+      ? genericFunFacts[puzzleIndex] ?? ''
+      : '';
 
   const header = usePageHeader
     ? buildGenericHeaderAssembly({
@@ -540,7 +579,7 @@ export function computeGenericPageLayout(input: GenericPageLayoutInput): Generic
           fontFamily: titleFontFamily,
           color: titleColor,
           align: titleAlign,
-          bold: true,
+          bold: gp?.typography.puzzleTitleBold !== false,
         }
       : null;
   const pageTitleHeightPt = pageTitle ? titleSizePt * 1.25 : 0;
@@ -563,11 +602,15 @@ export function computeGenericPageLayout(input: GenericPageLayoutInput): Generic
         bold: false,
       }
     : null;
-  const subtitleHeightPt = subtitle ? subtitle.fontSizePt * 1.3 : 0;
   const subtitleMaxWidthPt = Math.max(
     50,
     (contentWidthPt * subtitleMaxWidthPercent) / 100 - 2 * subtitleBoxMarginPt
   );
+  const subtitleLines = subtitleText
+    ? wrapSubtitleLines(subtitleText, subtitleFontSizePt, subtitleFontFamily, subtitleMaxWidthPt)
+    : [];
+  const lineHeightPt = subtitleFontSizePt * 1.25;
+  const subtitleHeightPt = subtitle ? Math.max(1, subtitleLines.length) * lineHeightPt : 0;
   const subtitleLeftPt = marginPt + (contentWidthPt - subtitleMaxWidthPt) / 2;
   const subtitleBox: RectPt | null = subtitle
     ? {
@@ -603,16 +646,31 @@ export function computeGenericPageLayout(input: GenericPageLayoutInput): Generic
     ? crosswordFixedCellPt(cw, { showSolution, multiShrink })
     : cssPxToPoints(Math.max(10, Math.round(28 * sizePercent * scaleFactor * multiShrink)));
 
-  const sampleGrid = first?.grid;
+  const sampleGrid = first?.grid ?? first?.puzzle ?? first?.solution;
   const sudokuSize = Math.max(
     4,
-    Number(first?.size ?? (Array.isArray(sampleGrid) ? sampleGrid.length : 9)) || 9
+    Number(
+      first?.size ??
+        first?.rows ??
+        first?.columns ??
+        (Array.isArray(sampleGrid) ? sampleGrid.length : 9)
+    ) || 9
   );
   const mazeCells = Math.max(
     Array.isArray(sampleGrid) ? sampleGrid.length : 21,
     Array.isArray(sampleGrid) && Array.isArray(sampleGrid[0]) ? sampleGrid[0].length : 21
   );
-  const gridCells = puzzleType === 'sudoku' ? sudokuSize : mazeCells;
+  const gridCells =
+    puzzleType === 'sudoku' ||
+    puzzleType === 'codewords' ||
+    puzzleType === 'binairo' ||
+    puzzleType === 'kakuro' ||
+    puzzleType === 'word-fill' ||
+    puzzleType === 'number-fill' ||
+    puzzleType === 'snake' ||
+    puzzleType === 'math-maze'
+      ? sudokuSize
+      : mazeCells;
 
   const solutionTitleReservePt = multi
     ? Math.max(
@@ -639,9 +697,57 @@ export function computeGenericPageLayout(input: GenericPageLayoutInput): Generic
       : null;
 
   const fitBasePt = mazeFramePt ?? Math.min(contentWidthPt, contentHeightPt);
+  // Codewords alphabet key sits under the grid on puzzle pages — reserve height so
+  // preferred cell size does not assume the full body is available for the grid alone.
+  const codewordsKeyReservePt =
+    puzzleType === 'codewords' && !showSolution && gp?.core.showCodewordsCodeBox !== false
+      ? Math.max(
+          40,
+          2 * Math.max(16, (gp.typography.codewordsLetterFontSize ?? gp.typography.puzzleFontSize ?? 14) * 1.45) +
+            12
+        )
+      : 0;
+  const codewordsFitBasePt =
+    codewordsKeyReservePt > 0
+      ? Math.min(contentWidthPt, Math.max(60, contentHeightPt - codewordsKeyReservePt))
+      : fitBasePt;
+  // Fill-In / Word Snake print their entry list under the grid on puzzle pages —
+  // reserve its height the same way so the grid is sized around it.
+  const entryListReservePt =
+    gp && !showSolution && first
+      ? puzzleType === 'word-fill' || puzzleType === 'number-fill'
+        ? fillListReservePt(
+            first as unknown as import('./puzzles/fill').FillPuzzle,
+            gp,
+            multi ? slotW : contentWidthPt,
+            false
+          )
+        : puzzleType === 'snake'
+          ? snakeListReservePt(
+              first as unknown as import('./puzzles/snake').SnakePuzzle,
+              gp,
+              multi ? slotW : contentWidthPt,
+              false
+            )
+          : 0
+      : 0;
+  const entryListFitBasePt =
+    entryListReservePt > 0
+      ? Math.min(
+          mazeFramePt ?? contentWidthPt,
+          Math.max(60, (mazeFramePt ?? contentHeightPt) - entryListReservePt)
+        )
+      : fitBasePt;
   const genericCellPt = Math.max(
     2.25,
-    (fitBasePt / Math.max(1, gridCells)) * 0.9 * (mazeFramePt ? 1 : scaleFactor * multiShrink)
+    ((puzzleType === 'codewords'
+      ? codewordsFitBasePt
+      : entryListReservePt > 0
+        ? entryListFitBasePt
+        : fitBasePt) /
+      Math.max(1, gridCells)) *
+      0.9 *
+      (mazeFramePt ? 1 : scaleFactor * multiShrink)
   );
 
   const scrambleSlotW = Math.max(45, (multi ? slotW : contentWidthPt) - 6);
@@ -690,7 +796,7 @@ export function computeGenericPageLayout(input: GenericPageLayoutInput): Generic
             fontFamily: titleFontFamily,
             color: titleColor,
             align: titleAlign,
-            bold: true,
+            bold: gp?.typography.puzzleTitleBold !== false,
           }
         : null;
       slots.push({
@@ -720,6 +826,63 @@ export function computeGenericPageLayout(input: GenericPageLayoutInput): Generic
     });
   }
 
+  const layoutOffsets =
+    gp?.typography.canvasLayoutOffsets ?? cw?.typography.canvasLayoutOffsets;
+  const titleOffset = readCanvasOffset(layoutOffsets, 'title');
+  const subtitleOffset = readCanvasOffset(layoutOffsets, 'subtitle');
+  const gridOffset = readCanvasOffset(layoutOffsets, 'grid');
+  const cluesOffset = readCanvasOffset(layoutOffsets, 'clues');
+
+  let shiftedPageTitleBox = pageTitleBox;
+  if (shiftedPageTitleBox) {
+    shiftedPageTitleBox = {
+      ...shiftedPageTitleBox,
+      leftPt: shiftedPageTitleBox.leftPt + titleOffset.offsetXPt,
+      topPt: shiftedPageTitleBox.topPt + titleOffset.offsetYPt,
+    };
+  }
+  let shiftedSubtitleBox = subtitleBox;
+  if (shiftedSubtitleBox) {
+    shiftedSubtitleBox = {
+      ...shiftedSubtitleBox,
+      leftPt: shiftedSubtitleBox.leftPt + subtitleOffset.offsetXPt,
+      topPt: shiftedSubtitleBox.topPt + subtitleOffset.offsetYPt,
+    };
+  }
+  let shiftedHeader = header;
+  if (shiftedHeader) {
+    shiftedHeader = {
+      ...shiftedHeader,
+      leftPt: shiftedHeader.leftPt + titleOffset.offsetXPt,
+      topPt: shiftedHeader.topPt + titleOffset.offsetYPt,
+    };
+  }
+  const shiftedBody = {
+    ...body,
+    leftPt: body.leftPt + gridOffset.offsetXPt,
+    topPt: body.topPt + gridOffset.offsetYPt,
+  };
+  const shiftedSlots = slots.map((slot) => ({
+    ...slot,
+    frame: {
+      ...slot.frame,
+      leftPt: slot.frame.leftPt + gridOffset.offsetXPt,
+      topPt: slot.frame.topPt + gridOffset.offsetYPt,
+    },
+    titleBox: slot.titleBox
+      ? {
+          ...slot.titleBox,
+          leftPt: slot.titleBox.leftPt + titleOffset.offsetXPt,
+          topPt: slot.titleBox.topPt + titleOffset.offsetYPt,
+        }
+      : null,
+    content: {
+      ...slot.content,
+      leftPt: slot.content.leftPt + gridOffset.offsetXPt,
+      topPt: slot.content.topPt + gridOffset.offsetYPt,
+    },
+  }));
+
   return {
     pageWidthPt,
     pageHeightPt,
@@ -730,18 +893,21 @@ export function computeGenericPageLayout(input: GenericPageLayoutInput): Generic
     isTriviaSolution,
     scaleFactor,
     multiShrink,
-    header,
+    header: shiftedHeader,
     pageTitle,
-    pageTitleBox,
+    pageTitleBox: shiftedPageTitleBox,
     subtitle,
-    subtitleBox,
-    body,
-    slots,
+    subtitleLines,
+    subtitleBox: shiftedSubtitleBox,
+    body: shiftedBody,
+    slots: shiftedSlots,
     scrambleFit,
     crosswordCellPt,
     genericCellPt,
     mazeFramePt,
-    puzzleToCluesGapPt: cw ? (cw.typography.spaceBetweenPuzzleAndClues || 0.25) * 72 : 0,
+    puzzleToCluesGapPt: cw
+      ? (cw.typography.spaceBetweenPuzzleAndClues || 0.25) * 72 + cluesOffset.offsetYPt
+      : 0,
     titleColor,
     titleFontFamily,
     contentWidthPt,

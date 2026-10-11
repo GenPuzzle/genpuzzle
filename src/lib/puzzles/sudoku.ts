@@ -1,4 +1,5 @@
-import { SudokuPuzzle, Difficulty } from './types';
+import { SudokuPuzzle, Difficulty, type SudokuInequality } from './types';
+import { generateGreaterThanSudoku } from './sudoku-greater-than';
 
 /** Supported Sudoku board sizes (cells per side). */
 export type SudokuSize = 4 | 6 | 9 | 12 | 16 | 25;
@@ -33,6 +34,16 @@ export function formatSudokuSymbol(value: number): string {
   return String.fromCharCode('A'.charCodeAt(0) + (value - 10));
 }
 
+export function isSudokuXPuzzle(puzzle: Pick<SudokuPuzzle, 'variant'> | null | undefined): boolean {
+  return puzzle?.variant === 'x';
+}
+
+export function isSudokuGreaterThanPuzzle(
+  puzzle: Pick<SudokuPuzzle, 'variant'> | null | undefined
+): boolean {
+  return puzzle?.variant === 'greater-than';
+}
+
 function shuffleInPlace<T>(arr: T[]): T[] {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -50,6 +61,11 @@ function createEmptyGrid(size: number): number[][] {
  * shuffle bands, stacks, rows-within-band, cols-within-stack, and symbols.
  * Works for any size where boxH * boxW === size.
  */
+/** Full valid Sudoku grid (exported for Greater Than generation). */
+export function generateFilledSudokuGrid(size: SudokuSize): number[][] {
+  return generateCompleteGrid(size);
+}
+
 function generateCompleteGrid(size: SudokuSize): number[][] {
   const { boxH, boxW } = SUDOKU_BOX[size];
   const bandCount = size / boxH; // === boxW
@@ -102,6 +118,47 @@ function generateCompleteGrid(size: SudokuSize): number[][] {
   return grid;
 }
 
+/** True when both main diagonals contain each symbol once (Sudoku X). */
+export function hasUniqueDiagonals(grid: number[][]): boolean {
+  const size = grid.length;
+  if (size < 1) return false;
+  const main = new Set<number>();
+  const anti = new Set<number>();
+  for (let i = 0; i < size; i++) {
+    const a = grid[i]?.[i] ?? 0;
+    const b = grid[i]?.[size - 1 - i] ?? 0;
+    if (a < 1 || b < 1) return false;
+    main.add(a);
+    anti.add(b);
+  }
+  return main.size === size && anti.size === size;
+}
+
+function inequalitiesAllow(
+  grid: number[][],
+  row: number,
+  col: number,
+  num: number,
+  inequalities: SudokuInequality[]
+): boolean {
+  for (const ineq of inequalities) {
+    let a = 0;
+    let b = 0;
+    if (ineq.r1 === row && ineq.c1 === col) {
+      a = num;
+      b = grid[ineq.r2]?.[ineq.c2] ?? 0;
+    } else if (ineq.r2 === row && ineq.c2 === col) {
+      a = grid[ineq.r1]?.[ineq.c1] ?? 0;
+      b = num;
+    } else {
+      continue;
+    }
+    if (a === 0 || b === 0) continue;
+    if (ineq.gt ? !(a > b) : !(a < b)) return false;
+  }
+  return true;
+}
+
 function isValid(
   grid: number[][],
   row: number,
@@ -109,7 +166,9 @@ function isValid(
   num: number,
   size: number,
   boxH: number,
-  boxW: number
+  boxW: number,
+  diagonals: boolean,
+  inequalities: SudokuInequality[]
 ): boolean {
   for (let c = 0; c < size; c++) {
     if (grid[row][c] === num) return false;
@@ -124,7 +183,57 @@ function isValid(
       if (grid[r][c] === num) return false;
     }
   }
+  if (diagonals) {
+    if (row === col) {
+      for (let i = 0; i < size; i++) {
+        if (i !== row && grid[i][i] === num) return false;
+      }
+    }
+    if (row + col === size - 1) {
+      for (let i = 0; i < size; i++) {
+        if (i !== row && grid[i][size - 1 - i] === num) return false;
+      }
+    }
+  }
+  if (inequalities.length && !inequalitiesAllow(grid, row, col, num, inequalities)) {
+    return false;
+  }
   return true;
+}
+
+/**
+ * Complete Sudoku X grid: backtracking with diagonal constraints and a
+ * randomized digit order so batches are not identical.
+ */
+function generateCompleteDiagonalGrid(size: SudokuSize): number[][] {
+  const { boxH, boxW } = SUDOKU_BOX[size];
+  const grid = createEmptyGrid(size);
+  const base = shuffleInPlace(Array.from({ length: size }, (_, i) => i + 1));
+
+  function fill(pos: number): boolean {
+    if (pos === size * size) return true;
+    const row = (pos / size) | 0;
+    const col = pos % size;
+    const offset = (Math.random() * size) | 0;
+    for (let i = 0; i < size; i++) {
+      const num = base[(i + offset) % size]!;
+      if (isValid(grid, row, col, num, size, boxH, boxW, true, [])) {
+        grid[row][col] = num;
+        if (fill(pos + 1)) return true;
+        grid[row][col] = 0;
+      }
+    }
+    return false;
+  }
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    for (let r = 0; r < size; r++) grid[r]!.fill(0);
+    shuffleInPlace(base);
+    if (fill(0) && hasUniqueDiagonals(grid)) {
+      return grid.map((row) => [...row]);
+    }
+  }
+  throw new Error(`Sudoku X: failed to build a complete ${size}×${size} diagonal grid`);
 }
 
 /** Count solutions up to `limit` (used for uniqueness on smaller boards). */
@@ -133,6 +242,8 @@ function countSolutions(
   size: number,
   boxH: number,
   boxW: number,
+  diagonals: boolean,
+  inequalities: SudokuInequality[],
   limit: number = 2
 ): number {
   let count = 0;
@@ -143,7 +254,7 @@ function countSolutions(
       for (let col = 0; col < size; col++) {
         if (grid[row][col] === 0) {
           for (const num of nums) {
-            if (isValid(grid, row, col, num, size, boxH, boxW)) {
+            if (isValid(grid, row, col, num, size, boxH, boxW, diagonals, inequalities)) {
               grid[row][col] = num;
               if (solve()) {
                 if (count >= limit) {
@@ -166,7 +277,7 @@ function countSolutions(
   return count;
 }
 
-/** Target filled-cell ratio by difficulty (size-agnostic). */
+/** Target filled-cell ratio by difficulty (size-agnostic). Classic Sudoku only. */
 function getClueRatio(difficulty: Difficulty): { min: number; max: number } {
   switch (difficulty) {
     case 'easy':
@@ -181,11 +292,47 @@ function getClueRatio(difficulty: Difficulty): { min: number; max: number } {
   }
 }
 
+/** All orthogonal adjacent pairs as inequalities consistent with `solution`. */
+export function collectSolutionInequalities(solution: number[][]): SudokuInequality[] {
+  const size = solution.length;
+  const out: SudokuInequality[] = [];
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      const v = solution[r]![c]!;
+      if (c + 1 < size) {
+        const right = solution[r]![c + 1]!;
+        out.push({ r1: r, c1: c, r2: r, c2: c + 1, gt: v > right });
+      }
+      if (r + 1 < size) {
+        const below = solution[r + 1]![c]!;
+        out.push({ r1: r, c1: c, r2: r + 1, c2: c, gt: v > below });
+      }
+    }
+  }
+  return out;
+}
+
+export function inequalitiesMatchSolution(
+  solution: number[][],
+  inequalities: SudokuInequality[]
+): boolean {
+  for (const ineq of inequalities) {
+    const a = solution[ineq.r1]?.[ineq.c1];
+    const b = solution[ineq.r2]?.[ineq.c2];
+    if (a == null || b == null || a < 1 || b < 1) return false;
+    if (Math.abs(ineq.r1 - ineq.r2) + Math.abs(ineq.c1 - ineq.c2) !== 1) return false;
+    if (ineq.gt ? !(a > b) : !(a < b)) return false;
+  }
+  return true;
+}
+
 function removeNumbers(
   grid: number[][],
   clueCount: number,
   size: SudokuSize,
-  checkUnique: boolean
+  checkUnique: boolean,
+  diagonals: boolean,
+  inequalities: SudokuInequality[]
 ): number[][] {
   const { boxH, boxW } = SUDOKU_BOX[size];
   const puzzle = grid.map((row) => [...row]);
@@ -207,7 +354,7 @@ function removeNumbers(
 
     if (checkUnique) {
       const testGrid = puzzle.map((r) => [...r]);
-      if (countSolutions(testGrid, size, boxH, boxW, 2) === 1) {
+      if (countSolutions(testGrid, size, boxH, boxW, diagonals, inequalities, 2) === 1) {
         removed++;
       } else {
         puzzle[row][col] = backup;
@@ -223,6 +370,10 @@ function removeNumbers(
 export interface GenerateSudokuOptions {
   difficulty?: Difficulty;
   size?: SudokuSize;
+  /** Classic when absent/`standard`; `'x'` = Sudoku X; `'greater-than'` = inequalities. */
+  variant?: 'standard' | 'x' | 'greater-than';
+  /** Greater Than only: include a few prefilled digits (hybrid). Default false = inequality-only. */
+  greaterThanHybrid?: boolean;
 }
 
 export function generateSudoku(
@@ -235,8 +386,24 @@ export function generateSudoku(
 
   const difficulty = opts.difficulty ?? 'medium';
   const size: SudokuSize = isSudokuSize(opts.size) ? opts.size : 9;
+  const diagonals = opts.variant === 'x';
+  const greaterThan = opts.variant === 'greater-than';
 
-  const solution = generateCompleteGrid(size);
+  if (greaterThan) {
+    // ~65% of random grids have a unique full-inequality pattern; a few retries suffice.
+    for (let attempt = 0; attempt < 24; attempt++) {
+      const built = generateGreaterThanSudoku({
+        difficulty,
+        size,
+        hybrid: opts.greaterThanHybrid === true,
+        solution: generateCompleteGrid(size),
+      });
+      if (built) return built;
+    }
+    throw new Error('Greater Than: could not build a unique inequality-only puzzle');
+  }
+
+  const solution = diagonals ? generateCompleteDiagonalGrid(size) : generateCompleteGrid(size);
   const total = size * size;
   const { min, max } = getClueRatio(difficulty);
   const clueCount = Math.max(
@@ -246,15 +413,17 @@ export function generateSudoku(
 
   // Uniqueness dig is expensive beyond 9×9 — skip for larger boards.
   const checkUnique = size <= 9;
-  const puzzleGrid = removeNumbers(solution, clueCount, size, checkUnique);
+  const puzzleGrid = removeNumbers(solution, clueCount, size, checkUnique, diagonals, []);
 
-  return {
+  const puzzle: SudokuPuzzle = {
     type: 'sudoku',
     grid: puzzleGrid,
     solution,
     difficulty,
     size,
   };
+  if (diagonals) puzzle.variant = 'x';
+  return puzzle;
 }
 
 /** @deprecated Prefer generateSudoku({ difficulty, size }) */

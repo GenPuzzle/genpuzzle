@@ -118,6 +118,10 @@ export function computeCrosswordAutoFit(
 ): Record<string, number> {
   if (!opts.fitGrid && !opts.fitFont) return {};
 
+  // Font fitting needs real clue text. The synthetic fallback used for an
+  // empty document performs a nested scale/font search and blocks tab opening.
+  if (puzzles.length === 0 && opts.fitFont) return {};
+
   if (opts.fitFont) {
     return balanceCrosswordPage(cw, layout, puzzles, opts);
   }
@@ -515,9 +519,11 @@ function sudokuCells(gp: GenericPuzzleSettings): number {
   if (mode === 'calcudoku') return calcudokuSize;
   if (mode === 'mixed') {
     const includeStandard = gp.core.sudokuMixedIncludeStandard !== false;
+    const includeX = gp.core.sudokuMixedIncludeX === true;
+    const includeGreaterThan = gp.core.sudokuMixedIncludeGreaterThan === true;
     const includeCalcudoku = gp.core.sudokuMixedIncludeCalcudoku !== false;
     return Math.max(
-      includeStandard ? standardSize : 0,
+      includeStandard || includeX || includeGreaterThan ? standardSize : 0,
       includeCalcudoku ? calcudokuSize : 0,
       4
     );
@@ -566,8 +572,15 @@ export function computeGenericAutoFit(
   const slotH = (availablePt - 12 * (rows - 1)) / rows;
   const out: Record<string, number> = {};
 
-  if (moduleType === 'sudoku' || moduleType === 'maze') {
-    const cells = moduleType === 'sudoku' ? sudokuCells(gp) : mazeCells(gp);
+  if (moduleType === 'sudoku' || moduleType === 'maze' || moduleType === 'binairo' || moduleType === 'kakuro') {
+    const cells =
+      moduleType === 'sudoku'
+        ? sudokuCells(gp)
+        : moduleType === 'binairo'
+          ? Number(gp.core.binairoGridSize) || 10
+          : moduleType === 'kakuro'
+            ? Number(gp.core.kakuroGridSize) || 9
+            : mazeCells(gp);
     const pageFitBase = Math.min(box.contentWidthPt, availablePt);
     const cellAt100 = (pageFitBase / Math.max(1, cells)) * 0.9;
     if (opts.fitGrid) {
@@ -618,11 +631,39 @@ export function computeTextPageAutoFit(layout: WordSearchSettings): Record<strin
   };
 }
 
+const crosswordAutoFitCache = new Map<string, CrosswordSettings>();
+
 export function applyCrosswordAutoFit(
   cw: CrosswordSettings,
   layout: WordSearchSettings,
   puzzles: CrosswordPuzzle[] = []
 ): CrosswordSettings {
+  if (cw.core.autoBalanceGrid !== true && cw.core.autoBalanceFont !== true) {
+    return cw;
+  }
+  const cacheKey = [
+    cw.core.autoBalanceGrid ? 1 : 0,
+    cw.core.autoBalanceFont ? 1 : 0,
+    cw.core.lettersAcross,
+    cw.core.lettersDown,
+    cw.core.puzzleSizePercent,
+    cw.typography.clueLayout,
+    cw.typography.titleStartAt,
+    cw.typography.spaceBetweenTitleAndPuzzle,
+    cw.typography.spaceBetweenPuzzleAndClues,
+    layout.bookCanvas.trimSizePreset,
+    layout.bookCanvas.customWidth,
+    layout.bookCanvas.customHeight,
+    layout.margins.top,
+    layout.margins.bottom,
+    puzzles.length,
+    puzzles[0]?.acrossClues?.length ?? 0,
+    puzzles[0]?.downClues?.length ?? 0,
+  ].join(':');
+
+  const cached = crosswordAutoFitCache.get(cacheKey);
+  if (cached) return cached;
+
   const fit = computeCrosswordAutoFit(
     cw,
     layout,
@@ -633,7 +674,7 @@ export function applyCrosswordAutoFit(
     puzzles
   );
   if (!fit || Object.keys(fit).length === 0) return cw;
-  return {
+  const result: CrosswordSettings = {
     ...cw,
     core: {
       ...cw.core,
@@ -652,4 +693,7 @@ export function applyCrosswordAutoFit(
       ...(fit.subtitleFontSize != null ? { subtitleFontSize: fit.subtitleFontSize } : {}),
     },
   };
+  if (crosswordAutoFitCache.size > 20) crosswordAutoFitCache.clear();
+  crosswordAutoFitCache.set(cacheKey, result);
+  return result;
 }

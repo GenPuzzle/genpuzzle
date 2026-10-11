@@ -6,10 +6,11 @@
     "dev": "node scripts/dev.mjs",
     "dev:turbo": "node scripts/dev.mjs --turbo",
     "dev:clean": "node scripts/dev.mjs",
-    "dev:debug": "NODE_OPTIONS='--inspect' next dev",
+    "dev:debug": "next dev --inspect",
     "build": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\" && next build",
-    "start": "next start --port ${port}",
-    "lint": "next lint"
+    "start": "next start",
+    "lint": "next lint",
+    "check:layout": "node scripts/check-layout.mjs"
   },
   "dependencies": {
     "@emotion/is-prop-valid": "latest",
@@ -54,6 +55,7 @@
     "@radix-ui/react-toggle-group": "1.1.1",
     "@radix-ui/react-tooltip": "1.1.6",
     "@supabase/supabase-js": "^2.88.0",
+    "@visioncortex/vtracer": "^1.0.0-alpha.4",
     "@zoerai/integration": "0.0.8",
     "autoprefixer": "^10.4.20",
     "canvas": "^3.2.3",
@@ -94,6 +96,7 @@
     "typeface-poppins": "^1.1.13",
     "typeface-roboto": "^1.1.13",
     "vaul": "^0.9.6",
+    "xlsx": "^0.18.5",
     "zod": "^3.24.1"
   },
   "devDependencies": {

@@ -21,6 +21,21 @@ import { getTitleWordsForDocument } from './book-compiler';
 import type { DocumentPage } from './document-model';
 import type { TitleWordsSettings, WordSearchSettings } from './puzzles/types';
 import { getPageDimensionsInches } from './puzzle-layout';
+import { pageVariablesFromDocument } from './page-variables-draw';
+
+function snapshotVariableEditor(documentPages: DocumentPage[], sourceDocumentId: string) {
+  return {
+    fields: pageVariablesFromDocument(documentPages, sourceDocumentId),
+    selectedId: null,
+    placingKind: null,
+    interactive: false,
+    onSelect: () => {},
+    onMove: () => {},
+    onResize: () => {},
+    onPlace: () => {},
+    onPatchField: () => {},
+  };
+}
 
 const PT_TO_PX = 96 / 72;
 
@@ -134,6 +149,7 @@ async function buildCompiledPageElement(
           : page.puzzleIndexInDocument,
         bookPageIndex: page.bookPageIndex,
         canvasEditEnabled: false,
+        pageVariableEditor: snapshotVariableEditor(ctx.documentPages, page.sourceDocumentId),
         ...exportChrome,
       });
     }
@@ -165,6 +181,7 @@ async function buildCompiledPageElement(
           : page.puzzleIndexInDocument,
         bookPageIndex: page.bookPageIndex,
         canvasEditEnabled: false,
+        pageVariableEditor: snapshotVariableEditor(ctx.documentPages, page.sourceDocumentId),
         ...exportChrome,
       });
     }

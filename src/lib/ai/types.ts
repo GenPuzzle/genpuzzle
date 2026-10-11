@@ -1,10 +1,8 @@
 import type { PuzzleModuleType } from '@/lib/document-model';
 
 /**
- * Puzzle types the AI wizard can generate.
- * Must stay in sync with PUZZLE_MODULES in document-model.ts.
- * Defined here (not imported) so the server API route does not load the
- * client-only document-model module.
+ * Puzzle types the AI wizard / agent can generate or place as document tabs.
+ * Keep every PUZZLE_MODULES entry here so new generators appear in AI options.
  */
 export const AI_SUPPORTED_PUZZLE_TYPES: PuzzleModuleType[] = [
   'word-search',
@@ -14,8 +12,32 @@ export const AI_SUPPORTED_PUZZLE_TYPES: PuzzleModuleType[] = [
   'cryptogram',
   'word-scramble',
   'trivia',
+  'codewords',
+  'binairo',
+  'kakuro',
+  'math-maze',
+  'word-fill',
+  'number-fill',
+  'snake',
   'murdoku',
 ];
+
+/** Built by local generators — never send to DeepSeek for grid content. */
+export const AI_ENGINE_LOCAL_PUZZLE_TYPES: PuzzleModuleType[] = [
+  'sudoku',
+  'maze',
+  'binairo',
+  'codewords',
+  'kakuro',
+  'math-maze',
+  'word-fill',
+  'number-fill',
+  'snake',
+];
+
+export function isAiEngineLocalPuzzleType(type: PuzzleModuleType): boolean {
+  return (AI_ENGINE_LOCAL_PUZZLE_TYPES as string[]).includes(type);
+}
 
 const AI_PUZZLE_TYPE_LABELS: Record<PuzzleModuleType, string> = {
   'word-search': 'Word Search',
@@ -26,6 +48,13 @@ const AI_PUZZLE_TYPE_LABELS: Record<PuzzleModuleType, string> = {
   'word-scramble': 'Word Scramble',
   trivia: 'Trivia',
   murdoku: 'Murdoku',
+  codewords: 'Codewords',
+  binairo: 'Binairo',
+  kakuro: 'Kakuro',
+  'word-fill': 'Word Fill-Ins',
+  'number-fill': 'Number Fill-Ins',
+  'math-maze': 'Math Mazes',
+  snake: 'Word Snakes',
 };
 
 export function isAiPuzzleType(value: unknown): value is PuzzleModuleType {
@@ -122,6 +151,8 @@ export function aiFrontMatterNeedsCopy(fm: AiFrontMatterOptions | undefined): bo
 
 export type AiBookOrganization = 'by-type' | 'by-chapter';
 
+export type AiFunFactPosition = 'below_title' | 'above_title' | 'page_footer';
+
 export interface AiProjectSetup {
   bookTitle: string;
   subtitle: string;
@@ -138,6 +169,15 @@ export interface AiProjectSetup {
   organization?: AiBookOrganization;
   /** One chapter topic/theme per line when organization is by-chapter. */
   chapterTopics?: string;
+  /** Applied to generated documents via existing solutionsPerPage settings. */
+  solutionsPerPage?: number;
+  /** Enforced as a floor on title/body/fun-fact font sizes. */
+  minimumFontSize?: number;
+  funFactsPosition?: AiFunFactPosition;
+  /** When true, also place a Canvas page-variable bound to fun facts. */
+  ensureFunFactPageVariable?: boolean;
+  /** Puzzle numbering start (maps to existing start-number settings). */
+  startPuzzleNumber?: number;
 }
 
 /** Normalized puzzle content returned by DeepSeek (before app adapters). */
@@ -165,6 +205,13 @@ export interface AiSudokuContent {
 
 export interface AiMazeContent {
   type: 'maze';
+  title: string;
+  difficulty: AiDifficulty;
+}
+
+/** Placeholder for engine-local types (binairo, codewords, …). */
+export interface AiGenericEngineContent {
+  type: 'binairo' | 'codewords' | 'kakuro' | 'math-maze' | 'word-fill' | 'number-fill' | 'snake';
   title: string;
   difficulty: AiDifficulty;
 }
@@ -213,6 +260,7 @@ export type AiPuzzleContent =
   | AiCrosswordContent
   | AiSudokuContent
   | AiMazeContent
+  | AiGenericEngineContent
   | AiCryptogramContent
   | AiWordScrambleContent
   | AiTriviaContent
@@ -341,13 +389,15 @@ export function isAiByChapter(
   return setup?.organization === 'by-chapter';
 }
 
-export function getAiChapterTopics(setup: AiProjectSetup | undefined | null): string[] {
+export function getAiChapterTopics(setup: Pick<AiProjectSetup, 'organization' | 'chapterTopics'> | undefined | null): string[] {
   if (!setup || !isAiByChapter(setup)) return [];
   return parseAiChapterTopics(setup.chapterTopics);
 }
 
 /** 1 when not by-chapter; otherwise the number of chapter topics (at least 1). */
-export function aiChapterMultiplier(setup: AiProjectSetup | undefined | null): number {
+export function aiChapterMultiplier(
+  setup: Pick<AiProjectSetup, 'organization' | 'chapterTopics'> | undefined | null
+): number {
   if (!setup || !isAiByChapter(setup)) return 1;
   return Math.max(1, getAiChapterTopics(setup).length);
 }

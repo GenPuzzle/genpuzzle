@@ -1,4 +1,10 @@
 import { WordScramblePuzzle } from './types';
+import {
+  localeUpperCase,
+  normalizePuzzleText,
+  segmentGraphemes,
+  isLetterGrapheme,
+} from '../unicode-text';
 
 /** Fallback word list so a fresh Word Scramble document generates instantly. */
 export const DEFAULT_SCRAMBLE_WORDS = [
@@ -9,36 +15,40 @@ export const DEFAULT_SCRAMBLE_WORDS = [
   'WORDS', 'SPELL', 'GUESS', 'SHUFFLE', 'TWIST', 'ORDER',
 ];
 
-/** Fisher-Yates shuffle of every letter; retries until it differs. */
+/** Fisher-Yates shuffle of every grapheme; retries until it differs. */
 function scrambleWord(word: string): string {
-  if (word.length < 2) return word;
+  const letters = segmentGraphemes(word);
+  if (letters.length < 2) return word;
 
   for (let attempt = 0; attempt < 20; attempt++) {
-    const letters = word.split('');
-    for (let i = letters.length - 1; i > 0; i--) {
+    const shuffled = letters.slice();
+    for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [letters[i], letters[j]] = [letters[j], letters[i]];
+      [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
     }
-    const scrambled = letters.join('');
+    const scrambled = shuffled.join('');
     if (scrambled !== word) return scrambled;
   }
   // All letters identical (e.g. "AAA") — nothing to scramble.
   return word;
 }
 
-function cleanInputWord(raw: unknown): string {
+function cleanInputWord(raw: unknown, language?: string): string {
   if (typeof raw !== 'string') return '';
-  // Prefer Unicode letters; fall back to A–Z if the engine lacks \p{L}.
-  try {
-    return raw.trim().toUpperCase().replace(/[^\p{L}\s-]/gu, '');
-  } catch {
-    return raw.trim().toUpperCase().replace(/[^A-Z\s-]/g, '');
-  }
+  const upper = localeUpperCase(normalizePuzzleText(raw.trim()), language);
+  return segmentGraphemes(upper)
+    .filter((g) => isLetterGrapheme(g) || g === ' ' || g === '-')
+    .join('');
 }
 
-export function generateWordScramble(words: string[]): WordScramblePuzzle {
+export function generateWordScramble(
+  words: string[],
+  language?: string
+): WordScramblePuzzle {
   const requested = Array.isArray(words) ? words : [];
-  let cleanWords = requested.map(cleanInputWord).filter((w) => w.replace(/[\s-]/g, '').length >= 2);
+  let cleanWords = requested
+    .map((w) => cleanInputWord(w, language))
+    .filter((w) => segmentGraphemes(w).filter(isLetterGrapheme).length >= 2);
 
   // If every custom line was invalid/too short, fall back so the canvas never goes blank.
   if (cleanWords.length === 0) {
@@ -46,11 +56,16 @@ export function generateWordScramble(words: string[]): WordScramblePuzzle {
     cleanWords = DEFAULT_SCRAMBLE_WORDS.slice(0, count);
   }
 
-  const scrambledWords = cleanWords.map((word) => ({
-    original: word,
-    // Phrases: scramble the letters of the whole phrase (spaces/dashes removed).
-    scrambled: scrambleWord(word.replace(/[\s-]+/g, '')),
-  }));
+  const scrambledWords = cleanWords.map((word) => {
+    const lettersOnly = segmentGraphemes(word)
+      .filter(isLetterGrapheme)
+      .join('');
+    return {
+      original: word,
+      // Phrases: scramble the letters of the whole phrase (spaces/dashes removed).
+      scrambled: scrambleWord(lettersOnly),
+    };
+  });
 
   return {
     type: 'word-scramble',

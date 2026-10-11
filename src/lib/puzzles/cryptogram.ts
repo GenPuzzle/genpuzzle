@@ -1,4 +1,11 @@
 import { CryptogramPuzzle } from './types';
+import {
+  getLanguageLetterAlphabet,
+  isLetterGrapheme,
+  localeUpperCase,
+  normalizePuzzleText,
+  segmentGraphemes,
+} from '../unicode-text';
 
 // Build-in famous quotes for cryptograms
 export const FAMOUS_QUOTES = [
@@ -38,38 +45,59 @@ function shuffleArray<T>(array: T[]): T[] {
   const shuffled = [...array];
   for (let i = shuffled.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
   }
   return shuffled;
 }
-
-const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
 /**
  * Full-alphabet substitution cipher. For a letters cipher no letter ever maps
  * to itself (a derangement), which is the professional cryptogram standard.
  */
-function createAlphabetCipher(cipherType: 'letters' | 'numbers'): Record<string, string> {
+function createAlphabetCipher(
+  alphabet: string[],
+  cipherType: 'letters' | 'numbers'
+): Record<string, string> {
   if (cipherType === 'numbers') {
-    const numbers = shuffleArray(ALPHABET.map((_, i) => String(i + 1)));
+    const numbers = shuffleArray(alphabet.map((_, i) => String(i + 1)));
     const mapping: Record<string, string> = {};
-    ALPHABET.forEach((letter, i) => {
-      mapping[letter] = numbers[i];
+    alphabet.forEach((letter, i) => {
+      mapping[letter] = numbers[i]!;
     });
     return mapping;
   }
 
   // Retry the shuffle until it is a derangement (fast — ~e/1 tries on average).
   for (;;) {
-    const shuffled = shuffleArray(ALPHABET);
-    if (ALPHABET.every((letter, i) => shuffled[i] !== letter)) {
+    const shuffled = shuffleArray(alphabet);
+    if (alphabet.every((letter, i) => shuffled[i] !== letter)) {
       const mapping: Record<string, string> = {};
-      ALPHABET.forEach((letter, i) => {
-        mapping[letter] = shuffled[i];
+      alphabet.forEach((letter, i) => {
+        mapping[letter] = shuffled[i]!;
       });
       return mapping;
     }
   }
+}
+
+function collectCipherAlphabet(
+  text: string,
+  language: string | undefined,
+  extraLetters: string[]
+): string[] {
+  const base = getLanguageLetterAlphabet(language);
+  const seen = new Set(base);
+  const out = [...base];
+  const add = (raw: string) => {
+    for (const g of segmentGraphemes(localeUpperCase(normalizePuzzleText(raw), language))) {
+      if (!isLetterGrapheme(g) || seen.has(g)) continue;
+      seen.add(g);
+      out.push(g);
+    }
+  };
+  add(text);
+  for (const extra of extraLetters) add(extra);
+  return out;
 }
 
 export interface CryptogramOptions {
@@ -78,6 +106,8 @@ export interface CryptogramOptions {
   hintCount?: number;
   /** Extra letters (other languages) to include in the cipher alphabet. */
   extraLetters?: string[];
+  /** Project / puzzle language for locale-aware case and alphabet. */
+  language?: string;
 }
 
 export function generateCryptogram(
@@ -85,31 +115,25 @@ export function generateCryptogram(
   options: CryptogramOptions = {}
 ): CryptogramPuzzle {
   const cipherType = options.cipherType ?? 'letters';
+  const language = options.language;
   // Keep letters and whitespace; punctuation passes through unencoded.
-  const cleanText = text.toUpperCase().replace(/\s+/g, ' ').trim();
+  // NFC + locale upper — never strip diacritics.
+  const cleanText = localeUpperCase(
+    normalizePuzzleText(text).replace(/\s+/g, ' ').trim(),
+    language
+  );
 
-  const mapping = createAlphabetCipher(cipherType);
-  // Extra (non A-Z) letters map to themselves' shuffled pool.
-  const extras = (options.extraLetters ?? [])
-    .map((l) => l.trim().toUpperCase())
-    .filter((l) => l.length === 1 && !/[A-Z]/.test(l));
-  if (extras.length > 0) {
-    const pool =
-      cipherType === 'numbers'
-        ? extras.map((_, i) => String(27 + i))
-        : shuffleArray(extras);
-    extras.forEach((letter, i) => {
-      mapping[letter] = pool[i];
-    });
-  }
+  const alphabet = collectCipherAlphabet(cleanText, language, options.extraLetters ?? []);
+  const mapping = createAlphabetCipher(alphabet, cipherType);
 
   const isCipherLetter = (ch: string) => mapping[ch] !== undefined;
+  const graphemes = segmentGraphemes(cleanText);
 
   // Letters: substitute in place. Numbers: space-separate tokens, double-space between words.
   let encoded = '';
-  for (const ch of cleanText) {
+  for (const ch of graphemes) {
     if (isCipherLetter(ch)) {
-      const token = mapping[ch];
+      const token = mapping[ch]!;
       if (cipherType === 'numbers') {
         if (encoded.length > 0 && /\d$/.test(encoded)) encoded += ' ';
         encoded += token;
@@ -131,10 +155,10 @@ export function generateCryptogram(
 
   // Reveal the most frequent letters in the phrase as hints.
   const freq = new Map<string, number>();
-  for (const ch of cleanText) {
+  for (const ch of graphemes) {
     if (isCipherLetter(ch)) freq.set(ch, (freq.get(ch) ?? 0) + 1);
   }
-  const hintCount = Math.max(0, Math.min(25, options.hintCount ?? 0));
+  const hintCount = Math.max(0, Math.min(alphabet.length - 1, options.hintCount ?? 0));
   const hintLetters = [...freq.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, hintCount)
@@ -151,14 +175,14 @@ export function generateCryptogram(
 }
 
 export function getRandomQuote(): { text: string; category: string } {
-  const quote = FAMOUS_QUOTES[Math.floor(Math.random() * FAMOUS_QUOTES.length)];
+  const quote = FAMOUS_QUOTES[Math.floor(Math.random() * FAMOUS_QUOTES.length)]!;
   return quote;
 }
 
 export function getQuotesByCategory(category: string): { text: string; category: string }[] {
-  return FAMOUS_QUOTES.filter(q => q.category === category);
+  return FAMOUS_QUOTES.filter((q) => q.category === category);
 }
 
 export function getCategories(): string[] {
-  return [...new Set(FAMOUS_QUOTES.map(q => q.category))];
+  return [...new Set(FAMOUS_QUOTES.map((q) => q.category))];
 }

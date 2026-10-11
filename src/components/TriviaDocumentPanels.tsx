@@ -4,7 +4,7 @@
  * Document-tab panels for Trivia — Puzzle / Words (Titles reuse GenericPuzzleTitlesPanel).
  */
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Save } from 'lucide-react';
 import { useApp } from '@/lib/app-context';
 import { Label } from '@/components/ui/label';
@@ -32,6 +32,12 @@ import type {
 } from '@/lib/generic-puzzle-settings';
 import { normalizeGenericPuzzleSettings } from '@/lib/generic-puzzle-settings';
 import {
+  DIVIDE_LISTS_PREFERENCE_EVENT,
+  evenChapterPuzzleCounts,
+  readDivideListsPreference,
+  type DivideListsPreference,
+} from '@/lib/chapter-titles-draft';
+import {
   computeTriviaSolutionsPerPage,
   getMissingTriviaSuggestions,
   getSubmittedSuggestionsPerQuestion,
@@ -42,6 +48,18 @@ function useTriviaDoc() {
   const { genericPuzzleSettings, updateGenericPuzzleSettings } = useApp();
   const settings = normalizeGenericPuzzleSettings(genericPuzzleSettings, 'trivia');
   const { core, typography, colors } = settings;
+  const [dividePreference, setDividePreference] = useState<DivideListsPreference>(
+    readDivideListsPreference
+  );
+
+  useEffect(() => {
+    const handlePreference = (event: Event) => {
+      const detail = (event as CustomEvent<DivideListsPreference>).detail;
+      if (detail) setDividePreference(detail);
+    };
+    window.addEventListener(DIVIDE_LISTS_PREFERENCE_EVENT, handlePreference);
+    return () => window.removeEventListener(DIVIDE_LISTS_PREFERENCE_EVENT, handlePreference);
+  }, []);
 
   const patchCore = (patch: Partial<GenericPuzzleSettings['core']>) => {
     updateGenericPuzzleSettings({ core: { ...core, ...patch } });
@@ -53,9 +71,16 @@ function useTriviaDoc() {
     updateGenericPuzzleSettings({ colors: { ...colors, ...patch } });
   };
 
-  const requiredQuestions = Math.max(1, core.numberOfPuzzles);
-  const questionsPerPage = Math.max(1, core.questionsPerPage);
-  const pageCount = Math.max(1, Math.ceil(requiredQuestions / questionsPerPage));
+  const themeCount = Math.max(1, core.numberOfPuzzles);
+  const questionsPerTheme = Math.max(1, core.questionsPerPage);
+  const requiredQuestions = themeCount * questionsPerTheme;
+  const chapterPageCounts = dividePreference.enabled
+    ? dividePreference.customPuzzleCounts &&
+      dividePreference.customPuzzleCounts.length === dividePreference.chapterCount
+      ? dividePreference.customPuzzleCounts
+      : evenChapterPuzzleCounts(themeCount, dividePreference.chapterCount)
+    : [themeCount];
+  const pageCount = Math.max(...chapterPageCounts);
   const requiredSuggestions =
     requiredQuestions * Math.max(2, core.suggestionsPerQuestion);
   const requiredAnswers = requiredQuestions;
@@ -98,6 +123,8 @@ function useTriviaDoc() {
     core,
     typography,
     colors,
+    themeCount,
+    questionsPerTheme,
     patchCore,
     patchTypography,
     patchColors,
@@ -114,6 +141,8 @@ function useTriviaDoc() {
     solutionColumns,
     answersPerPage,
     solutionPageCount,
+    chapterPageCounts,
+    totalPageCount: themeCount,
   };
 }
 
@@ -140,10 +169,15 @@ export function TriviaPuzzleSettingsPanel({ onSave }: { onSave?: () => void }) {
     core,
     typography,
     colors,
+    themeCount,
     patchCore,
     patchTypography,
     patchColors,
     requiredQuestions,
+    requiredSuggestions,
+    pageCount,
+    chapterPageCounts,
+    totalPageCount,
     suggestionLines,
     answersPerColumn,
     solutionColumns,
@@ -174,7 +208,7 @@ export function TriviaPuzzleSettingsPanel({ onSave }: { onSave?: () => void }) {
         <Label className="text-sm font-medium">Quantity</Label>
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1">
-            <Label className="text-xs text-gray-500">Total Number of Questions</Label>
+            <Label className="text-xs text-gray-500">Total Number of Puzzles / Themes</Label>
             <IntegerInput
               value={core.numberOfPuzzles}
               onChange={(v) => patchCore({ numberOfPuzzles: v })}
@@ -193,11 +227,11 @@ export function TriviaPuzzleSettingsPanel({ onSave }: { onSave?: () => void }) {
           </div>
         </div>
         <DivideListsIntoChaptersControl
-          numberOfPuzzles={core.numberOfPuzzles}
+          numberOfPuzzles={themeCount}
           puzzlesStartingNumber={core.puzzlesStartingNumber}
         />
         <div className="space-y-1">
-          <Label className="text-xs text-gray-500">Questions Per Page</Label>
+          <Label className="text-xs text-gray-500">Questions Per Puzzle / Theme</Label>
           <IntegerInput
             value={core.questionsPerPage}
             onChange={(v) => patchCore({ questionsPerPage: v })}
@@ -205,23 +239,13 @@ export function TriviaPuzzleSettingsPanel({ onSave }: { onSave?: () => void }) {
             max={20}
           />
           <p className="text-[11px] text-gray-500">
-            {Math.max(
-              1,
-              Math.ceil(
-                Math.max(1, core.numberOfPuzzles) / Math.max(1, core.questionsPerPage)
-              )
-            )}{' '}
-            page
-            {Math.ceil(
-              Math.max(1, core.numberOfPuzzles) / Math.max(1, core.questionsPerPage)
-            ) === 1
-              ? ''
-              : 's'}{' '}
-            will be created
+            {chapterPageCounts.length > 1
+              ? `${pageCount} page${pageCount === 1 ? '' : 's'} per chapter (${totalPageCount} total)`
+              : `${pageCount} page${pageCount === 1 ? '' : 's'} will be created`}
           </p>
         </div>
         <div className="space-y-1">
-          <Label className="text-xs text-gray-500">Suggestions Per Trivia</Label>
+          <Label className="text-xs text-gray-500">Suggestions Per Question</Label>
           <IntegerInput
             value={core.suggestionsPerQuestion}
             onChange={handleSuggestionsPerChange}
@@ -229,7 +253,8 @@ export function TriviaPuzzleSettingsPanel({ onSave }: { onSave?: () => void }) {
             max={8}
           />
           <p className="text-[11px] text-gray-500">
-            Need {requiredQuestions * core.suggestionsPerQuestion} suggestions total.
+            Need {requiredSuggestions} suggestions total ({requiredQuestions} questions ×{' '}
+            {core.suggestionsPerQuestion} options).
             Extra suggestions are dropped when lowering this (answers are kept and
             reshuffled).
           </p>
@@ -381,6 +406,15 @@ export function TriviaPuzzleSettingsPanel({ onSave }: { onSave?: () => void }) {
           step={1}
           format="pt"
         />
+        <SliderField
+          label="Space Between Columns"
+          value={typography.triviaSolutionColumnSpaceBetween}
+          onValueChange={(v) => patchTypography({ triviaSolutionColumnSpaceBetween: v })}
+          min={0}
+          max={72}
+          step={1}
+          format="pt"
+        />
         <p className="text-[11px] text-gray-500">
           Solutions use numbered answer tables in 1–4 columns. The page
           auto-scales so rows stay inside the safe margin.
@@ -441,6 +475,7 @@ export function TriviaWordsSettingsPanel({ onSave }: { onSave?: () => void }) {
   const {
     core,
     patchCore,
+    themeCount,
     requiredQuestions,
     requiredSuggestions,
     requiredAnswers,
@@ -464,8 +499,8 @@ export function TriviaWordsSettingsPanel({ onSave }: { onSave?: () => void }) {
       <PanelHeader title="Questions & Answers" onSave={onSave} />
 
       <p className="text-xs text-gray-500">
-        Need {requiredQuestions} questions ({pageCount} page
-        {pageCount === 1 ? '' : 's'} × {core.questionsPerPage} per page),{' '}
+        Need {requiredQuestions} questions ({themeCount} theme
+        {themeCount === 1 ? '' : 's'} × {core.questionsPerPage} questions each),{' '}
         {requiredSuggestions} suggestions ({requiredQuestions} ×{' '}
         {core.suggestionsPerQuestion}), and {requiredAnswers} answers.
       </p>
@@ -484,7 +519,7 @@ export function TriviaWordsSettingsPanel({ onSave }: { onSave?: () => void }) {
           }}
         />
         <p className="text-xs text-gray-500">
-          {questionLines.length} / {requiredQuestions} questions
+            {questionLines.length} / {requiredQuestions} questions
         </p>
         {missingQuestions > 0 && (
           <p className="text-sm font-medium text-rose-700">

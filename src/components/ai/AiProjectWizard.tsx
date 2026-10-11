@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Sparkles } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Loader2, Paperclip, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -39,6 +39,23 @@ import {
 import { defaultAiTypeConfig, validateAiSetup } from '@/lib/ai/setup-helpers';
 import { isAbortError, runAiBookGeneration } from '@/lib/ai/run-ai-generation';
 import { buildAiGeneratedBundle, aiBundleToProjectFile } from '@/lib/ai/build-ai-project';
+import {
+  aiProjectSpecToSetup,
+  type AiProjectPlanSummary,
+  type AiProjectSpec,
+} from '@/lib/ai/project-spec';
+import {
+  contentPackForAiContext,
+  formatContentPackSummary,
+  parseContentPackFile,
+  type ContentPack,
+} from '@/lib/ai/content-pack';
+import {
+  isAbortError as isPackAbortError,
+  runContentPackImport,
+  type ContentPackAppActions,
+} from '@/lib/ai/run-content-pack-import';
+import { useOptionalAppBusy } from '@/lib/app-busy-context';
 
 export type AiWizardMode = 'project' | 'append' | 'current-document';
 
@@ -66,6 +83,7 @@ export function AiProjectWizard({
   defaultTitle = '',
 }: AiProjectWizardProps) {
   const app = useApp();
+  const appBusy = useOptionalAppBusy();
   const [step, setStep] = useState(0);
   const [bookTitle, setBookTitle] = useState('');
   const [subtitle, setSubtitle] = useState('');
@@ -82,6 +100,15 @@ export function AiProjectWizard({
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState<AiGenerationProgress | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** project mode: natural-language first, then optional form edit */
+  const [nlPhase, setNlPhase] = useState<'prompt' | 'plan' | 'form'>('prompt');
+  const [nlPrompt, setNlPrompt] = useState('');
+  const [nlPlanning, setNlPlanning] = useState(false);
+  const [nlSummary, setNlSummary] = useState<AiProjectPlanSummary | null>(null);
+  const [nlSpec, setNlSpec] = useState<AiProjectSpec | null>(null);
+  const [contentPack, setContentPack] = useState<ContentPack | null>(null);
+  const [contentPackNote, setContentPackNote] = useState('');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedList = useMemo(
     () => AI_SUPPORTED_PUZZLE_TYPES.map((t) => selected[t]).filter(Boolean) as AiPuzzleTypeConfig[],
@@ -109,6 +136,14 @@ export function AiProjectWizard({
     setFrontMatter(defaultAiFrontMatter());
     setMixedPerChapter(false);
     setChapterTopicsText('');
+    setNlPhase(mode === 'project' ? 'prompt' : 'form');
+    setNlPrompt('');
+    setNlPlanning(false);
+    setNlSummary(null);
+    setNlSpec(null);
+    setContentPack(null);
+    setContentPackNote('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
     if (mode === 'current-document' && lockedType) {
       const cfg = defaultAiTypeConfig(lockedType);
       if (typeof lockedCount === 'number' && lockedCount > 0) {
@@ -159,12 +194,180 @@ export function AiProjectWizard({
     frontMatter: isCurrentDoc ? defaultAiFrontMatter() : frontMatter,
     organization: !isCurrentDoc && mixedPerChapter ? 'by-chapter' : 'by-type',
     chapterTopics: !isCurrentDoc && mixedPerChapter ? chapterTopicsText : undefined,
+    solutionsPerPage: nlSpec?.solutions.perPage,
+    minimumFontSize: nlSpec?.typography.minimumFontSize,
+    funFactsPosition: nlSpec?.funFacts.position,
+    ensureFunFactPageVariable: nlSpec?.funFacts.enabled === true,
+    startPuzzleNumber: nlSpec?.startPuzzleNumber,
   });
+
+  const applySpecToForm = (spec: AiProjectSpec) => {
+    const setup = aiProjectSpecToSetup(spec);
+    setBookTitle(setup.bookTitle);
+    setSubtitle(setup.subtitle);
+    setDescription(setup.description);
+    setLanguage(setup.language || 'English');
+    setAudience(setup.audience || 'adults');
+    setFrontMatter(setup.frontMatter || defaultAiFrontMatter());
+    setMixedPerChapter(setup.organization === 'by-chapter');
+    setChapterTopicsText(setup.chapterTopics || '');
+    const next: Partial<Record<PuzzleModuleType, AiPuzzleTypeConfig>> = {};
+    for (const cfg of setup.puzzleTypes) {
+      next[cfg.type] = cfg;
+    }
+    setSelected(next);
+    setNlSpec(spec);
+  };
+
+  const handlePlanFromPrompt = async () => {
+    const prompt = nlPrompt.trim();
+    if (!prompt && !contentPack) {
+      toast.error('Describe the puzzle book you want to create, or upload a content file.');
+      return;
+    }
+    setNlPlanning(true);
+    try {
+      const response = await fetch('/api/ai/plan-project', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt:
+            prompt ||
+            `Build a puzzle book from the uploaded content pack “${contentPack?.sourceName || 'file'}”.`,
+          uploadedContentPack: contentPack ? contentPackForAiContext(contentPack) : undefined,
+        }),
+      });
+      const json = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        spec?: AiProjectSpec;
+        summary?: AiProjectPlanSummary;
+      };
+      if (!response.ok || !json.ok || !json.spec || !json.summary) {
+        toast.error(json.error || 'Could not understand that request.');
+        return;
+      }
+      setNlSpec(json.spec);
+      setNlSummary(json.summary);
+      applySpecToForm(json.spec);
+      setNlPhase('plan');
+    } catch {
+      toast.error('Could not reach the AI planner.');
+    } finally {
+      setNlPlanning(false);
+    }
+  };
+
+  const handleUploadContentPack = async (file: File | null | undefined) => {
+    if (!file || generating || nlPlanning) return;
+    const lower = file.name.toLowerCase();
+    if (!/\.(xlsx|xls|csv|txt)$/.test(lower)) {
+      toast.error('Please upload a .xlsx, .xls, .csv, or .txt file.');
+      return;
+    }
+    setNlPlanning(true);
+    try {
+      const pack = await parseContentPackFile(file);
+      setContentPack(pack);
+      setContentPackNote(formatContentPackSummary(pack).split('\n\nHow should')[0] || file.name);
+      if (!bookTitle.trim()) {
+        setBookTitle(file.name.replace(/\.[^.]+$/, ''));
+      }
+      toast.success(`Loaded ${file.name}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not read that file.');
+    } finally {
+      setNlPlanning(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const contentPackAppActions = (): ContentPackAppActions => ({
+    getDocumentPages: () => app.documentPages,
+    replaceDocumentPages: (pages, activeId) => app.replaceDocumentPages(pages, activeId),
+    setBookSettings: (patch) => app.setBookSettings({ ...app.bookSettings, ...patch }),
+    getBookSettings: () => ({ ...app.bookSettings }),
+    setProjectName: (name) => app.setProjectName(name),
+    setTitleWords: (next) => app.setTitleWords(next),
+    setActiveDocumentPageId: (id) => app.setActiveDocumentPageId(id),
+    setCrosswordSettings: (settings) => app.setCrosswordSettings(settings),
+    setGenericPuzzleSettings: (settings) => app.setGenericPuzzleSettings(settings),
+    updateWordSearchSettings: (patch, options) =>
+      app.updateWordSearchSettings(patch, { recordHistory: options?.recordHistory ?? false }),
+    regenerateWordSearchDocuments: (pages) => app.regenerateWordSearchDocuments(pages),
+    generatePuzzle: (options) => app.generatePuzzle(options),
+    pushEditHistory: () => app.pushEditHistory(),
+  });
+
+  const handleBuildFromContentPack = async () => {
+    if (!contentPack) {
+      toast.error('Upload a TXT / Excel content file first.');
+      return;
+    }
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setGenerating(true);
+    setProgress({
+      overallDone: 0,
+      overallTotal: 100,
+      byType: {},
+      statusMessage: 'Copying words, clues & fun facts into settings…',
+    });
+    appBusy.showBusy('Copying words, clues & fun facts…', 2, {
+      onCancel: () => {
+        controller.abort();
+        appBusy.updateBusy({ label: 'Cancelling…' });
+      },
+    });
+    try {
+      const result = await runContentPackImport({
+        pack: contentPack,
+        mode: 'rebuild',
+        app: contentPackAppActions(),
+        bookTitle: bookTitle.trim() || contentPack.sourceName.replace(/\.[^.]+$/, ''),
+        signal: controller.signal,
+        onProgress: (statusMessage, progressPct) => {
+          setProgress({
+            overallDone: progressPct ?? 0,
+            overallTotal: 100,
+            byType: {},
+            statusMessage,
+          });
+          appBusy.updateBusy({
+            label: statusMessage,
+            progress: progressPct,
+            onCancel: () => {
+              controller.abort();
+              appBusy.updateBusy({ label: 'Cancelling…' });
+            },
+          });
+        },
+        generate: true,
+      });
+      if (controller.signal.aborted) return;
+      if (!result.ok) {
+        toast.error(result.error || result.message);
+        return;
+      }
+      toast.success('Book built from your file. Review and edit before exporting.');
+      onComplete();
+      onClose();
+    } catch (err) {
+      if (isAbortError(err) || isPackAbortError(err) || controller.signal.aborted) return;
+      toast.error('Could not build the book from that file.');
+    } finally {
+      appBusy.hideBusy();
+      if (abortRef.current === controller) abortRef.current = null;
+      if (!controller.signal.aborted) setGenerating(false);
+    }
+  };
 
   const handleCancel = () => {
     abortRef.current?.abort();
     abortRef.current = null;
     setGenerating(false);
+    appBusy.hideBusy();
     onClose();
   };
 
@@ -181,8 +384,32 @@ export function AiProjectWizard({
     abortRef.current = controller;
     setGenerating(true);
     setProgress(null);
+    appBusy.showBusy('Generating your book…', 4, {
+      onCancel: () => {
+        controller.abort();
+        appBusy.updateBusy({ label: 'Cancelling…' });
+      },
+    });
     try {
-      const result = await runAiBookGeneration(setup, setProgress, controller.signal);
+      const result = await runAiBookGeneration(
+        setup,
+        (next) => {
+          setProgress(next);
+          const pct =
+            next.overallTotal > 0
+              ? Math.round((next.overallDone / next.overallTotal) * 100)
+              : undefined;
+          appBusy.updateBusy({
+            label: next.statusMessage || 'Generating…',
+            progress: pct,
+            onCancel: () => {
+              controller.abort();
+              appBusy.updateBusy({ label: 'Cancelling…' });
+            },
+          });
+        },
+        controller.signal
+      );
       if (controller.signal.aborted) return;
       if (!result.ok) {
         toast.error(result.error);
@@ -228,6 +455,7 @@ export function AiProjectWizard({
       if (isAbortError(err) || controller.signal.aborted) return;
       toast.error('AI generation could not be completed. Please try again.');
     } finally {
+      appBusy.hideBusy();
       if (abortRef.current === controller) abortRef.current = null;
       if (!controller.signal.aborted) setGenerating(false);
     }
@@ -305,6 +533,160 @@ export function AiProjectWizard({
               <Button type="button" variant="outline" onClick={handleCancel}>
                 Cancel
               </Button>
+            </div>
+          ) : mode === 'project' && nlPhase === 'prompt' ? (
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">Describe your puzzle book</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  GenPuzzle will interpret your request into chapters, puzzle types, and settings —
+                  then show a plan before generating. Or upload a TXT / Excel word list / content
+                  pack and build the book from that file.
+                </p>
+              </div>
+              <Textarea
+                value={nlPrompt}
+                onChange={(e) => setNlPrompt(e.target.value)}
+                placeholder='Example: Make a sea puzzle book with 6 chapters. Add Word Search, Crossword and Mazes to every chapter. Create 10 puzzles of each type per chapter. Use 4 solutions per page. Make sure all fonts are at least 18pt. Add a unique fun fact under the title on every puzzle page.'
+                className="min-h-[140px] text-sm"
+              />
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv"
+                className="hidden"
+                onChange={(e) => void handleUploadContentPack(e.target.files?.[0])}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={nlPlanning || generating}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Paperclip className="mr-2 h-4 w-4" />
+                  Upload TXT / Excel
+                </Button>
+                {contentPack ? (
+                  <span className="text-xs text-violet-700">
+                    Loaded: {contentPack.sourceName}
+                  </span>
+                ) : null}
+              </div>
+              {contentPackNote ? (
+                <div className="rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs text-slate-700 whitespace-pre-wrap">
+                  {contentPackNote}
+                </div>
+              ) : null}
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  onClick={() => void handlePlanFromPrompt()}
+                  disabled={nlPlanning || (!nlPrompt.trim() && !contentPack)}
+                >
+                  {nlPlanning ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="mr-2 h-4 w-4" />
+                  )}
+                  Create plan
+                </Button>
+                {contentPack ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={nlPlanning || generating}
+                    onClick={() => void handleBuildFromContentPack()}
+                  >
+                    Build book from file
+                  </Button>
+                ) : null}
+                <Button type="button" variant="outline" onClick={() => setNlPhase('form')}>
+                  Use form instead
+                </Button>
+              </div>
+            </div>
+          ) : mode === 'project' && nlPhase === 'plan' && nlSummary ? (
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">AI understood your request</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Review the plan. Nothing is generated until you confirm.
+                </p>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-800 space-y-2">
+                <p>
+                  <span className="font-semibold">Theme:</span> {nlSummary.theme}
+                </p>
+                <p>
+                  <span className="font-semibold">Book title:</span> {nlSummary.bookTitle}
+                </p>
+                <p>
+                  <span className="font-semibold">Chapters:</span> {nlSummary.chapters}
+                  {nlSummary.chapterTitles.length
+                    ? ` — ${nlSummary.chapterTitles.join(', ')}`
+                    : ''}
+                </p>
+                <div>
+                  <p className="font-semibold">Puzzle types:</p>
+                  <ul className="mt-1 list-disc pl-5">
+                    {nlSummary.puzzleTypes.map((pt) => (
+                      <li key={pt.type}>
+                        {pt.label} — {pt.countPerChapter}/chapter ({pt.total} total)
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <p>
+                  <span className="font-semibold">Total puzzles:</span> {nlSummary.totalPuzzles}
+                </p>
+                <p>
+                  <span className="font-semibold">Solutions:</span> {nlSummary.solutionsPerPage} per
+                  page
+                </p>
+                <p>
+                  <span className="font-semibold">Minimum font:</span>{' '}
+                  {nlSummary.minimumFontSize}pt
+                </p>
+                <p>
+                  <span className="font-semibold">Fun facts:</span>{' '}
+                  {nlSummary.funFacts.enabled
+                    ? `Yes (${nlSummary.funFacts.position.replace(/_/g, ' ')})`
+                    : 'No'}
+                </p>
+                {nlSummary.warnings.length > 0 ? (
+                  <ul className="mt-2 list-disc pl-5 text-amber-700">
+                    {nlSummary.warnings.map((w) => (
+                      <li key={w}>{w}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  onClick={() => {
+                    if (nlSpec) applySpecToForm(nlSpec);
+                    void handleGenerate();
+                  }}
+                >
+                  Create Project
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    if (nlSpec) applySpecToForm(nlSpec);
+                    setNlPhase('form');
+                    setStep(0);
+                  }}
+                >
+                  Edit Plan
+                </Button>
+                <Button type="button" variant="ghost" onClick={() => setNlPhase('prompt')}>
+                  Back
+                </Button>
+              </div>
             </div>
           ) : step === 0 ? (
             <div className="space-y-4">
@@ -937,14 +1319,24 @@ export function AiProjectWizard({
           )}
         </div>
 
-        {!generating ? (
+        {!generating && nlPhase === 'form' ? (
           <div className="flex items-center justify-between border-t border-slate-200 px-6 py-4">
             <Button
               variant="outline"
-              onClick={() => (step === 0 ? onClose() : setStep((s) => s - 1))}
+              onClick={() => {
+                if (step === 0 && mode === 'project') {
+                  setNlPhase('prompt');
+                  return;
+                }
+                if (step === 0) {
+                  onClose();
+                  return;
+                }
+                setStep((s) => s - 1);
+              }}
             >
               <ArrowLeft className="mr-2 h-4 w-4" />
-              {step === 0 ? 'Cancel' : 'Back'}
+              {step === 0 ? (mode === 'project' ? 'Back to describe' : 'Cancel') : 'Back'}
             </Button>
             {step < lastStep ? (
               <Button

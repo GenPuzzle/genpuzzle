@@ -1,10 +1,20 @@
 import { DotToDotPuzzle, Position } from './types';
+import {
+  isLetterGrapheme,
+  localeUpperCase,
+  normalizePuzzleText,
+  segmentGraphemes,
+} from '../unicode-text';
 
-export function generateDotToDot(words: string[]): DotToDotPuzzle {
+export function generateDotToDot(words: string[], language?: string): DotToDotPuzzle {
   const cleanWords = words
-    .map(w => w.trim().toUpperCase().replace(/[^A-Z]/g, ''))
-    .filter(w => w.length > 0)
-    .slice(0, 26); // Max 26 for A-Z
+    .map((w) =>
+      segmentGraphemes(localeUpperCase(normalizePuzzleText(w.trim()), language))
+        .filter(isLetterGrapheme)
+        .join('')
+    )
+    .filter((w) => w.length > 0)
+    .slice(0, 26); // Max 26 points for A–Z style sequences
 
   if (cleanWords.length === 0) {
     return { type: 'dot-to-dot', points: [], labels: [], connections: [] };
@@ -26,7 +36,7 @@ export function generateDotToDot(words: string[]): DotToDotPuzzle {
     const y = Math.floor((row + 0.5) * 10) + Math.floor(Math.random() * 3) - 1;
 
     points.push({ row: y, col: x });
-    labels.push(cleanWords[i]);
+    labels.push(cleanWords[i]!);
   }
 
   // Create connections (each letter connects to next in sequence)

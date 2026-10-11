@@ -1,5 +1,33 @@
 import type { CrosswordPuzzle, CrosswordCell } from './types';
 import { cleanCrosswordAnswer } from '../crossword-settings';
+import { localeUpperCase, normalizePuzzleText, segmentGraphemes } from '../unicode-text';
+
+/**
+ * Uppercase a stored answer for grid comparison without dropping accents.
+ * The German locale path is the only one that keeps ß as a single letter, and it
+ * matches locale-neutral uppercasing for every other Latin letter.
+ */
+function upperAnswerForGrid(answer: string): string {
+  return localeUpperCase(normalizePuzzleText(answer), 'de');
+}
+
+const wordCellsCache = new Map<string, string[]>();
+
+/** Cells a word occupies — one grapheme per cell, so é never splits across two cells. */
+function wordCells(word: string): string[] {
+  let cells = wordCellsCache.get(word);
+  if (!cells) {
+    cells = segmentGraphemes(word);
+    if (wordCellsCache.size > 5000) wordCellsCache.clear();
+    wordCellsCache.set(word, cells);
+  }
+  return cells;
+}
+
+/** Cell count of a word (grapheme count, not code-unit length). */
+function cellCount(word: string): number {
+  return wordCells(word).length;
+}
 
 export const MIN_CROSSWORD_ENTRY_LENGTH = 3;
 export const MAX_CROSSWORD_GENERATION_ATTEMPTS = 100;
@@ -226,7 +254,7 @@ function answersAreConnected(placed: PlacedWord[]): boolean {
   const cells = new Map<string, number[]>();
   placed.forEach((word, index) => {
     const { dr, dc } = delta(word.direction);
-    for (let i = 0; i < word.word.length; i++) {
+    for (let i = 0; i < cellCount(word.word); i++) {
       const key = `${word.row + dr * i},${word.col + dc * i}`;
       const list = cells.get(key) ?? [];
       list.push(index);
@@ -246,12 +274,12 @@ function intersectionCountForWord(grid: LogicalGrid, word: PlacedWord, others: P
   for (const other of others) {
     if (other === word) continue;
     const od = delta(other.direction);
-    for (let i = 0; i < other.word.length; i++) {
+    for (let i = 0; i < cellCount(other.word); i++) {
       otherCells.add(`${other.row + od.dr * i},${other.col + od.dc * i}`);
     }
   }
   let n = 0;
-  for (let i = 0; i < word.word.length; i++) {
+  for (let i = 0; i < cellCount(word.word); i++) {
     if (otherCells.has(`${word.row + dr * i},${word.col + dc * i}`)) n += 1;
   }
   return n;
@@ -261,10 +289,11 @@ function letterConflicts(grid: LogicalGrid, placed: PlacedWord[]): string[] {
   const conflicts: string[] = [];
   for (const word of placed) {
     const { dr, dc } = delta(word.direction);
-    for (let i = 0; i < word.word.length; i++) {
+    const cells = wordCells(word.word);
+    for (let i = 0; i < cells.length; i++) {
       const r = word.row + dr * i;
       const c = word.col + dc * i;
-      const expected = word.word[i];
+      const expected = cells[i];
       const actual = letterAt(grid, r, c);
       if (actual !== expected) {
         conflicts.push(`${word.word}@${r},${c} expected ${expected} got ${actual || 'empty'}`);
@@ -331,8 +360,9 @@ export function canPlaceWord(
   const cols = grid[0].length;
 
   if (row < 0 || col < 0) return { ok: false };
-  const endR = row + dr * (word.length - 1);
-  const endC = col + dc * (word.length - 1);
+  const cells = wordCells(word);
+  const endR = row + dr * (cells.length - 1);
+  const endC = col + dc * (cells.length - 1);
   if (endR >= rows || endC >= cols) return { ok: false };
 
   // Word boundaries: cells immediately before/after must be unused or outside.
@@ -342,11 +372,11 @@ export function canPlaceWord(
   let intersections = 0;
   let newCells = 0;
 
-  for (let i = 0; i < word.length; i++) {
+  for (let i = 0; i < cells.length; i++) {
     const r = row + dr * i;
     const c = col + dc * i;
     const existing = grid[r][c];
-    const nextCh = word[i];
+    const nextCh = cells[i];
 
     if (existing) {
       if (existing !== nextCh) return { ok: false };
@@ -375,8 +405,9 @@ function placeWordOnGrid(
   direction: Direction
 ): void {
   const { dr, dc } = delta(direction);
-  for (let i = 0; i < word.length; i++) {
-    grid[row + dr * i][col + dc * i] = word[i];
+  const cells = wordCells(word);
+  for (let i = 0; i < cells.length; i++) {
+    grid[row + dr * i][col + dc * i] = cells[i];
   }
 }
 
@@ -384,8 +415,8 @@ function futureCrossingPotential(word: string, remaining: string[]): number {
   if (remaining.length === 0) return 0;
   let n = 0;
   for (const other of remaining) {
-    for (let i = 0; i < word.length; i++) {
-      if (other.includes(word[i]!)) {
+    for (const cell of wordCells(word)) {
+      if (other.includes(cell)) {
         n += 1;
         break;
       }
@@ -411,7 +442,8 @@ function scorePlacement(
   let maxR = before?.maxR ?? row;
   let minC = before?.minC ?? col;
   let maxC = before?.maxC ?? col;
-  for (let i = 0; i < word.length; i++) {
+  const cells = cellCount(word);
+  for (let i = 0; i < cells; i++) {
     const r = row + dr * i;
     const c = col + dc * i;
     if (r < minR) minR = r;
@@ -422,8 +454,8 @@ function scorePlacement(
   const areaAfter = (maxR - minR + 1) * (maxC - minC + 1);
   const expansion = areaAfter - (before?.area ?? 0);
   const com = centerOfMass(grid);
-  const midR = row + (dr * (word.length - 1)) / 2;
-  const midC = col + (dc * (word.length - 1)) / 2;
+  const midR = row + (dr * (cells - 1)) / 2;
+  const midC = col + (dc * (cells - 1)) / 2;
   const dist = Math.hypot(midR - com.r, midC - com.c);
   const bboxCenterR = (minR + maxR) / 2;
   const bboxCenterC = (minC + maxC) / 2;
@@ -444,18 +476,18 @@ function connectivityPotential(word: string, others: string[]): number {
   const letters = new Map<string, number>();
   for (const other of others) {
     if (other === word) continue;
-    for (const ch of other) {
+    for (const ch of wordCells(other)) {
       letters.set(ch, (letters.get(ch) ?? 0) + 1);
     }
   }
   let score = 0;
   const seen = new Set<string>();
-  for (const ch of word) {
+  for (const ch of wordCells(word)) {
     if (seen.has(ch)) continue;
     seen.add(ch);
     score += letters.get(ch) ?? 0;
   }
-  return score + word.length * 2;
+  return score + cellCount(word) * 2;
 }
 
 /**
@@ -484,8 +516,8 @@ export function validateCrossword(
   const detected = detectCrosswordEntries(logical);
   const detectedAcross = detected.filter((e) => e.direction === 'across').map((e) => e.word);
   const detectedDown = detected.filter((e) => e.direction === 'down').map((e) => e.word);
-  const shortEntries = detected.filter((e) => e.word.length < MIN_CROSSWORD_ENTRY_LENGTH).map(entryKey);
-  const validDetected = detected.filter((e) => e.word.length >= MIN_CROSSWORD_ENTRY_LENGTH);
+  const shortEntries = detected.filter((e) => cellCount(e.word) < MIN_CROSSWORD_ENTRY_LENGTH).map(entryKey);
+  const validDetected = detected.filter((e) => cellCount(e.word) >= MIN_CROSSWORD_ENTRY_LENGTH);
 
   if (shortEntries.length > 0) {
     errors.push(`short entries: ${shortEntries.join('; ')}`);
@@ -620,7 +652,7 @@ export function validateCrosswordPuzzle(puzzle: CrosswordPuzzle): CrosswordValid
     const start = starts.get(String(clue.number));
     if (!start) continue;
     placed.push({
-      word: clue.answer.toUpperCase(),
+      word: upperAnswerForGrid(clue.answer),
       clue: clue.clue,
       row: start.r,
       col: start.c,
@@ -631,7 +663,7 @@ export function validateCrosswordPuzzle(puzzle: CrosswordPuzzle): CrosswordValid
     const start = starts.get(String(clue.number));
     if (!start) continue;
     placed.push({
-      word: clue.answer.toUpperCase(),
+      word: upperAnswerForGrid(clue.answer),
       clue: clue.clue,
       row: start.r,
       col: start.c,
@@ -647,7 +679,7 @@ function numberGridFromGeometry(
   logical: LogicalGrid
 ): Map<string, number> {
   const detected = detectCrosswordEntries(logical).filter(
-    (e) => e.word.length >= MIN_CROSSWORD_ENTRY_LENGTH
+    (e) => cellCount(e.word) >= MIN_CROSSWORD_ENTRY_LENGTH
   );
 
   // Build a set of cells that start an Across word vs only a Down word.
@@ -760,8 +792,9 @@ function findCandidates(
     for (let c = 0; c < cols; c++) {
       const ch = grid[r][c];
       if (!ch) continue;
-      for (let i = 0; i < word.length; i++) {
-        if (word[i] !== ch) continue;
+      const cells = wordCells(word);
+      for (let i = 0; i < cells.length; i++) {
+        if (cells[i] !== ch) continue;
         consider(r, c - i, 'across');
         consider(r - i, c, 'down');
       }
@@ -793,10 +826,10 @@ function firstWordCandidates(
         const row =
           direction === 'across'
             ? centerR + or
-            : centerR - Math.floor(word.length / 2) + or;
+            : centerR - Math.floor(cellCount(word) / 2) + or;
         const col =
           direction === 'across'
-            ? centerC - Math.floor(word.length / 2) + oc
+            ? centerC - Math.floor(cellCount(word) / 2) + oc
             : centerC + oc;
         const key = `${row},${col},${direction}`;
         if (seen.has(key)) continue;
@@ -908,7 +941,7 @@ function orderWords(prepared: PreparedWord[], attempt: number): PreparedWord[] {
       a.word,
       prepared.map((p) => p.word)
     );
-    return cb - ca || b.word.length - a.word.length;
+    return cb - ca || cellCount(b.word) - cellCount(a.word);
   });
 
   if (ranked.length <= 1) return ranked;
@@ -1050,6 +1083,8 @@ export interface GenerateCrosswordOptions {
    */
   exactClueCount?: boolean;
   language?: string;
+  /** Soft wall-clock budget; stop searching and return the best layout found. */
+  timeBudgetMs?: number;
 }
 
 export function generateCrossword(
@@ -1073,23 +1108,27 @@ export function generateCrossword(
   const completeLayoutsNeeded = exactClueCount ? 4 : 1;
   const maxFitLength = Math.max(cols, rows);
   const requestedClueCount = wordClues.length;
+  const deadline =
+    options.timeBudgetMs != null && options.timeBudgetMs > 0
+      ? Date.now() + options.timeBudgetMs
+      : null;
 
   const prepared: PreparedWord[] = wordClues
     .map((wc, id) => {
       let word = cleanCrosswordAnswer(wc.word, allowNumbers, options.language);
-      if (maxAnswerLength > 0 && word.length > maxAnswerLength) {
-        word = word.slice(0, maxAnswerLength);
+      if (maxAnswerLength > 0 && cellCount(word) > maxAnswerLength) {
+        word = wordCells(word).slice(0, maxAnswerLength).join('');
       }
-      if (word.length > maxFitLength) {
+      if (cellCount(word) > maxFitLength) {
         return null;
       }
-      return {
+    return {
         id,
         word,
         clue: (wc.clue || '').trim() || `Clue for ${wc.word}`,
       };
     })
-    .filter((w): w is PreparedWord => w !== null && w.word.length >= MIN_CROSSWORD_ENTRY_LENGTH);
+    .filter((w): w is PreparedWord => w !== null && cellCount(w.word) >= MIN_CROSSWORD_ENTRY_LENGTH);
 
   if (prepared.length === 0) {
     return emptyPuzzle(rows, cols);
@@ -1109,6 +1148,7 @@ export function generateCrossword(
   let placementLoopIterations = 0;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (deadline != null && Date.now() > deadline) break;
     const ordered = orderWords(prepared, attempt);
     const { grid, placed, failed, nodes } = generateOnce(ordered, rows, cols, attempt, maxNodes);
     placementLoopIterations += ordered.length;

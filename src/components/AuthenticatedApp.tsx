@@ -14,7 +14,7 @@ import { useAuth } from '@/lib/auth-context';
 export function AuthenticatedApp({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { session, isReady, inEditor, enterEditor } = useAuth();
-  const isStandaloneTool = pathname.startsWith('/app/other-tools');
+  const isStandaloneTool = pathname.startsWith('/app/other-tools') || pathname.startsWith('/app/tools');
 
   useEffect(() => {
     if (isReady && session && isStandaloneTool && !inEditor) {

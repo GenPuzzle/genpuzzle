@@ -7,10 +7,12 @@ import {
   WordSearchSettings,
   Difficulty,
   getDefaultWordSearchSettings,
+  normalizeAnswersPerPage,
 } from './puzzles';
-import type { DocumentPage } from './document-model';
+import type { DocumentPage, PuzzleModuleSettings } from './document-model';
 import type { CrosswordSettings } from './crossword-settings';
 import type { GenericPuzzleSettings } from './generic-puzzle-settings';
+import { stripMazeStartEndImagePayloads } from './maze-start-end-images';
 
 export const SETTINGS_STORAGE_KEY = 'puzzle-book-maker-settings-v1';
 export const SETTINGS_TAB_STORAGE_KEY = 'puzzle-book-maker-active-settings-tab';
@@ -52,11 +54,21 @@ function deepMergeWordSearchSettings(
   base: WordSearchSettings,
   patch?: Partial<WordSearchSettings>
 ): WordSearchSettings {
-  if (!patch) return base;
+  if (!patch) {
+    return {
+      ...base,
+      bookCanvas: {
+        ...base.bookCanvas,
+        answersPerPage: normalizeAnswersPerPage(base.bookCanvas.answersPerPage),
+      },
+    };
+  }
+  const bookCanvas = { ...base.bookCanvas, ...patch.bookCanvas };
+  bookCanvas.answersPerPage = normalizeAnswersPerPage(bookCanvas.answersPerPage);
   return {
     ...base,
     ...patch,
-    bookCanvas: { ...base.bookCanvas, ...patch.bookCanvas },
+    bookCanvas,
     core: { ...base.core, ...patch.core },
     typography: { ...base.typography, ...patch.typography },
     wordList: { ...base.wordList, ...patch.wordList },
@@ -121,12 +133,44 @@ export function loadPersistedSettings(defaults: PersistedAppSettings): Persisted
   }
 }
 
+function stripHeavyMazeAssetsFromSettings(settings: PersistedAppSettings): PersistedAppSettings {
+  if (!settings.documentPages?.length) return settings;
+  return {
+    ...settings,
+    documentPages: settings.documentPages.map((page) => {
+      const pageSettings = page.settings as PuzzleModuleSettings;
+      const gp = pageSettings.genericPuzzleSettings;
+      if (!gp?.core.mazeStartEndImages) return page;
+      return {
+        ...page,
+        settings: {
+          ...pageSettings,
+          genericPuzzleSettings: {
+            ...gp,
+            core: {
+              ...gp.core,
+              mazeStartEndImages: stripMazeStartEndImagePayloads(gp.core.mazeStartEndImages),
+            },
+          },
+        } as PuzzleModuleSettings,
+      };
+    }),
+  };
+}
+
 export function savePersistedSettings(settings: PersistedAppSettings): void {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
   } catch (e) {
-    console.warn('[settings-persistence] Failed to save settings:', e);
+    try {
+      window.localStorage.setItem(
+        SETTINGS_STORAGE_KEY,
+        JSON.stringify(stripHeavyMazeAssetsFromSettings(settings))
+      );
+    } catch (retry) {
+      console.warn('[settings-persistence] Failed to save settings:', retry ?? e);
+    }
   }
 }
 

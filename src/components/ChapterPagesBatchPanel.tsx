@@ -67,12 +67,236 @@ function mergeChapterPageStyle(
   return normalizeChapterPageStyle({ ...initial, ...stored });
 }
 
+type ChapterDataType =
+  | 'word-search'
+  | 'crossword'
+  | 'trivia'
+  | 'sudoku'
+  | 'maze'
+  | 'cryptogram'
+  | 'word-scramble'
+  | 'murdoku';
+type EditScope = 'chapter' | 'all';
+
+const CHAPTER_DATA_TYPE_LABELS: Record<ChapterDataType, string> = {
+  'word-search': 'Word Search',
+  crossword: 'Crossword',
+  trivia: 'Trivia',
+  sudoku: 'Sudoku',
+  maze: 'Maze',
+  cryptogram: 'Cryptogram',
+  'word-scramble': 'Word Scramble',
+  murdoku: 'Murdoku',
+};
+
+function ChapterPuzzleDataEditor({
+  documentPages,
+  updateDocumentPage,
+  applyWordSearchChapterChanges,
+}: {
+  documentPages: import('@/lib/document-model').DocumentPage[];
+  updateDocumentPage: (id: string, updates: Partial<import('@/lib/document-model').DocumentPage>) => void;
+  applyWordSearchChapterChanges: (pages: import('@/lib/document-model').DocumentPage[]) => Promise<void>;
+}) {
+  const chapterDocs = documentPages.filter(
+    (page) => isPuzzleModuleType(page.moduleType) &&
+      typeof (page.settings as { chapterIndex?: number }).chapterIndex === 'number'
+  );
+  const chapterCount = chapterDocs.reduce(
+    (max, page) => Math.max(max, (page.settings as { chapterIndex: number }).chapterIndex + 1),
+    0
+  );
+  const [open, setOpen] = useState(false);
+  const [scope, setScope] = useState<EditScope>('chapter');
+  const [chapterIndex, setChapterIndex] = useState(0);
+  const [dataType, setDataType] = useState<ChapterDataType | ''>('');
+  const [draft, setDraft] = useState<Record<string, string>>({});
+
+  const availableTypes = Array.from(
+    new Set(chapterDocs.map((page) => page.moduleType as ChapterDataType))
+  ).filter((type): type is ChapterDataType => type in CHAPTER_DATA_TYPE_LABELS);
+
+  useEffect(() => {
+    if (!dataType || !availableTypes.includes(dataType)) {
+      setDataType(availableTypes[0] ?? '');
+    }
+  }, [availableTypes.join('|'), dataType]);
+
+  const selectedPages = chapterDocs.filter(
+    (page) =>
+      (scope === 'all' ||
+        (page.settings as { chapterIndex?: number }).chapterIndex === chapterIndex) &&
+      page.moduleType === dataType
+  );
+  const selectedPage = selectedPages[0];
+
+  const readPageFields = (page: (typeof chapterDocs)[number]) => {
+    const settings = page.settings as any;
+    if (dataType === 'word-search') {
+      return {
+        title: settings.wordSearchSettings?.typography?.titleText || settings.titleWords?.title || '',
+        words: (settings.titleWords?.words ?? []).join('\n'),
+      };
+    }
+    if (dataType === 'crossword') {
+      return {
+        title: settings.crosswordSettings?.typography?.titleText ?? '',
+        answers: settings.crosswordSettings?.core?.answersText ?? '',
+        clues: settings.crosswordSettings?.core?.cluesText ?? '',
+      };
+    }
+    if (dataType === 'trivia') {
+      const generic = settings.genericPuzzleSettings;
+      return {
+        titles: generic?.typography?.differentTitles || generic?.typography?.titleText || '',
+        questions: generic?.core?.questionsText ?? '',
+        suggestions: generic?.core?.suggestionsText ?? '',
+        answers: generic?.core?.answersText ?? '',
+      };
+    }
+    if (dataType === 'cryptogram') {
+      return { phrases: settings.genericPuzzleSettings?.core?.cryptogramPhrases ?? '' };
+    }
+    if (dataType === 'word-scramble') {
+      return { words: settings.genericPuzzleSettings?.core?.scrambleWords ?? '' };
+    }
+    return {};
+  };
+
+  useEffect(() => {
+    if (selectedPages.length === 0 || !dataType) {
+      setDraft({});
+      return;
+    }
+    const pages = scope === 'all' ? selectedPages : [selectedPages[0]];
+    const fieldKeys = Object.keys(readPageFields(pages[0]));
+    const next: Record<string, string> = {};
+    for (const key of fieldKeys) {
+      next[key] = pages.map((page) => readPageFields(page)[key] ?? '').filter(Boolean).join('\n');
+    }
+    setDraft(next);
+  }, [selectedPages.map((page) => page.id).join('|'), dataType, chapterIndex, scope]);
+
+  const saveDraft = async () => {
+    if (!selectedPage || !dataType) return;
+    const pages = scope === 'all' ? selectedPages : [selectedPage];
+    const splitLines = (value: string, count: number) => {
+      const lines = value.split(/\r?\n/);
+      const size = Math.ceil(lines.length / Math.max(1, count));
+      return Array.from({ length: count }, (_, index) => lines.slice(index * size, (index + 1) * size).join('\n'));
+    };
+    const chunksByField: Record<string, string[]> = {};
+    for (const key of Object.keys(draft)) chunksByField[key] = splitLines(draft[key] ?? '', pages.length);
+    const updatedPages = pages.map((page, index) => {
+      const settings = structuredClone(page.settings) as any;
+      const value = (key: string) => chunksByField[key]?.[index] ?? '';
+      if (dataType === 'word-search') {
+        settings.wordSearchSettings = {
+          ...settings.wordSearchSettings,
+          typography: {
+            ...settings.wordSearchSettings?.typography,
+            selectTitleOption: 'custom',
+            titleText: value('title'),
+          },
+        };
+        settings.titleWords = {
+          ...settings.titleWords,
+          words: value('words').split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
+        };
+      } else if (dataType === 'crossword') {
+        settings.crosswordSettings = { ...settings.crosswordSettings, typography: { ...settings.crosswordSettings.typography, titleText: value('title') }, core: { ...settings.crosswordSettings.core, answersText: value('answers'), cluesText: value('clues') } };
+      } else if (dataType === 'trivia') {
+        settings.genericPuzzleSettings = { ...settings.genericPuzzleSettings, typography: { ...settings.genericPuzzleSettings.typography, selectTitleOption: 'custom_per_puzzle', differentTitles: value('titles') }, core: { ...settings.genericPuzzleSettings.core, questionsText: value('questions'), suggestionsText: value('suggestions'), answersText: value('answers') } };
+      } else if (dataType === 'cryptogram') {
+        settings.genericPuzzleSettings = { ...settings.genericPuzzleSettings, core: { ...settings.genericPuzzleSettings.core, cryptogramPhrases: value('phrases') } };
+      } else if (dataType === 'word-scramble') {
+        settings.genericPuzzleSettings = { ...settings.genericPuzzleSettings, core: { ...settings.genericPuzzleSettings.core, scrambleWords: value('words') } };
+      }
+      return { ...page, settings };
+    });
+    updatedPages.forEach((page) => updateDocumentPage(page.id, { settings: page.settings }));
+    if (dataType === 'word-search') {
+      const originalWords = pages.map((page) => readPageFields(page).words ?? '').join('\n');
+      const updatedWords = updatedPages.map((page) => (page.settings as any).titleWords?.words?.join('\n') ?? '').join('\n');
+      if (originalWords !== updatedWords) {
+        await applyWordSearchChapterChanges(updatedPages);
+      }
+    }
+    setOpen(false);
+  };
+
+  const field = (key: string, label: string, rows = 6) => (
+    <div className="space-y-1">
+      <Label>{label}</Label>
+      <Textarea value={draft[key] ?? ''} onChange={(event) => setDraft((prev) => ({ ...prev, [key]: event.target.value }))} rows={rows} />
+    </div>
+  );
+
+  return (
+    <>
+      <Button type="button" variant="outline" className="w-full" disabled={chapterCount === 0} onClick={() => setOpen(true)}>
+        Edit puzzles data of the chapters
+      </Button>
+      {open && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Edit chapter puzzle data">
+          <div className="flex max-h-[90vh] w-full max-w-3xl flex-col gap-4 overflow-y-auto rounded-lg border border-slate-200 bg-white p-6 text-slate-900 shadow-2xl dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+            <div>
+              <h2 className="text-lg font-semibold">Edit chapter puzzle data</h2>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Edit the source data for one puzzle type in one chapter, then save.</p>
+            </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <Label>Edit scope</Label>
+            <Select value={scope} onValueChange={(value) => setScope(value as EditScope)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="chapter">One chapter</SelectItem>
+                <SelectItem value="all">All chapters</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label>Chapter</Label>
+            <Select value={String(chapterIndex)} onValueChange={(value) => setChapterIndex(Number(value))} disabled={scope === 'all'}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>{Array.from({ length: chapterCount }, (_, index) => <SelectItem key={index} value={String(index)}>Chapter {index + 1}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="col-span-2 space-y-1">
+            <Label>Puzzle type</Label>
+            <Select value={dataType} onValueChange={(value) => setDataType(value as ChapterDataType)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>{availableTypes.map((type) => <SelectItem key={type} value={type}>{CHAPTER_DATA_TYPE_LABELS[type]}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+        </div>
+        {!selectedPage && <p className="text-sm text-amber-600">This selection does not contain a {dataType || 'puzzle type'} document.</p>}
+        {selectedPage && dataType === 'word-search' && <>{field('title', 'Theme titles, one per line', 5)}{field('words', 'Word list, one word per line', 12)}</>}
+        {selectedPage && dataType === 'crossword' && <>{field('title', 'Theme title', 2)}{field('answers', 'Answers, one per line', 8)}{field('clues', 'Clues, one per line', 8)}</>}
+        {selectedPage && dataType === 'trivia' && <>{field('titles', 'Theme titles, one per line', 5)}{field('questions', 'Questions, one per line', 10)}{field('suggestions', 'Suggestions, one per line', 10)}{field('answers', 'Correct answers, one per line', 8)}</>}
+        {selectedPage && dataType === 'cryptogram' && field('phrases', 'Cryptogram phrases, one per line', 12)}
+        {selectedPage && dataType === 'word-scramble' && field('words', 'Scramble words, one per line', 12)}
+        {selectedPage && (dataType === 'maze' || dataType === 'murdoku') && <p className="text-sm text-slate-600">This puzzle type has no chapter text list to edit here. Use its document controls for generation settings.</p>}
+        {selectedPage && dataType === 'sudoku' && <p className="text-sm text-slate-600">Sudoku has no text question bank. Its chapter settings are available through the Sudoku document controls.</p>}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+              <Button type="button" onClick={() => void saveDraft()} disabled={!selectedPage || dataType === 'sudoku'}>
+                {dataType === 'word-search' ? 'Apply changes (regenerate if word lists changed)' : 'Apply changes'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 /**
  * Batch-create chapter title pages + shared layout/style editor.
  * Style edits apply to every existing chapter title page.
  */
 export function ChapterPagesBatchPanel() {
-  const { documentPages, wordSearchSettings, replaceDocumentPages, activeDocumentPageId } =
+  const { documentPages, wordSearchSettings, replaceDocumentPages, activeDocumentPageId, updateDocumentPage, applyWordSearchChapterChanges } =
     useApp();
   const { showBusy, hideBusy } = useOptionalAppBusy();
 
@@ -347,6 +571,12 @@ export function ChapterPagesBatchPanel() {
           {chapterCount > 0 ? ` · ${chapterCount} chapter page${chapterCount === 1 ? '' : 's'}` : ''}
         </p>
       )}
+
+      <ChapterPuzzleDataEditor
+        documentPages={documentPages}
+        updateDocumentPage={updateDocumentPage}
+        applyWordSearchChapterChanges={applyWordSearchChapterChanges}
+      />
 
       {/* Layout picker — 4 icon presets */}
       <div className="space-y-2">

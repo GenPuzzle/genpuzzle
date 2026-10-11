@@ -10,6 +10,7 @@ import { greyscaleToCss, INTERIOR_LIGHT_GREY_FILL } from './crossword-settings';
 import { findInteriorUnusedCells } from './puzzles/crossword';
 import type { CrosswordSettings } from './crossword-settings';
 import { cssPxToPoints } from './puzzle-layout';
+import { applyLetterCase, normalizePuzzleText } from './unicode-text';
 
 import { fitScale, type RectPt } from './generic-puzzle-page-layout';
 
@@ -89,10 +90,14 @@ export function emptySquareFill(squareColorRange: number): string {
   return `#${hex}${hex}${hex}`;
 }
 
-export function formatCrosswordLetter(letter: string, answerCase: CrosswordSettings['core']['answerCase']): string {
-  if (answerCase === 'lower') return letter.toLowerCase();
-  if (answerCase === 'original') return letter;
-  return letter.toUpperCase();
+/** `language` keeps ß a single letter so one grid cell still holds one character. */
+export function formatCrosswordLetter(
+  letter: string,
+  answerCase: CrosswordSettings['core']['answerCase'],
+  language?: string
+): string {
+  if (answerCase === 'original') return normalizePuzzleText(letter);
+  return applyLetterCase(letter, answerCase === 'lower' ? 'lower' : 'upper', language);
 }
 
 export interface CrosswordCellGeom {
@@ -137,7 +142,7 @@ export function crosswordCells(
         sizePt: grid.cellPt,
         isBlack: !!cell.isBlack,
         fill: cellFill,
-        letter: showSolution && cell.letter ? formatCrosswordLetter(cell.letter, cw.core.answerCase) : undefined,
+        letter: showSolution && cell.letter ? formatCrosswordLetter(cell.letter, cw.core.answerCase, cw.core.language) : undefined,
         clueNumber: !showSolution && cell.clueNumber != null ? cell.clueNumber : undefined,
       });
     }
@@ -194,9 +199,18 @@ export function layoutMaze(puzzle: MazePuzzle, slot: RectPt, preferredCellPt: nu
   const cols = puzzle.grid[0]?.length ?? 0;
   const boxW = framePt && framePt > 0 ? Math.min(framePt, slot.widthPt) : slot.widthPt;
   const boxH = framePt && framePt > 0 ? Math.min(framePt, slot.heightPt) : slot.heightPt;
+  const maxCell =
+    rows > 0 && cols > 0 ? Math.min(boxW / cols, boxH / rows) : preferredCellPt;
+  // When a square frame is provided (multi-up pages), fill it the same way the
+  // canvas MazeDisplay does — do not also cap by preferredCellPt.
   const fittedCell =
     rows > 0 && cols > 0
-      ? Math.max(1.5, Math.min(boxW / cols, boxH / rows, preferredCellPt || boxW / cols))
+      ? Math.max(
+          1.5,
+          framePt
+            ? maxCell
+            : Math.min(maxCell, preferredCellPt || maxCell)
+        )
       : preferredCellPt;
   const mazeWPt = cols * fittedCell;
   const mazeHPt = rows * fittedCell;
@@ -263,6 +277,88 @@ export function mazeWallSegments(puzzle: MazePuzzle, layout: MazeLayout): LineSe
     }
   }
   return segs;
+}
+
+/** Merge collinear adjacent wall segments into long runs (canvas-like continuous walls). */
+export function mergeCollinearSegments(segs: LineSeg[], eps = 0.08): LineSeg[] {
+  const horiz: LineSeg[] = [];
+  const vert: LineSeg[] = [];
+  const dots: LineSeg[] = [];
+  for (const s of segs) {
+    const dx = Math.abs(s.x2 - s.x1);
+    const dy = Math.abs(s.y2 - s.y1);
+    if (dx < eps && dy < eps) {
+      dots.push(s);
+      continue;
+    }
+    if (dy < eps) {
+      horiz.push({
+        x1: Math.min(s.x1, s.x2),
+        y1: (s.y1 + s.y2) / 2,
+        x2: Math.max(s.x1, s.x2),
+        y2: (s.y1 + s.y2) / 2,
+      });
+    } else if (dx < eps) {
+      vert.push({
+        x1: (s.x1 + s.x2) / 2,
+        y1: Math.min(s.y1, s.y2),
+        x2: (s.x1 + s.x2) / 2,
+        y2: Math.max(s.y1, s.y2),
+      });
+    } else {
+      horiz.push(s);
+    }
+  }
+
+  const mergeGroup = (list: LineSeg[], axis: 'h' | 'v'): LineSeg[] => {
+    if (list.length === 0) return [];
+    const keyed = new Map<string, LineSeg[]>();
+    for (const s of list) {
+      const key = axis === 'h' ? s.y1.toFixed(2) : s.x1.toFixed(2);
+      const arr = keyed.get(key) ?? [];
+      arr.push(s);
+      keyed.set(key, arr);
+    }
+    const out: LineSeg[] = [];
+    for (const group of keyed.values()) {
+      group.sort((a, b) => (axis === 'h' ? a.x1 - b.x1 : a.y1 - b.y1));
+      let cur = { ...group[0] };
+      for (let i = 1; i < group.length; i++) {
+        const n = group[i];
+        const curEnd = axis === 'h' ? cur.x2 : cur.y2;
+        const nextStart = axis === 'h' ? n.x1 : n.y1;
+        if (nextStart <= curEnd + eps) {
+          if (axis === 'h') cur.x2 = Math.max(cur.x2, n.x2);
+          else cur.y2 = Math.max(cur.y2, n.y2);
+        } else {
+          out.push(cur);
+          cur = { ...n };
+        }
+      }
+      out.push(cur);
+    }
+    return out;
+  };
+
+  return [...mergeGroup(horiz, 'h'), ...mergeGroup(vert, 'v'), ...dots];
+}
+
+export function mazeWallRuns(puzzle: MazePuzzle, layout: MazeLayout): LineSeg[] {
+  return mergeCollinearSegments(mazeWallSegments(puzzle, layout));
+}
+
+/** Join collinear solution steps so PPT does not paint a separate shape per cell. */
+export function mazeSolutionRuns(points: Array<{ xPt: number; yPt: number }>): LineSeg[] {
+  const segs: LineSeg[] = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    segs.push({
+      x1: points[i].xPt,
+      y1: points[i].yPt,
+      x2: points[i + 1].xPt,
+      y2: points[i + 1].yPt,
+    });
+  }
+  return mergeCollinearSegments(segs);
 }
 
 export function mazePathPoints(puzzle: MazePuzzle, layout: MazeLayout, showSolution: boolean): Array<{ xPt: number; yPt: number }> {

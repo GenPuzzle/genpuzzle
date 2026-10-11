@@ -47,6 +47,7 @@ import type {
   WordSearchPuzzle,
   WordSearchSettings,
 } from "@/lib/puzzles/types";
+import { normalizeAnswersPerPage } from "@/lib/puzzles/types";
 import {
   getPuzzleContentLineIndex,
   getRawContentLineAt,
@@ -1644,23 +1645,23 @@ export function CanvasContextualControls({
           <Label className="canvas-context-panel__section-label">Layout</Label>
           <div>
             <Label className="text-xs text-gray-500 mb-1 block">
-              Answers Per Page
+              Solutions Per Page
             </Label>
             <Select
-              value={bookCanvas.answersPerPage.toString()}
+              value={String(normalizeAnswersPerPage(bookCanvas.answersPerPage))}
               onValueChange={(value) =>
-                updateBookCanvas({ answersPerPage: parseInt(value, 10) })
+                updateBookCanvas({
+                  answersPerPage: normalizeAnswersPerPage(value),
+                })
               }
             >
               <SelectTrigger className="h-8 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {[1, 2, 4].map((n) => (
-                  <SelectItem key={n} value={n.toString()}>
-                    {n} Solution{n > 1 ? "s" : ""}
-                  </SelectItem>
-                ))}
+                <SelectItem value="1">1 Solution</SelectItem>
+                <SelectItem value="2">2 Solutions</SelectItem>
+                <SelectItem value="4">4 Solutions</SelectItem>
               </SelectContent>
             </Select>
           </div>

@@ -23,6 +23,13 @@ import {
   generateCryptogram,
   generateWordScramble,
   generateMaze,
+  generateCodewordPuzzleAsync,
+  defaultHintCountForDifficulty,
+  generateBinairo,
+  generateKakuro,
+  generateMathMaze,
+  generateFill,
+  generateSnake,
   resolveMazeDimensions,
   generateWordMatch,
   generateDotToDot,
@@ -30,6 +37,7 @@ import {
   resolveShapeMaskImageSrc,
 } from './puzzles';
 import { buildTriviaBatch, parseTriviaLines, getMissingTriviaSuggestions } from './puzzles/trivia';
+import { resolveGenericPuzzleTitleParts } from './generic-puzzle-settings';
 import { getEffectiveWordsPerPuzzle, getWordRepeatCount, getFillWithWordLettersOnly } from './puzzle-word-list';
 import { DEFAULT_HEADER_ASSEMBLY } from './header-assembly/types';
 import {
@@ -50,6 +58,7 @@ import {
   PuzzleModuleSettings,
   TextModuleSettings,
   isPuzzleModuleType,
+  migrateLegacyDocumentPages,
 } from './document-model';
 import {
   CHAPTER_PAGE_STYLE_STORAGE_KEY,
@@ -59,6 +68,8 @@ import {
 import { useDebouncedCallback } from '@/hooks/useDebouncedCallback';
 import { useProjectDirtyState } from '@/hooks/useProjectDirtyState';
 import { syncAutoTocInDocuments } from './sync-auto-toc';
+import { diagMark, ensureCrosswordDiag } from './crossword-freeze-diag';
+import { ensureGpIsolationRuntime } from './gp-isolation';
 import { resolvePageNumberSettingsForBook } from './text-page-pdf-draw';
 import {
   clearShareHashFromUrl,
@@ -116,6 +127,7 @@ import {
   expandMixedMazeShapePlan,
   expandMixedSudokuDifficultyPlan,
   expandMixedSudokuSizePlan,
+  isCalcudokuGridSize,
   resolveCalcudokuDifficulties,
   resolveCalcudokuGridSizes,
   sudokuModeGenerationBlockMessage,
@@ -167,7 +179,7 @@ export interface GeneratePuzzleOptions {
   splitIntoChapters?: SplitIntoChaptersRequest;
 }
 
-interface AppContextType {
+export interface AppContextType {
   // Current puzzle type
   currentPuzzleType: PuzzleType;
   setCurrentPuzzleType: (type: PuzzleType) => void;
@@ -175,12 +187,16 @@ interface AppContextType {
   // Word Search Settings (comprehensive)
   wordSearchSettings: WordSearchSettings;
   setWordSearchSettings: (settings: WordSearchSettings) => void;
-  updateWordSearchSettings: (updates: Partial<WordSearchSettings>) => void;
+  updateWordSearchSettings: (
+    updates: Partial<WordSearchSettings>,
+    options?: { recordHistory?: boolean }
+  ) => void;
 
   // Crossword Settings (left = generation, right = visual)
   crosswordSettings: CrosswordSettings;
   setCrosswordSettings: (settings: CrosswordSettings) => void;
   updateCrosswordSettings: (updates: Partial<CrosswordSettings>) => void;
+  updateCrosswordText: (updates: Pick<CrosswordSettings['core'], 'answersText' | 'cluesText'>) => void;
 
   murdokuSettings: MurdokuSettings;
   setMurdokuSettings: (settings: MurdokuSettings) => void;
@@ -228,6 +244,8 @@ interface AppContextType {
   validationError: ValidationError | null;
   clearValidationError: () => void;
   validateAndGenerate: (options?: GeneratePuzzleOptions) => Promise<boolean>;
+  regenerateWordSearchDocuments: (pages: DocumentPage[]) => Promise<void>;
+  applyWordSearchChapterChanges: (pages: DocumentPage[]) => Promise<void>;
 
   // Generate puzzle (triggers validation)
   generatePuzzle: (options?: GeneratePuzzleOptions) => void | Promise<void>;
@@ -413,7 +431,6 @@ const defaultBookSettings: BookSettings = {
 const defaultPuzzleSettings: PuzzleSettings = {
   gridSize: 15,
   directions: ['horizontal', 'vertical', 'diagonal-down', 'diagonal-up'],
-  puzzleDensity: 50,
 };
 
 const defaultTitleWords: TitleWordsSettings = {
@@ -529,6 +546,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Crossword Settings
   const [crosswordSettings, setCrosswordSettings] = useState<CrosswordSettings>(getDefaultCrosswordSettings());
+  const crosswordSettingsRef = useRef(crosswordSettings);
+  crosswordSettingsRef.current = crosswordSettings;
   const [murdokuSettings, setMurdokuSettings] = useState<MurdokuSettings>(getDefaultMurdokuSettings());
   const [murdokuBatchPuzzles, setMurdokuBatchPuzzles] = useState<MurdokuPuzzle[]>([]);
 
@@ -549,6 +568,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const [documentPages, setDocumentPages] = useState<DocumentPage[]>(getInitialDocumentPages);
   const [activeDocumentPageId, setActiveDocumentPageId] = useState<string>(() => getInitialDocumentPages()[0].id);
+  const documentPagesRef = useRef(documentPages);
+  documentPagesRef.current = documentPages;
+  const activeDocumentPageIdRef = useRef(activeDocumentPageId);
+  activeDocumentPageIdRef.current = activeDocumentPageId;
 
   // Apply mode: whether changes apply to all pages (true) or current page only (false)
   const [applyMode, setApplyModeState] = useState<Map<string, boolean>>(
@@ -561,7 +584,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   // Performance Optimizer: Preview range mode (sample vs full)
-  const [previewRangeMode, setPreviewRangeMode] = useState<'sample' | 'all' | 'flipbook'>('all');
+  const [previewRangeMode, setPreviewRangeMode] = useState<'sample' | 'all' | 'flipbook'>('sample');
 
   // Performance Optimizer: Active preview tab (puzzles vs solutions)
   const [activePreviewTab, setActivePreviewTab] = useState<'puzzles' | 'solutions'>('puzzles');
@@ -575,9 +598,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [activePreviewTab]);
 
   const [settingsHydrated, setSettingsHydrated] = useState(false);
+  const [projectHydrateKey, setProjectHydrateKey] = useState(0);
   const [projectName, setProjectName] = useState('Untitled Project');
   const [showEditorTutorial, setShowEditorTutorial] = useState(false);
   const hydrationDoneRef = useRef(false);
+
+  useEffect(() => {
+    ensureCrosswordDiag();
+    ensureGpIsolationRuntime();
+  }, []);
 
   const defaultPersistedSnapshot = useMemo(
     (): PersistedAppSettings =>
@@ -593,7 +622,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         solutionToSolutionGap: 14,
         pageMargin: 40,
         previewZoom: 75,
-        previewRangeMode: 'all',
+        previewRangeMode: 'sample',
         activePreviewTab: 'puzzles',
         sudokuDifficulty: 'medium',
         mazeSize: 'medium',
@@ -614,7 +643,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const applyPersistedSettings = useCallback((stored: PersistedAppSettings) => {
       setCurrentPuzzleType(stored.currentPuzzleType);
-      setWordSearchSettings(stored.wordSearchSettings);
+      setWordSearchSettings(mergeWordSearchSettingsUpdate(stored.wordSearchSettings, {}));
       setBookSettings(stored.bookSettings);
       setPuzzleSettings(stored.puzzleSettings);
       setTitleWords(stored.titleWords);
@@ -626,7 +655,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setPreviewZoom(stored.previewZoom);
     const mode = stored.previewRangeMode;
     setPreviewRangeMode(
-      mode === 'sample' || mode === 'flipbook' || mode === 'all' ? mode : 'all'
+      mode === 'sample' || mode === 'flipbook' || mode === 'all' ? mode : 'sample'
     );
       setActivePreviewTab(stored.activePreviewTab);
       setSudokuDifficulty(stored.sudokuDifficulty);
@@ -638,13 +667,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setPagePuzzleGridScales(new Map(stored.pagePuzzleGridScales ?? []));
       setApplyModeState(new Map(stored.applyMode));
     if (stored.documentPages && stored.documentPages.length > 0) {
-      setDocumentPages(stored.documentPages);
+      // Projects saved before the Fill split carry `moduleType: 'fill'`.
+      const documentPages = migrateLegacyDocumentPages(stored.documentPages);
+      setDocumentPages(documentPages);
       const activeId =
         stored.activeDocumentPageId &&
-        stored.documentPages.some((p) => p.id === stored.activeDocumentPageId)
+        documentPages.some((p) => p.id === stored.activeDocumentPageId)
           ? stored.activeDocumentPageId
-          : stored.documentPages[0].id;
+          : documentPages[0].id;
       setActiveDocumentPageId(activeId);
+      const active = documentPages.find((page) => page.id === activeId);
+      if (active) {
+        const pageSettings = active.settings as PuzzleModuleSettings;
+        if (active.moduleType === 'crossword' && pageSettings.crosswordSettings) {
+          const nextCrossword = normalizeCrosswordSettings(pageSettings.crosswordSettings);
+          crosswordSettingsRef.current = nextCrossword;
+          setCrosswordSettings(nextCrossword);
+        } else if (active.moduleType === 'murdoku') {
+          setMurdokuSettings(normalizeMurdokuSettings(pageSettings.murdokuSettings));
+        } else if (isGenericPuzzleModuleType(active.moduleType)) {
+          setGenericPuzzleSettings(
+            normalizeGenericPuzzleSettings(pageSettings.genericPuzzleSettings, active.moduleType)
+          );
+        }
+        if (pageSettings.titleWords) setTitleWords(pageSettings.titleWords);
+      }
     } else {
       const migrated = createWordSearchDocumentFromGlobals(
         stored.wordSearchSettings,
@@ -653,13 +700,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setDocumentPages([migrated]);
       setActiveDocumentPageId(migrated.id);
     }
+    setProjectHydrateKey((key) => key + 1);
   }, []);
 
   // Hydrate global settings from localStorage or shared URL once (loadProjectSnapshot defined below)
   const loadProjectSnapshotRef = useRef<(file: GpProjectFile) => void>(() => {});
 
-  const persistSettings = useDebouncedCallback((snapshot: PersistedAppSettings) => {
-    savePersistedSettings(snapshot);
+  const persistSettings = useDebouncedCallback(() => {
+    savePersistedSettings(buildCurrentPersistedSnapshot());
   }, 300);
 
   const documentPagesForPersistence = useMemo(() => {
@@ -908,25 +956,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const projectStateSignature = useMemo(
     () =>
-      JSON.stringify({
-        projectName,
-        settings: buildCurrentPersistedSnapshot(),
-        batchPuzzles,
-        crosswordBatchPuzzles,
-        genericBatchPuzzles,
-        murdokuBatchPuzzles,
-        currentPuzzle,
-        currentBatchIndex,
-      }),
+      `${projectName}:${editHistoryPast.length}:${puzzleGenerationVersion}:${batchPuzzles.length}:${crosswordBatchPuzzles.length}:${genericBatchPuzzles.length}:${murdokuBatchPuzzles.length}:${documentPages.length}:${activeDocumentPageId}:${currentBatchIndex}:${currentPuzzleType}`,
     [
       projectName,
-      buildCurrentPersistedSnapshot,
-      batchPuzzles,
-      crosswordBatchPuzzles,
-      genericBatchPuzzles,
-      murdokuBatchPuzzles,
-      currentPuzzle,
+      editHistoryPast.length,
+      puzzleGenerationVersion,
+      batchPuzzles.length,
+      crosswordBatchPuzzles.length,
+      genericBatchPuzzles.length,
+      murdokuBatchPuzzles.length,
+      documentPages.length,
+      activeDocumentPageId,
       currentBatchIndex,
+      currentPuzzleType,
     ]
   );
 
@@ -944,20 +986,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const loadProjectSnapshot = useCallback(
     (file: GpProjectFile) => {
       beginSuppressDirty();
-      applyPersistedSettings(file.settings);
-      setBatchPuzzles(normalizeBatchPuzzleDocumentIndices(file.batchPuzzles ?? []));
-      setCrosswordBatchPuzzles(file.crosswordBatchPuzzles ?? []);
-      setGenericBatchPuzzles(file.genericBatchPuzzles ?? []);
-      setMurdokuBatchPuzzles(file.murdokuBatchPuzzles ?? []);
-      // pageCrosswordOverrides restore via applyPersistedSettings(file.settings).
-      setCurrentPuzzle(file.currentPuzzle ?? null);
-      setCurrentBatchIndex(file.currentBatchIndex ?? 0);
-      setProjectName(file.projectName || 'Untitled Project');
-      setValidationError(null);
-      setShowSolution(false);
-      setShowEditorTutorial(false);
-      setEditHistoryPast([]);
-      setEditHistoryFuture([]);
+      React.startTransition(() => {
+        applyPersistedSettings(file.settings);
+        setBatchPuzzles(normalizeBatchPuzzleDocumentIndices(file.batchPuzzles ?? []));
+        setCrosswordBatchPuzzles(file.crosswordBatchPuzzles ?? []);
+        setGenericBatchPuzzles(
+          (file.genericBatchPuzzles ?? []).map((puzzle) => {
+            // Legacy Fill puzzles: the saved type was 'fill'; derive the module id from mode.
+            if ((puzzle as { type?: string }).type !== 'fill') return puzzle;
+            const mode = (puzzle as { mode?: string }).mode;
+            return { ...puzzle, type: mode === 'number' ? 'number-fill' : 'word-fill' } as GenericBatchPuzzle;
+          })
+        );
+        setMurdokuBatchPuzzles(file.murdokuBatchPuzzles ?? []);
+        // pageCrosswordOverrides restore via applyPersistedSettings(file.settings).
+        setCurrentPuzzle(file.currentPuzzle ?? null);
+        setCurrentBatchIndex(file.currentBatchIndex ?? 0);
+        setProjectName(file.projectName || 'Untitled Project');
+        setValidationError(null);
+        setShowSolution(false);
+        setShowEditorTutorial(false);
+        setEditHistoryPast([]);
+        setEditHistoryFuture([]);
+      });
       scheduleBaselineCapture();
       clearShareHashFromUrl();
       requestAnimationFrame(() => {
@@ -1055,9 +1106,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!settingsHydrated) return;
 
-    const snapshot = buildCurrentPersistedSnapshot();
-
-    persistSettings(snapshot);
+    persistSettings();
   }, [
     settingsHydrated,
     buildCurrentPersistedSnapshot,
@@ -1159,20 +1208,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const persistPageCrosswordSettings = useCallback(
     (pageId: string, titleWordsSettings: TitleWordsSettings, cw: CrosswordSettings) => {
-      setDocumentPages((prev) =>
-        prev.map((page) =>
-          page.id === pageId
+      setDocumentPages((prev) => {
+        const page = prev.find((entry) => entry.id === pageId);
+        if (!page || page.moduleType !== 'crossword') return prev;
+        const settings = page.settings as PuzzleModuleSettings;
+        if (settings.titleWords === titleWordsSettings && settings.crosswordSettings === cw) {
+          return prev;
+        }
+        return prev.map((entry) =>
+          entry.id === pageId
             ? {
-                ...page,
+                ...entry,
                 settings: {
-                  ...page.settings,
+                  ...entry.settings,
                   titleWords: titleWordsSettings,
                   crosswordSettings: cw,
                 } as PuzzleModuleSettings,
               }
-            : page
-        )
-      );
+            : entry
+        );
+      });
     },
     []
   );
@@ -1222,11 +1277,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const previousPageId = prevActiveDocumentPageId.current;
     if (previousPageId && previousPageId !== activeDocumentPageId) {
-      const previousPage = documentPages.find((page) => page.id === previousPageId);
+      const previousPage = documentPagesRef.current.find((page) => page.id === previousPageId);
+      // Snapshot settings at switch time only. Do not re-run when documentPages /
+      // crosswordSettings change — that cascaded extra work when adding Crossword.
       if (previousPage?.moduleType === 'word-search') {
-        persistPagePuzzleSettings(previousPageId, titleWords, wordSearchSettings);
+        persistPagePuzzleSettings(
+          previousPageId,
+          titleWords,
+          wordSearchSettingsRef.current
+        );
       } else if (previousPage?.moduleType === 'crossword') {
-        persistPageCrosswordSettings(previousPageId, titleWords, crosswordSettings);
+        persistPageCrosswordSettings(
+          previousPageId,
+          titleWords,
+          crosswordSettingsRef.current
+        );
       } else if (previousPage?.moduleType === 'murdoku') {
         persistPageMurdokuSettings(previousPageId, titleWords, murdokuSettings);
       } else if (previousPage && isGenericPuzzleModuleType(previousPage.moduleType)) {
@@ -1234,19 +1299,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
     }
     prevActiveDocumentPageId.current = activeDocumentPageId;
-  }, [
-    activeDocumentPageId,
-    documentPages,
-    persistPagePuzzleSettings,
-    persistPageCrosswordSettings,
-    persistPageGenericSettings,
-    persistPageMurdokuSettings,
-    wordSearchSettings,
-    crosswordSettings,
-    murdokuSettings,
-    genericPuzzleSettings,
-    titleWords,
-  ]);
+    // Intentionally only activeDocumentPageId.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
+  }, [activeDocumentPageId]);
 
   useEffect(() => {
     if (!activeDocumentPage || !settingsHydrated) return;
@@ -1261,21 +1316,54 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } else if (activeDocumentPage.moduleType === 'crossword') {
       const pageSettings = activeDocumentPage.settings as PuzzleModuleSettings;
       const tw = pageSettings.titleWords ?? defaultTitleWords;
+      const hasCrosswordPuzzles = crosswordBatchPuzzles.some(
+        (puzzle) => puzzle.pageId === activeDocumentPage.id
+      );
+      const tNorm = performance.now();
       const baseCw = normalizeCrosswordSettings(
         pageSettings.crosswordSettings ?? getDefaultCrosswordSettings()
       );
-      const withAnswers =
-        !baseCw.core.answersText && tw.words?.length
-          ? {
-              ...baseCw,
-              core: { ...baseCw.core, answersText: tw.words.join('\n') },
-            }
-          : baseCw;
-      setCrosswordSettings(
-        applyLayoutSettingsToCrosswordDocument(withAnswers, wordSearchSettingsRef.current)
+      // Do NOT copy Word Search titleWords into crossword answers on every tab
+      // switch — that forced setCrosswordSettings + full sidebar/preview commits
+      // whenever a WS list existed (measured 150–260ms sidebar commits, and
+      // switches to Crossword could stall for seconds).
+      const nextCrosswordSettings = applyLayoutSettingsToCrosswordDocument(
+        baseCw,
+        wordSearchSettingsRef.current
       );
-      setTitleWords(tw);
-      setCurrentPuzzleType('crossword');
+      diagMark('hydrate.crossword.normalize+layout', performance.now() - tNorm);
+      const tCmp = performance.now();
+      const prev = crosswordSettingsRef.current;
+      const changed =
+        prev !== nextCrosswordSettings &&
+        (prev.core.answersText !== nextCrosswordSettings.core.answersText ||
+          prev.core.cluesText !== nextCrosswordSettings.core.cluesText ||
+          prev.core.lettersAcross !== nextCrosswordSettings.core.lettersAcross ||
+          prev.core.lettersDown !== nextCrosswordSettings.core.lettersDown ||
+          prev.core.numberOfPuzzles !== nextCrosswordSettings.core.numberOfPuzzles ||
+          prev.core.cluesPerPuzzle !== nextCrosswordSettings.core.cluesPerPuzzle ||
+          prev.core.puzzleGridScale !== nextCrosswordSettings.core.puzzleGridScale ||
+          prev.typography.clueFontSize !== nextCrosswordSettings.typography.clueFontSize ||
+          prev.bookCanvas.trimSizePreset !== nextCrosswordSettings.bookCanvas.trimSizePreset ||
+          prev.bookCanvas.customWidth !== nextCrosswordSettings.bookCanvas.customWidth ||
+          prev.bookCanvas.customHeight !== nextCrosswordSettings.bookCanvas.customHeight);
+      diagMark(
+        'hydrate.crossword.compare',
+        performance.now() - tCmp,
+        `changed=${changed}`
+      );
+      const tSet = performance.now();
+      if (changed) {
+        crosswordSettingsRef.current = nextCrosswordSettings;
+        setCrosswordSettings(nextCrosswordSettings);
+      }
+      setTitleWords((current) => (current === tw ? current : tw));
+      setCurrentPuzzleType((current) => (current === 'crossword' ? current : 'crossword'));
+      if (!hasCrosswordPuzzles) {
+        setCurrentPuzzle(null);
+        setCurrentBatchIndex(0);
+      }
+      diagMark('hydrate.crossword.setState.block', performance.now() - tSet, `changed=${changed}`);
     } else if (activeDocumentPage.moduleType === 'murdoku') {
       const pageSettings = activeDocumentPage.settings as PuzzleModuleSettings;
       setMurdokuSettings(
@@ -1302,11 +1390,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } else if (isPuzzleModuleType(activeDocumentPage.moduleType)) {
       setCurrentPuzzleType(activeDocumentPage.moduleType as PuzzleType);
     }
-  }, [activeDocumentPage?.id, settingsHydrated]);
+  }, [activeDocumentPage?.id, settingsHydrated, projectHydrateKey]);
 
   const insertDocumentPage = useCallback(
     (type: InsertableDocumentKind, position: 'before' | 'after', referenceId?: string) => {
-      pushEditHistory();
+      const tAll = performance.now();
+      const tHist = performance.now();
+      // Isolation: ?gpIso=skipHistory — skip undo snapshot clone on insert.
+      let skipHistory = false;
+      if (typeof window !== 'undefined') {
+        ensureGpIsolationRuntime();
+        try {
+          const iso = new URLSearchParams(window.location.search).get('gpIso') || '';
+          skipHistory = /(^|[,+|])skipHistory([,+|]|$)/.test(iso);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (!skipHistory) {
+        pushEditHistory();
+      }
+      diagMark(
+        'insertDocumentPage.pushEditHistory',
+        performance.now() - tHist,
+        skipHistory ? `${type}:skipped` : type
+      );
+
+      const tCreate = performance.now();
       const refId = referenceId ?? activeDocumentPageId;
       let newPage = createInsertableDocumentPage(type);
       if (isPuzzleModuleType(newPage.moduleType)) {
@@ -1324,6 +1434,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           newPage = createStyledChapterDocumentPage('Chapter');
         }
       }
+      diagMark('insertDocumentPage.createPage', performance.now() - tCreate, type);
+
+      const tSet = performance.now();
       setDocumentPages((prev) => {
         if (prev.length === 0) {
           setShowEditorTutorial(false);
@@ -1341,11 +1454,112 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         next.splice(insertAt, 0, newPage);
         return next;
       });
+      diagMark('insertDocumentPage.setDocumentPages', performance.now() - tSet, type);
+
+      // Activate immediately. startTransition deferred this behind heavy sidebar
+      // commits (~150–260ms), so Crossword felt frozen while Word Search still showed.
       setActiveDocumentPageId(newPage.id);
       setShowEditorTutorial(false);
+      diagMark('insertDocumentPage.totalSync', performance.now() - tAll, type);
     },
     [activeDocumentPageId, pushEditHistory]
   );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    ensureCrosswordDiag();
+    const w = window as Window & {
+      __GP_TEST__?: Record<string, unknown>;
+    };
+    // Keep a stable object; update method bodies via refs so tab switches do not
+    // delete/recreate the test API (that raced Playwright and hid real timings).
+    const api = (w.__GP_TEST__ ??= {});
+    Object.assign(api, {
+      insert: (type: string) => {
+        ensureCrosswordDiag();
+        if (window.__GP_DIAG__) window.__GP_DIAG__.enabled = true;
+        const t0 = performance.now();
+        insertDocumentPage(type as InsertableDocumentKind, 'after');
+        diagMark('__GP_TEST__.insert.return', performance.now() - t0, type);
+      },
+      switchTo: (moduleType: string) => {
+        ensureCrosswordDiag();
+        if (window.__GP_DIAG__) window.__GP_DIAG__.enabled = true;
+        const t0 = performance.now();
+        const page = documentPagesRef.current.find((p) => p.moduleType === moduleType);
+        if (!page) {
+          diagMark('__GP_TEST__.switchTo.missing', performance.now() - t0, moduleType);
+          return false;
+        }
+        // Update ref immediately so tests can observe the intended module even
+        // while React is committing the heavy sidebar/preview trees.
+        activeDocumentPageIdRef.current = page.id;
+        setActiveDocumentPageId(page.id);
+        diagMark(
+          '__GP_TEST__.switchTo.setId',
+          performance.now() - t0,
+          `${moduleType}:${page.id.slice(-8)}`
+        );
+        return true;
+      },
+      setWsWords: (words: string[]) => {
+        setTitleWords((prev) => ({ ...prev, words }));
+      },
+      seedWsPuzzles: (count = 30, size = 15) => {
+        const pageId =
+          documentPagesRef.current.find((p) => p.moduleType === 'word-search')?.id ??
+          activeDocumentPageId;
+        const puzzles = Array.from({ length: count }, (_, i) => ({
+          type: 'word-search' as const,
+          grid: Array.from({ length: size }, () => Array.from({ length: size }, () => 'A')),
+          words: Array.from({ length: 12 }, (_, w) => `WORD${w}`),
+          placements: [] as WordSearchPuzzle['placements'],
+          pageId,
+          pageName: 'Word Search',
+          puzzleIndexInDocument: i,
+          puzzleNumber: i + 1,
+        }));
+        setBatchPuzzles(puzzles);
+        setCurrentPuzzle(puzzles[0] ?? null);
+        setCurrentPuzzleType('word-search');
+      },
+      setPreviewMode: (mode: 'sample' | 'all' | 'flipbook') => {
+        setPreviewRangeMode(mode);
+      },
+      dumpDiag: () => window.__GP_DIAG__?.dump() ?? [],
+      enableDiag: () => {
+        try {
+          localStorage.setItem('gp-diag-crossword', '1');
+        } catch {
+          /* ignore */
+        }
+        ensureCrosswordDiag();
+        if (window.__GP_DIAG__) window.__GP_DIAG__.enabled = true;
+      },
+      getActiveModule: () =>
+        documentPagesRef.current.find((p) => p.id === activeDocumentPageIdRef.current)?.moduleType ??
+        null,
+      getCrosswordAnswerChars: () => {
+        const text = crosswordSettingsRef.current?.core?.answersText || '';
+        return text.length;
+      },
+      getDocSummary: () =>
+        documentPagesRef.current.map((p) => ({ id: p.id, type: p.moduleType, name: p.name })),
+    });
+    return () => {
+      // Do not delete on dep refresh — only on unmount of provider.
+    };
+  }, [
+    insertDocumentPage,
+    documentPages,
+    activeDocumentPageId,
+    setTitleWords,
+    setPreviewRangeMode,
+    setBatchPuzzles,
+    setCurrentPuzzle,
+    setCurrentPuzzleType,
+    setActiveDocumentPageId,
+  ]);
 
   const appendAiGeneratedBundle = useCallback(
     (
@@ -1419,7 +1633,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       );
       const settings = merged.settings as PuzzleModuleSettings;
       if (merged.moduleType === 'word-search') {
-        if (settings.wordSearchSettings) setWordSearchSettings(settings.wordSearchSettings);
+        if (settings.wordSearchSettings) {
+          setWordSearchSettings(mergeWordSearchSettingsUpdate(settings.wordSearchSettings, {}));
+        }
         if (settings.titleWords) setTitleWords(settings.titleWords);
         setBatchPuzzles((prev) =>
           normalizeBatchPuzzleDocumentIndices(
@@ -1930,10 +2146,94 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setStylingTrigger((t) => t + 1);
   }, []);
 
+  const debouncedSyncWordSearchToDocumentPages = useDebouncedCallback(
+    (pageId: string, synced: WordSearchSettings) => {
+      setDocumentPages((pages) =>
+        pages.map((page) => {
+          if (page.id !== pageId || page.moduleType !== 'word-search') {
+            return page;
+          }
+          return {
+            ...page,
+            settings: {
+              ...page.settings,
+              wordSearchSettings: synced,
+            } as PuzzleModuleSettings,
+          };
+        })
+      );
+    },
+    300
+  );
 
+  const debouncedSyncCrosswordToDocumentPages = useDebouncedCallback(
+    (pageId: string, synced: CrosswordSettings) => {
+      setDocumentPages((pages) =>
+        pages.map((page) => {
+          if (page.id !== pageId || page.moduleType !== 'crossword') {
+            return page;
+          }
+          return {
+            ...page,
+            settings: {
+              ...page.settings,
+              crosswordSettings: synced,
+            } as PuzzleModuleSettings,
+          };
+        })
+      );
+    },
+    300
+  );
 
-  const updateWordSearchSettings = useCallback((updates: Partial<WordSearchSettings>) => {
-    pushEditHistory();
+  const debouncedSyncGenericToDocumentPages = useDebouncedCallback(
+    (pageId: string, synced: GenericPuzzleSettings) => {
+      setDocumentPages((pages) =>
+        pages.map((page) => {
+          if (
+            page.id !== pageId ||
+            !isGenericPuzzleModuleType(page.moduleType)
+          ) {
+            return page;
+          }
+          return {
+            ...page,
+            settings: {
+              ...page.settings,
+              genericPuzzleSettings: synced,
+            } as PuzzleModuleSettings,
+          };
+        })
+      );
+    },
+    300
+  );
+
+  const debouncedSyncMurdokuToDocumentPages = useDebouncedCallback(
+    (pageId: string, synced: MurdokuSettings) => {
+      setDocumentPages((pages) =>
+        pages.map((page) => {
+          if (page.id !== pageId || page.moduleType !== 'murdoku') return page;
+          return {
+            ...page,
+            settings: {
+              ...page.settings,
+              murdokuSettings: synced,
+            } as PuzzleModuleSettings,
+          };
+        })
+      );
+    },
+    300
+  );
+
+  const updateWordSearchSettings = useCallback((
+    updates: Partial<WordSearchSettings>,
+    options?: { recordHistory?: boolean }
+  ) => {
+    if (options?.recordHistory !== false) {
+      pushEditHistory();
+    }
 
     let prevSettings: WordSearchSettings | null = null;
     let nextSettings: WordSearchSettings | null = null;
@@ -1943,6 +2243,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       prevSettings = prev;
       const next = mergeWordSearchSettingsUpdate(prev, updates);
       nextSettings = next;
+      // Keep the ref in sync immediately so AI tool batches / regenerate see fresh values
+      // before the next React render.
+      wordSearchSettingsRef.current = next;
       if (
         updates.core?.puzzlesStartingNumber !== undefined &&
         updates.core.puzzlesStartingNumber !== prev.core.puzzlesStartingNumber
@@ -1970,10 +2273,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (nextSettings) {
       const layoutScope = prevSettings ? detectLayoutSyncScope(prevSettings, updates) : null;
       const synced = nextSettings;
-      setDocumentPages((pages) => {
-        let nextPages = pages;
-        if (activeDocumentPageId) {
-          nextPages = nextPages.map((page) => {
+      if (layoutScope) {
+        setDocumentPages((pages) => {
+          let nextPages = pages;
+          if (activeDocumentPageId) {
+            nextPages = nextPages.map((page) => {
+              if (page.id !== activeDocumentPageId || page.moduleType !== 'word-search') {
+                return page;
+              }
+              return {
+                ...page,
+                settings: {
+                  ...page.settings,
+                  wordSearchSettings: synced,
+                } as PuzzleModuleSettings,
+              };
+            });
+          }
+          nextPages = overlayBookLayoutOnAllDocuments(
+            nextPages,
+            synced,
+            getFullLayoutSyncScope()
+          );
+          return nextPages;
+        });
+        setCrosswordSettings((prev) =>
+          applyLayoutSettingsToCrosswordDocument(prev, synced)
+        );
+        setMurdokuSettings((prev) => applyLayoutSettingsToMurdokuDocument(prev, synced));
+        setGenericPuzzleSettings((prev) =>
+          applyLayoutSettingsToGenericDocument(prev, synced)
+        );
+      } else if (activeDocumentPageId) {
+        // Sync immediately (not debounced) so regenerate/AI see the new grid size right away.
+        setDocumentPages((pages) =>
+          pages.map((page) => {
             if (page.id !== activeDocumentPageId || page.moduleType !== 'word-search') {
               return page;
             }
@@ -1984,28 +2318,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 wordSearchSettings: synced,
               } as PuzzleModuleSettings,
             };
-          });
-        }
-        if (layoutScope) {
-          nextPages = overlayBookLayoutOnAllDocuments(
-            nextPages,
-            synced,
-            getFullLayoutSyncScope()
-          );
-        }
-        return nextPages;
-      });
-      if (layoutScope) {
-        setCrosswordSettings((prev) =>
-          applyLayoutSettingsToCrosswordDocument(prev, synced)
-        );
-        setMurdokuSettings((prev) => applyLayoutSettingsToMurdokuDocument(prev, synced));
-        setGenericPuzzleSettings((prev) =>
-          applyLayoutSettingsToGenericDocument(prev, synced)
+          })
         );
       }
     }
-
     setStylingTrigger((t) => t + 1);
   }, [
     pushEditHistory,
@@ -2014,46 +2330,59 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const updateCrosswordSettings = useCallback((updates: Partial<CrosswordSettings>) => {
     pushEditHistory();
-    let nextSettings: CrosswordSettings | null = null;
-    setCrosswordSettings((prev) => {
-      nextSettings = normalizeCrosswordSettings({
-        ...prev,
+    const nextSettings = normalizeCrosswordSettings({
+        ...crosswordSettingsRef.current,
         ...updates,
-        bookCanvas: { ...prev.bookCanvas, ...updates.bookCanvas },
-        core: updates.core ? { ...prev.core, ...updates.core } : prev.core,
+        bookCanvas: { ...crosswordSettingsRef.current.bookCanvas, ...updates.bookCanvas },
+        core: updates.core ? { ...crosswordSettingsRef.current.core, ...updates.core } : crosswordSettingsRef.current.core,
         typography: updates.typography
-          ? { ...prev.typography, ...updates.typography }
-          : prev.typography,
-        colors: updates.colors ? { ...prev.colors, ...updates.colors } : prev.colors,
+          ? { ...crosswordSettingsRef.current.typography, ...updates.typography }
+          : crosswordSettingsRef.current.typography,
+        colors: updates.colors ? { ...crosswordSettingsRef.current.colors, ...updates.colors } : crosswordSettingsRef.current.colors,
         pageFrameSettings: updates.pageFrameSettings
-          ? { ...prev.pageFrameSettings, ...updates.pageFrameSettings }
-          : prev.pageFrameSettings,
+          ? { ...crosswordSettingsRef.current.pageFrameSettings, ...updates.pageFrameSettings }
+          : crosswordSettingsRef.current.pageFrameSettings,
       });
-      return nextSettings;
+    crosswordSettingsRef.current = nextSettings;
+    React.startTransition(() => {
+      setCrosswordSettings(nextSettings);
+      if (activeDocumentPageId) {
+        debouncedSyncCrosswordToDocumentPages(activeDocumentPageId, nextSettings);
+      }
     });
-    if (activeDocumentPageId && nextSettings) {
-      const synced = nextSettings;
-      setDocumentPages((pages) =>
-        pages.map((page) => {
-          if (page.id !== activeDocumentPageId || page.moduleType !== 'crossword') {
-            return page;
-          }
-          return {
-            ...page,
-            settings: {
-              ...page.settings,
-              crosswordSettings: synced,
-            } as PuzzleModuleSettings,
-          };
-        })
+  }, [pushEditHistory, activeDocumentPageId, debouncedSyncCrosswordToDocumentPages]);
+
+  const updateCrosswordText = useCallback(
+    (updates: Pick<CrosswordSettings['core'], 'answersText' | 'cluesText'>) => {
+      const current = crosswordSettingsRef.current;
+      const nextSettings: CrosswordSettings = {
+        ...current,
+        core: { ...current.core, ...updates },
+      };
+      crosswordSettingsRef.current = nextSettings;
+      const hasGeneratedPuzzles = crosswordBatchPuzzles.some(
+        (puzzle) => puzzle.pageId === activeDocumentPageId
       );
-    }
-    setStylingTrigger((t) => t + 1);
-  }, [pushEditHistory, activeDocumentPageId]);
+      if (hasGeneratedPuzzles) {
+        setCrosswordSettings(nextSettings);
+      } else {
+        React.startTransition(() => setCrosswordSettings(nextSettings));
+      }
+      if (activeDocumentPageId) {
+        debouncedSyncCrosswordToDocumentPages(activeDocumentPageId, nextSettings);
+      }
+    },
+    [
+      activeDocumentPageId,
+      crosswordBatchPuzzles,
+      debouncedSyncCrosswordToDocumentPages,
+    ]
+  );
 
   const updateGenericPuzzleSettings = useCallback(
     (updates: Partial<GenericPuzzleSettings>) => {
-      pushEditHistory();
+      const touchesStartEndImages = Boolean(updates.core && 'mazeStartEndImages' in updates.core);
+      if (!touchesStartEndImages) pushEditHistory();
       let nextSettings: GenericPuzzleSettings | null = null;
       setGenericPuzzleSettings((prev) => {
         nextSettings = {
@@ -2066,28 +2395,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return nextSettings;
       });
       if (activeDocumentPageId && nextSettings) {
-        const synced = nextSettings;
-        setDocumentPages((pages) =>
-          pages.map((page) => {
-            if (
-              page.id !== activeDocumentPageId ||
-              !isGenericPuzzleModuleType(page.moduleType)
-            ) {
-              return page;
-            }
-            return {
-              ...page,
-              settings: {
-                ...page.settings,
-                genericPuzzleSettings: synced,
-              } as PuzzleModuleSettings,
-            };
-          })
-        );
+        if (touchesStartEndImages) {
+          const synced = nextSettings;
+          setDocumentPages((pages) =>
+            pages.map((page) => {
+              if (page.id !== activeDocumentPageId || !isGenericPuzzleModuleType(page.moduleType)) {
+                return page;
+              }
+              return {
+                ...page,
+                settings: {
+                  ...page.settings,
+                  genericPuzzleSettings: synced,
+                } as PuzzleModuleSettings,
+              };
+            })
+          );
+        } else {
+          debouncedSyncGenericToDocumentPages(activeDocumentPageId, nextSettings);
+        }
       }
       setStylingTrigger((t) => t + 1);
     },
-    [pushEditHistory, activeDocumentPageId]
+    [pushEditHistory, activeDocumentPageId, debouncedSyncGenericToDocumentPages]
   );
 
   const updateMurdokuSettings = useCallback((updates: Partial<MurdokuSettings>) => {
@@ -2116,22 +2446,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return nextSettings;
     });
     if (activeDocumentPageId && nextSettings) {
-      const synced = nextSettings;
-      setDocumentPages((pages) =>
-        pages.map((page) => {
-          if (page.id !== activeDocumentPageId || page.moduleType !== 'murdoku') return page;
-          return {
-            ...page,
-            settings: {
-              ...page.settings,
-              murdokuSettings: synced,
-            } as PuzzleModuleSettings,
-          };
-        })
-      );
+      debouncedSyncMurdokuToDocumentPages(activeDocumentPageId, nextSettings);
     }
     setStylingTrigger((t) => t + 1);
-  }, [pushEditHistory, activeDocumentPageId]);
+  }, [pushEditHistory, activeDocumentPageId, debouncedSyncMurdokuToDocumentPages]);
 
   const replaceMurdokuPuzzle = useCallback((puzzle: MurdokuPuzzle) => {
     pushEditHistory();
@@ -2330,10 +2648,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       clearAllPagePuzzleGridScales();
     }
 
-    persistPagePuzzleSettings(activeDocumentPageId, titleWords, wordSearchSettings);
+    persistPagePuzzleSettings(activeDocumentPageId, titleWords, wordSearchSettingsRef.current);
 
     const pageWords = titleWords.words;
-    const ws = wordSearchSettings;
+    const ws = wordSearchSettingsRef.current;
     const wordsPerPuzzle = getEffectiveWordsPerPuzzle(ws.wordList);
     const wordRepeatCount = getWordRepeatCount(ws.wordList);
     const fillWithWordLettersOnly = getFillWithWordLettersOnly(ws.wordList);
@@ -2517,6 +2835,68 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     clearAllPagePuzzleGridScales,
   ]);
 
+  const regenerateWordSearchDocuments = useCallback(async (pages: DocumentPage[]) => {
+    const wordSearchPages = pages.filter((page) => page.moduleType === 'word-search');
+    if (wordSearchPages.length === 0) return;
+    try {
+      const generated: WordSearchPuzzle[] = [];
+      for (const page of wordSearchPages) {
+        const settings = page.settings as PuzzleModuleSettings;
+        const wordSearch = settings.wordSearchSettings;
+        if (!wordSearch) continue;
+        const wordsPerPuzzle = getEffectiveWordsPerPuzzle(wordSearch.wordList);
+        const words = settings.titleWords?.words ?? [];
+        const required = wordSearch.core.numberOfPuzzles * wordsPerPuzzle;
+        if (words.length < required) {
+          throw new Error(
+            `Chapter ${settings.chapterIndex == null ? '' : settings.chapterIndex + 1} needs ${required} words for ${wordSearch.core.numberOfPuzzles} puzzles.`
+          );
+        }
+        generated.push(
+          ...(await buildWordSearchPuzzlesForDocumentPage({
+            page,
+            directions: getDirections(wordSearch),
+          }))
+        );
+      }
+      const pageIds = new Set(wordSearchPages.map((page) => page.id));
+      setBatchPuzzles((prev) =>
+        normalizeBatchPuzzleDocumentIndices([
+          ...prev.filter((puzzle) => !pageIds.has(puzzle.pageId ?? '')),
+          ...generated,
+        ])
+      );
+      const activePage = wordSearchPages.find((page) => page.id === activeDocumentPageId);
+      const activeSettings = activePage?.settings as PuzzleModuleSettings | undefined;
+      if (activeSettings?.wordSearchSettings) {
+        setWordSearchSettings(
+          mergeWordSearchSettingsUpdate(activeSettings.wordSearchSettings, {})
+        );
+        if (activeSettings.titleWords) setTitleWords(activeSettings.titleWords);
+      }
+      setCurrentPuzzle(generated[0] ?? null);
+      setCurrentPuzzleType('word-search');
+      setCurrentBatchIndex(0);
+      setValidationError(null);
+      setPuzzleGenerationVersion((version) => version + 1);
+    } catch (error) {
+      setValidationError({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Could not regenerate chapter Word Search puzzles.',
+      });
+      throw error;
+    }
+  }, [activeDocumentPageId, getDirections]);
+
+  const applyWordSearchChapterChanges = useCallback(async (pages: DocumentPage[]) => {
+    const pageIds = new Set(pages.map((page) => page.id));
+    pushEditHistory();
+    setDocumentPages((previous) =>
+      previous.map((page) => (pageIds.has(page.id) ? pages.find((next) => next.id === page.id) ?? page : page))
+    );
+    await regenerateWordSearchDocuments(pages);
+  }, [pushEditHistory, regenerateWordSearchDocuments]);
+
   const regeneratePuzzleAtIndex = useCallback(
     async (
       batchIndex: number,
@@ -2642,7 +3022,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       const isWordSearch = activePage.moduleType === 'word-search';
       const isCrossword = activePage.moduleType === 'crossword';
-      if (!isWordSearch && !isCrossword) return false;
+      const isGeneric = isGenericPuzzleModuleType(activePage.moduleType);
+      if (!isWordSearch && !isCrossword && !isGeneric) return false;
 
       if (options.clearPageCustomizations) {
         clearAllPageOverrides();
@@ -2655,7 +3036,34 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         titleWords,
         ...(isWordSearch ? { wordSearchSettings } : {}),
         ...(isCrossword ? { crosswordSettings } : {}),
+        ...(isGeneric ? { genericPuzzleSettings } : {}),
       };
+      if (isGeneric && genericPuzzleSettings) {
+        const existingTitles = genericBatchPuzzles
+          .filter((puzzle) => puzzle.pageId === activePage.id)
+          .sort((a, b) => (a.puzzleIndexInDocument ?? 0) - (b.puzzleIndexInDocument ?? 0))
+          .map((puzzle) => {
+            const title = puzzle.pageName?.trim() || '';
+            return /^trivia(?:\s*#?\d+)?$/i.test(title) ? '' : title;
+          })
+          .filter(Boolean);
+        const genericSettings = structuredClone(genericPuzzleSettings);
+        if (
+          existingTitles.length > 0 &&
+          genericSettings.typography.selectTitleOption === 'custom_per_puzzle' &&
+          !genericSettings.typography.differentTitles.trim()
+        ) {
+          genericSettings.typography.differentTitles = existingTitles.join('\n');
+        }
+        if (
+          existingTitles.length > 0 &&
+          genericSettings.typography.selectTitleOption === 'custom' &&
+          !genericSettings.typography.titleText.trim()
+        ) {
+          genericSettings.typography.titleText = existingTitles[0];
+        }
+        liveSettings.genericPuzzleSettings = genericSettings;
+      }
       const sourcePage: DocumentPage = { ...activePage, settings: liveSettings };
 
       if (isWordSearch) {
@@ -2674,15 +3082,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       const numberOfPuzzles = isWordSearch
         ? wordSearchSettings.core.numberOfPuzzles
-        : crosswordSettings.core.numberOfPuzzles;
+        : isCrossword
+          ? crosswordSettings.core.numberOfPuzzles
+          : normalizeGenericPuzzleSettings(genericPuzzleSettings, activePage.moduleType).core.numberOfPuzzles;
       const puzzlesStartingNumber = isWordSearch
         ? wordSearchSettings.core.puzzlesStartingNumber
-        : crosswordSettings.core.puzzlesStartingNumber;
+        : isCrossword
+          ? crosswordSettings.core.puzzlesStartingNumber
+          : normalizeGenericPuzzleSettings(genericPuzzleSettings, activePage.moduleType).core.puzzlesStartingNumber;
       const plan = buildChapterSplitPlan({
         numberOfPuzzles,
         chapterCount: request.chapterCount,
         chapterTitles: request.chapterTitles,
         puzzlesStartingNumber,
+        customPuzzleCounts: request.customPuzzleCounts,
       });
       if (!plan) {
         setValidationError({
@@ -2751,12 +3164,296 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const firstPage = split.documentPages.find((doc) => doc.id === split.firstPuzzleDocId);
           const firstSettings = firstPage?.settings as PuzzleModuleSettings | undefined;
           if (firstSettings?.wordSearchSettings) {
-            setWordSearchSettings(firstSettings.wordSearchSettings);
+            setWordSearchSettings(
+              mergeWordSearchSettingsUpdate(firstSettings.wordSearchSettings, {})
+            );
           }
           if (firstSettings?.titleWords) setTitleWords(firstSettings.titleWords);
 
           setBatchPuzzles(normalizeBatchPuzzleDocumentIndices(merged));
           setCurrentPuzzleType('word-search');
+        } else if (isGeneric) {
+          const allNew: GenericBatchPuzzle[] = [];
+          for (const id of split.puzzleDocIds) {
+            const page = split.documentPages.find((doc) => doc.id === id);
+            if (!page) continue;
+            const pageSettings = normalizeGenericPuzzleSettings(
+              (page.settings as PuzzleModuleSettings).genericPuzzleSettings,
+              page.moduleType
+            );
+            const core = pageSettings.core;
+            const typography = pageSettings.typography;
+            const titleForPage = (index: number) =>
+              resolveGenericPuzzleTitleParts({
+                typography,
+                puzzleIndex: index,
+                puzzlesStartingNumber: core.puzzlesStartingNumber,
+                fallback: page.name,
+              }).titleText;
+            const count = Math.max(1, core.numberOfPuzzles || 1);
+
+            if (page.moduleType === 'trivia') {
+              const totalQuestions =
+                count * Math.max(1, core.questionsPerPage || 1);
+              const batch = buildTriviaBatch({
+                totalQuestions,
+                questionsPerPage: core.questionsPerPage,
+                suggestionsPerQuestion: core.suggestionsPerQuestion,
+                questionsText: core.questionsText,
+                suggestionsText: core.suggestionsText,
+                answersText: core.answersText,
+              });
+              batch.puzzles.forEach((next, index) => {
+                allNew.push({
+                  ...next,
+                  pageId: page.id,
+                  pageName: titleForPage(index),
+                  puzzleIndexInDocument: index,
+                  puzzleNumber: core.puzzlesStartingNumber + index,
+                  chapterIndex: (page.settings as PuzzleModuleSettings).chapterIndex,
+                });
+              });
+              continue;
+            }
+
+            const phrasePool =
+              page.moduleType === 'cryptogram'
+                ? (parseTriviaLines(core.cryptogramPhrases).length > 0
+                    ? parseTriviaLines(core.cryptogramPhrases)
+                    : FAMOUS_QUOTES.map((quote) => quote.text))
+                : [];
+            const scramblePool =
+              page.moduleType === 'word-scramble'
+                ? (parseTriviaLines(core.scrambleWords).length > 0
+                    ? parseTriviaLines(core.scrambleWords)
+                    : DEFAULT_SCRAMBLE_WORDS)
+                : [];
+            for (let index = 0; index < count; index++) {
+              let next: GenericBatchPuzzle;
+              if (page.moduleType === 'sudoku') {
+                const mode = core.sudokuPuzzleMode ?? 'standard';
+                if (mode === 'calcudoku') {
+                  next = generateCalcudoku({
+                    size: isCalcudokuGridSize(core.calcudokuGridSize)
+                      ? core.calcudokuGridSize
+                      : 6,
+                    difficulty:
+                      core.calcudokuDifficulty === 'mixed'
+                        ? 'easy'
+                        : core.calcudokuDifficulty === 'medium' ||
+                            core.calcudokuDifficulty === 'hard' ||
+                            core.calcudokuDifficulty === 'expert'
+                          ? core.calcudokuDifficulty
+                          : 'easy',
+                  }) as GenericBatchPuzzle;
+                } else {
+                  next = generateSudoku({
+                    difficulty:
+                      core.sudokuDifficulty === 'mixed'
+                        ? 'medium'
+                        : (core.sudokuDifficulty as Difficulty),
+                    size: isSudokuSize(core.sudokuSize) ? core.sudokuSize : 9,
+                    variant:
+                      mode === 'x'
+                        ? 'x'
+                        : mode === 'greater-than'
+                          ? 'greater-than'
+                          : 'standard',
+                    greaterThanHybrid: core.sudokuGreaterThanHybrid === true,
+                  }) as GenericBatchPuzzle;
+                }
+              } else if (page.moduleType === 'maze') {
+                next = generateMaze({
+                  size: core.mazeSize === 'mixed' ? 'medium' : core.mazeSize,
+                  shape: core.mazeShape === 'mixed' ? 'square' : core.mazeShape,
+                  startSide: core.mazeStartSide,
+                  endSide: core.mazeEndSide,
+                  variationSeed: index,
+                }) as GenericBatchPuzzle;
+              } else if (page.moduleType === 'cryptogram') {
+                next = generateCryptogram(phrasePool[index % phrasePool.length], {
+                  cipherType: core.cipherType,
+                  hintCount: core.showLetterHints ? core.hintLettersCount : 0,
+                  language: core.codewordsLanguage || undefined,
+                }) as GenericBatchPuzzle;
+              } else if (page.moduleType === 'codewords') {
+                const gridN =
+                  core.codewordsGridSize === 'custom'
+                    ? core.codewordsCustomSize
+                    : core.codewordsGridSize;
+                const hintCount = core.codewordsHintCountManual
+                  ? core.codewordsHintCount
+                  : defaultHintCountForDifficulty(core.codewordsDifficulty);
+                next = (await generateCodewordPuzzleAsync({
+                  rows: gridN,
+                  cols: gridN,
+                  difficulty: core.codewordsDifficulty,
+                  hintCount,
+                  hintMode: core.codewordsHintPlacement,
+                  seed: (core.codewordsSeed || Date.now()) + index * 9973,
+                  language: core.codewordsLanguage || 'en',
+                  timeBudgetMs: 12000,
+                })) as GenericBatchPuzzle;
+              } else if (page.moduleType === 'binairo') {
+                next = generateBinairo({
+                  size: core.binairoGridSize || 10,
+                  difficulty: core.binairoDifficulty || 'medium',
+                  symbols: core.binairoSymbols || '01',
+                  seed: (core.binairoSeed || Date.now()) + index * 9973,
+                  timeBudgetMs: 10000,
+                }) as GenericBatchPuzzle;
+              } else if (page.moduleType === 'kakuro') {
+                next = generateKakuro({
+                  size: core.kakuroGridSize || 9,
+                  difficulty: core.kakuroDifficulty || 'medium',
+                  pattern: core.kakuroPattern || 'asymmetric',
+                  seed: (core.kakuroSeed || Date.now()) + index * 9973,
+                  timeBudgetMs:
+                    (core.kakuroGridSize || 9) >= 12
+                      ? 55000
+                      : (core.kakuroGridSize || 9) >= 9
+                        ? 40000
+                        : 28000,
+                }) as GenericBatchPuzzle;
+              } else if (page.moduleType === 'math-maze') {
+                next = generateMathMaze({
+                  equationsAcross: core.mathMazeEquationsAcross,
+                  equationsDown: core.mathMazeEquationsDown,
+                  maxDigits: core.mathMazeMaxDigits,
+                  maxDividendDigits: core.mathMazeMaxDividendDigits,
+                  maxDivisorDigits: core.mathMazeMaxDivisorDigits,
+                  maxAnswerDigits: core.mathMazeMaxAnswerDigits,
+                  numbersPerEquation: core.mathMazeNumbersPerEquation,
+                  operations: {
+                    add: core.mathMazeOpAdd,
+                    sub: core.mathMazeOpSub,
+                    mul: core.mathMazeOpMul,
+                    div: core.mathMazeOpDiv,
+                  },
+                  allowNegative: core.mathMazeAllowNegative,
+                  useParentheses: core.mathMazeUseParentheses,
+                  parenthesesMode: core.mathMazeParenthesesMode,
+                  startText: core.mathMazeStartText,
+                  endText: core.mathMazeEndText,
+                  seed: (core.mathMazeSeed || Date.now()) + index * 9973,
+                }) as GenericBatchPuzzle;
+              } else if (page.moduleType === 'word-fill' || page.moduleType === 'number-fill') {
+                const fillMaster =
+                  parseTriviaLines(core.fillWordsText).length > 0
+                    ? parseTriviaLines(core.fillWordsText)
+                    : (
+                        (page.settings as PuzzleModuleSettings).titleWords?.words ??
+                        titleWords.words
+                      ).filter(Boolean);
+                const fillWpp = Math.max(1, core.fillWordsPerPuzzle || 1);
+                const fillWords = fillMaster.slice(index * fillWpp, (index + 1) * fillWpp);
+                const fillExact =
+                  page.moduleType === 'word-fill' && core.fillExactWordCount === true;
+                // Crossword exactClueCount-style budget when “Make exactly N words” is on.
+                const fillExactBudgetMs = Math.min(
+                  8_000,
+                  Math.max(2_500, Math.floor(20_000 / Math.max(1, count)))
+                );
+                next = generateFill({
+                  mode: page.moduleType === 'number-fill' ? 'number' : 'word',
+                  width: core.fillGridWidth,
+                  height: core.fillGridHeight,
+                  words: fillWords,
+                  wordsPerPuzzle:
+                    page.moduleType === 'word-fill' ? core.fillWordsPerPuzzle : undefined,
+                  exactWordCount: fillExact,
+                  digitCounts: {
+                    2: core.fillDigitCount2,
+                    3: core.fillDigitCount3,
+                    4: core.fillDigitCount4,
+                    5: core.fillDigitCount5,
+                    6: core.fillDigitCount6,
+                    7: core.fillDigitCount7,
+                    8: core.fillDigitCount8,
+                    9: core.fillDigitCount9,
+                  },
+                  lettersToShow: core.fillLettersToShow,
+                  includeStarterWord: core.fillIncludeStarterWord,
+                  seed: (core.fillSeed || Date.now()) + index * 9973,
+                  timeBudgetMs: fillExact ? fillExactBudgetMs : undefined,
+                }) as GenericBatchPuzzle;
+              } else if (page.moduleType === 'snake') {
+                const snakeMaster =
+                  parseTriviaLines(core.snakeWordsText).length > 0
+                    ? parseTriviaLines(core.snakeWordsText)
+                    : (
+                        (page.settings as PuzzleModuleSettings).titleWords?.words ??
+                        titleWords.words
+                      ).filter(Boolean);
+                const snakeWpp = Math.max(1, core.snakeWordsPerPuzzle || 1);
+                const snakeWords = snakeMaster.slice(index * snakeWpp, (index + 1) * snakeWpp);
+                next = generateSnake({
+                  mode: core.snakeMode,
+                  width: core.snakeGridWidth,
+                  height: core.snakeGridHeight,
+                  words: snakeWords,
+                  wordsPerPuzzle: core.snakeWordsPerPuzzle,
+                  digitCounts: {
+                    2: core.snakeDigitCount2,
+                    3: core.snakeDigitCount3,
+                    4: core.snakeDigitCount4,
+                    5: core.snakeDigitCount5,
+                    6: core.snakeDigitCount6,
+                    7: core.snakeDigitCount7,
+                    8: core.snakeDigitCount8,
+                    9: core.snakeDigitCount9,
+                  },
+                  allowNumbersInGrid: core.snakeAllowNumbersInGrid,
+                  includeFiller: core.snakeIncludeFiller,
+                  excludeFiller: core.snakeExcludeFiller,
+                  seed: (core.snakeSeed || Date.now()) + index * 9973,
+                }) as GenericBatchPuzzle;
+              } else {
+                const wordsPer = Math.max(1, core.wordsPerPuzzle || 10);
+                const words = Array.from({ length: wordsPer }, (_, wordIndex) =>
+                  scramblePool[(index * wordsPer + wordIndex) % scramblePool.length]
+                );
+                next = generateWordScramble(words, core.codewordsLanguage || undefined) as GenericBatchPuzzle;
+              }
+              allNew.push({
+                ...next,
+                pageId: page.id,
+                pageName: titleForPage(index),
+                puzzleIndexInDocument: index,
+                puzzleNumber: core.puzzlesStartingNumber + index,
+                chapterIndex: (page.settings as PuzzleModuleSettings).chapterIndex,
+              });
+            }
+          }
+
+          const genericPageIds = split.documentPages
+            .filter((page) => isGenericPuzzleModuleType(page.moduleType))
+            .map((page) => page.id);
+          setGenericBatchPuzzles((prev) => {
+            const byPage = new Map<string, GenericBatchPuzzle[]>();
+            for (const existing of prev) {
+              if (existing.pageId === sourcePage.id || split.puzzleDocIds.includes(existing.pageId ?? '')) continue;
+              const key = existing.pageId ?? '__default__';
+              byPage.set(key, [...(byPage.get(key) ?? []), existing]);
+            }
+            for (const puzzle of allNew) {
+              const key = puzzle.pageId ?? '__default__';
+              byPage.set(key, [...(byPage.get(key) ?? []), puzzle]);
+            }
+            const merged: GenericBatchPuzzle[] = [];
+            for (const id of genericPageIds) merged.push(...(byPage.get(id) ?? []));
+            for (const [key, puzzles] of byPage) {
+              if (!genericPageIds.includes(key)) merged.push(...puzzles);
+            }
+            return normalizeBatchPuzzleDocumentIndices(merged);
+          });
+          setCurrentPuzzle(allNew[0] ?? null);
+          setCurrentPuzzleType(activePage.moduleType as PuzzleType);
+          const firstPage = split.documentPages.find((doc) => doc.id === split.firstPuzzleDocId);
+          const firstSettings = firstPage?.settings as PuzzleModuleSettings | undefined;
+          if (firstSettings?.genericPuzzleSettings) {
+            setGenericPuzzleSettings(firstSettings.genericPuzzleSettings);
+          }
         } else {
           const allNew: CrosswordPuzzle[] = [];
           for (const id of split.puzzleDocIds) {
@@ -2829,6 +3526,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       batchPuzzles,
       crosswordSettings,
       documentPages,
+      genericBatchPuzzles,
+      genericPuzzleSettings,
       getDirections,
       replaceDocumentPages,
       titleWords,
@@ -2902,7 +3601,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         // Always build exactly `puzzleCount` puzzles. Answer pool wraps / rotates so
         // Update N works even when answers.length < puzzleCount * cluesPerPuzzle.
+        // Yield between puzzles + soft time budget so the UI stays responsive
+        // (large content-pack rebuilds used to freeze the tab).
         const generated: CrosswordPuzzle[] = [];
+        const perPuzzleBudgetMs =
+          core.exactClueCount === true
+            ? Math.min(8_000, Math.max(2_500, Math.floor(20_000 / Math.max(1, puzzleCount))))
+            : Math.min(3_500, Math.max(1_200, Math.floor(12_000 / Math.max(1, puzzleCount))));
         for (let i = 0; i < puzzleCount; i++) {
           const wordClues = buildCrosswordWordClues({
             answers,
@@ -2923,6 +3628,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             maxAnswerLength: core.maxAnswerLength,
             exactClueCount: core.exactClueCount === true,
             language: core.language,
+            timeBudgetMs: perPuzzleBudgetMs,
           });
           generated.push({
             ...next,
@@ -2931,6 +3637,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             puzzleIndexInDocument: i,
             puzzleNumber: core.puzzlesStartingNumber + i,
           });
+          // Let React paint between heavy crossword placements.
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
         }
 
         if (generated.length === 0) {
@@ -2984,7 +3692,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       case 'maze':
       case 'cryptogram':
       case 'word-scramble':
-      case 'trivia': {
+      case 'trivia':
+      case 'codewords':
+      case 'binairo':
+      case 'kakuro':
+      case 'math-maze':
+      case 'word-fill':
+      case 'number-fill':
+      case 'snake': {
         const moduleType = typeToGenerate;
         if (!activePage || activePage.moduleType !== moduleType) {
           setValidationError({
@@ -2997,6 +3712,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const puzzleCount = Math.max(1, gp.core.numberOfPuzzles || 1);
         const pageId = activePage.id;
         const pageName = activePage.name;
+        const titleForPuzzle = (index: number) =>
+          resolveGenericPuzzleTitleParts({
+            typography: gp.typography,
+            puzzleIndex: index,
+            puzzlesStartingNumber: gp.core.puzzlesStartingNumber,
+            fallback: pageName || moduleType,
+          }).titleText;
 
         if (moduleType === 'sudoku') {
           const block = sudokuModeGenerationBlockMessage(gp.core);
@@ -3036,7 +3758,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const questions = parseTriviaLines(gp.core.questionsText);
           const suggestions = parseTriviaLines(gp.core.suggestionsText);
           const answers = parseTriviaLines(gp.core.answersText);
-          const requiredQuestions = Math.max(1, gp.core.numberOfPuzzles || 1);
+          const requiredQuestions =
+            Math.max(1, gp.core.numberOfPuzzles || 1) *
+            Math.max(1, gp.core.questionsPerPage || 1);
           const suggestionsPerQuestion = Math.max(2, gp.core.suggestionsPerQuestion || 4);
           const missingSuggestions = getMissingTriviaSuggestions(
             suggestions.length,
@@ -3124,7 +3848,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const generated: GenericBatchPuzzle[] = [];
         if (moduleType === 'trivia') {
           const batch = buildTriviaBatch({
-            totalQuestions: Math.max(1, gp.core.numberOfPuzzles || 1),
+            totalQuestions:
+              Math.max(1, gp.core.numberOfPuzzles || 1) *
+              Math.max(1, gp.core.questionsPerPage || 1),
             questionsPerPage: gp.core.questionsPerPage,
             suggestionsPerQuestion: gp.core.suggestionsPerQuestion,
             questionsText: gp.core.questionsText,
@@ -3135,7 +3861,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             generated.push({
               ...next,
               pageId,
-              pageName,
+              pageName: titleForPuzzle(i),
               puzzleIndexInDocument: i,
               puzzleNumber: gp.core.puzzlesStartingNumber + i,
             });
@@ -3143,37 +3869,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         } else {
         const sudokuMode = gp.core.sudokuPuzzleMode ?? 'standard';
         const includeStandard = gp.core.sudokuMixedIncludeStandard !== false;
+        const includeX = gp.core.sudokuMixedIncludeX === true;
+        const includeGreaterThan = gp.core.sudokuMixedIncludeGreaterThan === true;
         const includeCalcudoku = gp.core.sudokuMixedIncludeCalcudoku !== false;
-        const typePlan: Array<'standard' | 'calcudoku'> =
+        type SudokuBatchKind = 'standard' | 'x' | 'greater-than' | 'calcudoku';
+        const typePlan: SudokuBatchKind[] =
           moduleType !== 'sudoku'
             ? []
             : sudokuMode === 'calcudoku'
               ? Array.from({ length: puzzleCount }, () => 'calcudoku' as const)
-              : sudokuMode === 'mixed'
-                ? shuffledBalancedPlan(
-                    [
-                      ...(includeStandard ? (['standard'] as const) : []),
-                      ...(includeCalcudoku ? (['calcudoku'] as const) : []),
-                    ],
-                    puzzleCount
-                  )
-                : Array.from({ length: puzzleCount }, () => 'standard' as const);
+              : sudokuMode === 'x'
+                ? Array.from({ length: puzzleCount }, () => 'x' as const)
+                : sudokuMode === 'greater-than'
+                  ? Array.from({ length: puzzleCount }, () => 'greater-than' as const)
+                  : sudokuMode === 'mixed'
+                    ? shuffledBalancedPlan(
+                        [
+                          ...(includeStandard ? (['standard'] as const) : []),
+                          ...(includeX ? (['x'] as const) : []),
+                          ...(includeGreaterThan ? (['greater-than'] as const) : []),
+                          ...(includeCalcudoku ? (['calcudoku'] as const) : []),
+                        ],
+                        puzzleCount
+                      )
+                    : Array.from({ length: puzzleCount }, () => 'standard' as const);
         const calcudokuCount = typePlan.filter((kind) => kind === 'calcudoku').length;
-        const standardCount = typePlan.filter((kind) => kind === 'standard').length;
+        const latinCount = typePlan.filter(
+          (kind) => kind === 'standard' || kind === 'x' || kind === 'greater-than'
+        ).length;
         const calcudokuSizeChoices = resolveCalcudokuGridSizes(gp.core);
         const calcudokuSizePlan = shuffledBalancedPlan(calcudokuSizeChoices, calcudokuCount);
         const calcudokuDiffChoices = resolveCalcudokuDifficulties(gp.core);
         const calcudokuDiffPlan = shuffledBalancedPlan(calcudokuDiffChoices, calcudokuCount);
-        const mixedTypeStandardSizePlan =
-          sudokuMode === 'mixed' && standardCount > 0 && sudokuSizePlan
-            ? sampleOrCyclePlan(sudokuSizePlan, standardCount)
+        const mixedTypeLatinSizePlan =
+          sudokuMode === 'mixed' && latinCount > 0 && sudokuSizePlan
+            ? sampleOrCyclePlan(sudokuSizePlan, latinCount)
             : null;
-        const mixedTypeStandardDiffPlan =
-          sudokuMode === 'mixed' && standardCount > 0 && sudokuDifficultyPlan
-            ? sampleOrCyclePlan(sudokuDifficultyPlan, standardCount)
+        const mixedTypeLatinDiffPlan =
+          sudokuMode === 'mixed' && latinCount > 0 && sudokuDifficultyPlan
+            ? sampleOrCyclePlan(sudokuDifficultyPlan, latinCount)
             : null;
         const calcudokuFingerprints = new Set<string>();
-        let standardCursor = 0;
+        const latinFingerprints = new Set<string>();
+        let latinCursor = 0;
         let calcudokuCursor = 0;
 
         try {
@@ -3194,19 +3932,52 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
               });
               await new Promise<void>((resolve) => setTimeout(resolve, 0));
             } else {
-              const sizeIndex = sudokuMode === 'mixed' ? standardCursor : i;
+              const sizeIndex = sudokuMode === 'mixed' ? latinCursor : i;
               const size: SudokuSize =
-                mixedTypeStandardSizePlan?.[standardCursor] ??
+                mixedTypeLatinSizePlan?.[latinCursor] ??
                 sudokuSizePlan?.[sizeIndex] ??
                 (isSudokuSize(gp.core.sudokuSize) ? gp.core.sudokuSize : 9);
               const difficulty: Difficulty =
-                mixedTypeStandardDiffPlan?.[standardCursor] ??
+                mixedTypeLatinDiffPlan?.[latinCursor] ??
                 sudokuDifficultyPlan?.[sizeIndex] ??
                 (gp.core.sudokuDifficulty === 'mixed'
                   ? 'medium'
                   : (gp.core.sudokuDifficulty as Difficulty));
-              standardCursor += 1;
-              next = generateSudoku({ difficulty, size });
+              latinCursor += 1;
+              let attempt = 0;
+              do {
+                next = generateSudoku({
+                  difficulty,
+                  size,
+                  variant:
+                    kind === 'x'
+                      ? 'x'
+                      : kind === 'greater-than'
+                        ? 'greater-than'
+                        : 'standard',
+                  greaterThanHybrid: gp.core.sudokuGreaterThanHybrid === true,
+                });
+                attempt += 1;
+              } while (
+                latinFingerprints.has(
+                  kind === 'greater-than'
+                    ? `${next.grid.flat().join(',')}|${(next.inequalities ?? [])
+                        .map((e) => `${e.r1},${e.c1},${e.r2},${e.c2},${e.gt ? 1 : 0}`)
+                        .join(';')}`
+                    : next.grid.flat().join(',')
+                ) &&
+                attempt < 6
+              );
+              latinFingerprints.add(
+                kind === 'greater-than'
+                  ? `${next.grid.flat().join(',')}|${(next.inequalities ?? [])
+                      .map((e) => `${e.r1},${e.c1},${e.r2},${e.c2},${e.gt ? 1 : 0}`)
+                      .join(';')}`
+                  : next.grid.flat().join(',')
+              );
+              if (kind === 'x' || kind === 'greater-than') {
+                await new Promise<void>((resolve) => setTimeout(resolve, 0));
+              }
             }
           } else if (moduleType === 'maze') {
             const currentShapeMode: MazeShapeMode =
@@ -3263,7 +4034,148 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             next = generateCryptogram(phrasePool[i % phrasePool.length], {
               cipherType: gp.core.cipherType,
               hintCount: gp.core.showLetterHints ? gp.core.hintLettersCount : 0,
+              language: gp.core.codewordsLanguage || undefined,
             });
+          } else if (moduleType === 'codewords') {
+            const gridN =
+              gp.core.codewordsGridSize === 'custom'
+                ? gp.core.codewordsCustomSize
+                : gp.core.codewordsGridSize;
+            const hintCount = gp.core.codewordsHintCountManual
+              ? gp.core.codewordsHintCount
+              : defaultHintCountForDifficulty(gp.core.codewordsDifficulty);
+            const seedBase = (gp.core.codewordsSeed || Date.now()) + i * 9973;
+            next = await generateCodewordPuzzleAsync({
+              rows: gridN,
+              cols: gridN,
+              difficulty: gp.core.codewordsDifficulty,
+              hintCount,
+              hintMode: gp.core.codewordsHintPlacement,
+              seed: seedBase,
+              language: gp.core.codewordsLanguage || 'en',
+              timeBudgetMs: 12000,
+            });
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          } else if (moduleType === 'binairo') {
+            const n = gp.core.binairoGridSize || 10;
+            next = generateBinairo({
+              size: n,
+              difficulty: gp.core.binairoDifficulty || 'medium',
+              symbols: gp.core.binairoSymbols || '01',
+              seed: (gp.core.binairoSeed || Date.now()) + i * 9973,
+              timeBudgetMs: n >= 12 ? 14000 : 10000,
+            });
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          } else if (moduleType === 'kakuro') {
+            const n = gp.core.kakuroGridSize || 9;
+            next = generateKakuro({
+              size: n,
+              difficulty: gp.core.kakuroDifficulty || 'medium',
+              pattern: gp.core.kakuroPattern || 'asymmetric',
+              seed: (gp.core.kakuroSeed || Date.now()) + i * 9973,
+              timeBudgetMs: n >= 12 ? 55000 : n >= 9 ? 40000 : 28000,
+            });
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          } else if (moduleType === 'math-maze') {
+            next = generateMathMaze({
+              equationsAcross: gp.core.mathMazeEquationsAcross,
+              equationsDown: gp.core.mathMazeEquationsDown,
+              maxDigits: gp.core.mathMazeMaxDigits,
+              maxDividendDigits: gp.core.mathMazeMaxDividendDigits,
+              maxDivisorDigits: gp.core.mathMazeMaxDivisorDigits,
+              maxAnswerDigits: gp.core.mathMazeMaxAnswerDigits,
+              numbersPerEquation: gp.core.mathMazeNumbersPerEquation,
+              operations: {
+                add: gp.core.mathMazeOpAdd,
+                sub: gp.core.mathMazeOpSub,
+                mul: gp.core.mathMazeOpMul,
+                div: gp.core.mathMazeOpDiv,
+              },
+              allowNegative: gp.core.mathMazeAllowNegative,
+              useParentheses: gp.core.mathMazeUseParentheses,
+              parenthesesMode: gp.core.mathMazeParenthesesMode,
+              startText: gp.core.mathMazeStartText,
+              endText: gp.core.mathMazeEndText,
+              seed: (gp.core.mathMazeSeed || Date.now()) + i * 9973,
+            });
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          } else if (moduleType === 'word-fill' || moduleType === 'number-fill') {
+            const parseLines = (text: string) =>
+              (text || '')
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter(Boolean);
+            const customWords = parseLines(gp.core.fillWordsText);
+            const fromTitle = titleWords.words.filter(Boolean);
+            const fillMaster = customWords.length > 0 ? customWords : fromTitle;
+            const fillWpp = Math.max(1, gp.core.fillWordsPerPuzzle || 1);
+            // Consecutive chunks like Word Search: puzzle 0 → [0, wpp), puzzle 1 → [wpp, 2*wpp), …
+            const words = fillMaster.slice(i * fillWpp, (i + 1) * fillWpp);
+            const fillExact =
+              moduleType === 'word-fill' && gp.core.fillExactWordCount === true;
+            // Same soft budget as crossword "Make exactly N clues" mode.
+            const fillExactBudgetMs = Math.min(
+              8_000,
+              Math.max(2_500, Math.floor(20_000 / Math.max(1, puzzleCount)))
+            );
+            next = generateFill({
+              mode: moduleType === 'number-fill' ? 'number' : 'word',
+              width: gp.core.fillGridWidth,
+              height: gp.core.fillGridHeight,
+              words,
+              wordsPerPuzzle:
+                moduleType === 'word-fill' ? gp.core.fillWordsPerPuzzle : undefined,
+              exactWordCount: fillExact,
+              digitCounts: {
+                2: gp.core.fillDigitCount2,
+                3: gp.core.fillDigitCount3,
+                4: gp.core.fillDigitCount4,
+                5: gp.core.fillDigitCount5,
+                6: gp.core.fillDigitCount6,
+                7: gp.core.fillDigitCount7,
+                8: gp.core.fillDigitCount8,
+                9: gp.core.fillDigitCount9,
+              },
+              lettersToShow: gp.core.fillLettersToShow,
+              includeStarterWord: gp.core.fillIncludeStarterWord,
+              seed: (gp.core.fillSeed || Date.now()) + i * 9973,
+              timeBudgetMs: fillExact ? fillExactBudgetMs : undefined,
+            });
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          } else if (moduleType === 'snake') {
+            const parseLines = (text: string) =>
+              (text || '')
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter(Boolean);
+            const customWords = parseLines(gp.core.snakeWordsText);
+            const fromTitle = titleWords.words.filter(Boolean);
+            const snakeMaster = customWords.length > 0 ? customWords : fromTitle;
+            const snakeWpp = Math.max(1, gp.core.snakeWordsPerPuzzle || 1);
+            // Consecutive chunks like Word Search: puzzle 0 → [0, wpp), puzzle 1 → [wpp, 2*wpp), …
+            const words = snakeMaster.slice(i * snakeWpp, (i + 1) * snakeWpp);
+            next = generateSnake({
+              mode: gp.core.snakeMode,
+              width: gp.core.snakeGridWidth,
+              height: gp.core.snakeGridHeight,
+              words,
+              wordsPerPuzzle: gp.core.snakeWordsPerPuzzle,
+              digitCounts: {
+                2: gp.core.snakeDigitCount2,
+                3: gp.core.snakeDigitCount3,
+                4: gp.core.snakeDigitCount4,
+                5: gp.core.snakeDigitCount5,
+                6: gp.core.snakeDigitCount6,
+                7: gp.core.snakeDigitCount7,
+                8: gp.core.snakeDigitCount8,
+                9: gp.core.snakeDigitCount9,
+              },
+              allowNumbersInGrid: gp.core.snakeAllowNumbersInGrid,
+              includeFiller: gp.core.snakeIncludeFiller,
+              excludeFiller: gp.core.snakeExcludeFiller,
+              seed: (gp.core.snakeSeed || Date.now()) + i * 9973,
+            });
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
           } else {
             const wordsPer = Math.max(1, gp.core.wordsPerPuzzle || 10);
             const pool =
@@ -3272,12 +4184,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             for (let j = 0; j < wordsPer; j++) {
               chunk.push(pool[(i * wordsPer + j) % pool.length]);
             }
-            next = generateWordScramble(chunk);
+            next = generateWordScramble(chunk, gp.core.codewordsLanguage || undefined);
           }
           generated.push({
             ...next,
             pageId,
-            pageName,
+            pageName: titleForPuzzle(i),
             puzzleIndexInDocument: i,
             puzzleNumber: gp.core.puzzlesStartingNumber + i,
           });
@@ -3548,7 +4460,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setTitleWords(puzzle.settings.titleWords);
       setColorSettings(puzzle.settings.colors);
       if (puzzle.settings.wordSearch) {
-        setWordSearchSettings(puzzle.settings.wordSearch);
+        setWordSearchSettings(
+          mergeWordSearchSettingsUpdate(puzzle.settings.wordSearch, {})
+        );
       }
       if (puzzle.type === 'word-search') {
         void validateAndGenerate();
@@ -3565,125 +4479,225 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     savePuzzleToStorage(updated);
   }, [savedPuzzles, savePuzzleToStorage]);
 
+  const clearValidationError = useCallback(() => setValidationError(null), []);
+
+  const contextValue = useMemo(
+    () => ({
+      currentPuzzleType,
+      setCurrentPuzzleType,
+      wordSearchSettings,
+      setWordSearchSettings,
+      updateWordSearchSettings,
+      crosswordSettings,
+      setCrosswordSettings,
+      updateCrosswordSettings,
+      updateCrosswordText,
+      murdokuSettings,
+      setMurdokuSettings,
+      updateMurdokuSettings,
+      replaceMurdokuPuzzle,
+      genericPuzzleSettings,
+      setGenericPuzzleSettings,
+      updateGenericPuzzleSettings,
+      bookSettings,
+      setBookSettings,
+      puzzleSettings,
+      setPuzzleSettings,
+      titleWords,
+      setTitleWords,
+      colorSettings,
+      setColorSettings,
+      currentPuzzle,
+      batchPuzzles,
+      crosswordBatchPuzzles,
+      murdokuBatchPuzzles,
+      genericBatchPuzzles,
+      currentBatchIndex,
+      setCurrentBatchIndex,
+      validationError,
+      clearValidationError,
+      validateAndGenerate,
+      regenerateWordSearchDocuments,
+      applyWordSearchChapterChanges,
+      generatePuzzle,
+      regeneratePuzzleAtIndex,
+      restoreBatchPuzzleAtIndex,
+      puzzleGenerationVersion,
+      triggerStylingUpdate: stylingTrigger,
+      sudokuDifficulty,
+      setSudokuDifficulty,
+      mazeSize,
+      setMazeSize,
+      savedPuzzles,
+      savePuzzle,
+      loadPuzzle,
+      deletePuzzle,
+      showSolution,
+      setShowSolution,
+      cryptogramText,
+      setCryptogramText,
+      previewZoom,
+      setPreviewZoom,
+      puzzleGridScale,
+      setPuzzleGridScale,
+      titleToAnswerGap,
+      setTitleToAnswerGap,
+      solutionToSolutionGap,
+      setSolutionToSolutionGap,
+      pageMargin,
+      setPageMargin,
+      pageOverrides,
+      setPageOverrides,
+      updatePageOverride,
+      clearPageOverride,
+      clearAllPageOverrides,
+      pagePuzzleGridScales,
+      setPagePuzzleGridScale,
+      clearPagePuzzleGridScale,
+      clearAllPagePuzzleGridScales,
+      pageCrosswordOverrides,
+      setPageCrosswordOverrides,
+      pageGenericOverrides,
+      setPageGenericOverrides,
+      applyMode,
+      setApplyMode,
+      previewRangeMode,
+      setPreviewRangeMode,
+      activePreviewTab,
+      setActivePreviewTab,
+      settingsHydrated,
+      documentPages,
+      activeDocumentPageId,
+      activeDocumentPage,
+      setActiveDocumentPageId,
+      insertDocumentPage,
+      appendAiGeneratedBundle,
+      applyAiGeneratedToActiveDocument,
+      insertSeparatorTitlePageAfter,
+      removeCompiledBookPage,
+      removeDocumentPage,
+      duplicateDocumentPage,
+      moveDocumentPage,
+      reorderDocumentPages,
+      updateDocumentPage,
+      replaceDocumentPages,
+      updateActiveTextModuleSettings,
+      applyTextSettingsToDocumentPages,
+      canUndo,
+      canRedo,
+      undo,
+      redo,
+      pushEditHistory,
+      persistPagePuzzleSettings,
+      applyTrimSizeLayoutChange,
+      applyLayoutSettingsToAllPuzzleDocuments,
+      projectName,
+      setProjectName,
+      isProjectDirty,
+      buildProjectSnapshot,
+      loadProjectSnapshot,
+      resetToNewProject,
+      markProjectSaved,
+      showEditorTutorial,
+      dismissEditorTutorial,
+    }),
+    [
+      currentPuzzleType,
+      wordSearchSettings,
+      updateWordSearchSettings,
+      crosswordSettings,
+      updateCrosswordSettings,
+      updateCrosswordText,
+      updateCrosswordText,
+      murdokuSettings,
+      updateMurdokuSettings,
+      replaceMurdokuPuzzle,
+      genericPuzzleSettings,
+      updateGenericPuzzleSettings,
+      bookSettings,
+      puzzleSettings,
+      titleWords,
+      colorSettings,
+      currentPuzzle,
+      batchPuzzles,
+      crosswordBatchPuzzles,
+      murdokuBatchPuzzles,
+      genericBatchPuzzles,
+      currentBatchIndex,
+      validationError,
+      clearValidationError,
+      validateAndGenerate,
+      regenerateWordSearchDocuments,
+      applyWordSearchChapterChanges,
+      generatePuzzle,
+      regeneratePuzzleAtIndex,
+      restoreBatchPuzzleAtIndex,
+      puzzleGenerationVersion,
+      stylingTrigger,
+      sudokuDifficulty,
+      mazeSize,
+      savedPuzzles,
+      savePuzzle,
+      loadPuzzle,
+      deletePuzzle,
+      showSolution,
+      cryptogramText,
+      previewZoom,
+      puzzleGridScale,
+      titleToAnswerGap,
+      solutionToSolutionGap,
+      pageMargin,
+      pageOverrides,
+      updatePageOverride,
+      clearPageOverride,
+      clearAllPageOverrides,
+      pagePuzzleGridScales,
+      setPagePuzzleGridScale,
+      clearPagePuzzleGridScale,
+      clearAllPagePuzzleGridScales,
+      pageCrosswordOverrides,
+      pageGenericOverrides,
+      applyMode,
+      previewRangeMode,
+      activePreviewTab,
+      settingsHydrated,
+      documentPages,
+      activeDocumentPageId,
+      activeDocumentPage,
+      insertDocumentPage,
+      appendAiGeneratedBundle,
+      applyAiGeneratedToActiveDocument,
+      insertSeparatorTitlePageAfter,
+      removeCompiledBookPage,
+      removeDocumentPage,
+      duplicateDocumentPage,
+      moveDocumentPage,
+      reorderDocumentPages,
+      updateDocumentPage,
+      replaceDocumentPages,
+      updateActiveTextModuleSettings,
+      applyTextSettingsToDocumentPages,
+      canUndo,
+      canRedo,
+      undo,
+      redo,
+      pushEditHistory,
+      persistPagePuzzleSettings,
+      applyTrimSizeLayoutChange,
+      applyLayoutSettingsToAllPuzzleDocuments,
+      projectName,
+      isProjectDirty,
+      buildProjectSnapshot,
+      loadProjectSnapshot,
+      resetToNewProject,
+      markProjectSaved,
+      showEditorTutorial,
+      dismissEditorTutorial,
+    ]
+  );
+
   return (
-    <AppContext.Provider
-      value={{
-        currentPuzzleType,
-        setCurrentPuzzleType,
-        wordSearchSettings,
-        setWordSearchSettings,
-        updateWordSearchSettings,
-        crosswordSettings,
-        setCrosswordSettings,
-        updateCrosswordSettings,
-        murdokuSettings,
-        setMurdokuSettings,
-        updateMurdokuSettings,
-        replaceMurdokuPuzzle,
-        genericPuzzleSettings,
-        setGenericPuzzleSettings,
-        updateGenericPuzzleSettings,
-        bookSettings,
-        setBookSettings,
-        puzzleSettings,
-        setPuzzleSettings,
-        titleWords,
-        setTitleWords,
-        colorSettings,
-        setColorSettings,
-        currentPuzzle,
-        batchPuzzles,
-        crosswordBatchPuzzles,
-        murdokuBatchPuzzles,
-        genericBatchPuzzles,
-        currentBatchIndex,
-        setCurrentBatchIndex,
-        validationError,
-        clearValidationError: () => setValidationError(null),
-        validateAndGenerate,
-        generatePuzzle,
-        regeneratePuzzleAtIndex,
-        restoreBatchPuzzleAtIndex,
-        puzzleGenerationVersion,
-        triggerStylingUpdate: stylingTrigger,
-        sudokuDifficulty,
-        setSudokuDifficulty,
-        mazeSize,
-        setMazeSize,
-        savedPuzzles,
-        savePuzzle,
-        loadPuzzle,
-        deletePuzzle,
-        showSolution,
-        setShowSolution,
-        cryptogramText,
-        setCryptogramText,
-        previewZoom,
-        setPreviewZoom,
-        puzzleGridScale,
-        setPuzzleGridScale,
-        titleToAnswerGap,
-        setTitleToAnswerGap,
-        solutionToSolutionGap,
-        setSolutionToSolutionGap,
-        pageMargin,
-        setPageMargin,
-        pageOverrides,
-        setPageOverrides,
-        updatePageOverride,
-        clearPageOverride,
-        clearAllPageOverrides,
-        pagePuzzleGridScales,
-        setPagePuzzleGridScale,
-        clearPagePuzzleGridScale,
-        clearAllPagePuzzleGridScales,
-        pageCrosswordOverrides,
-        setPageCrosswordOverrides,
-        pageGenericOverrides,
-        setPageGenericOverrides,
-        applyMode,
-        setApplyMode,
-        previewRangeMode,
-        setPreviewRangeMode,
-        activePreviewTab,
-        setActivePreviewTab,
-        settingsHydrated,
-        documentPages,
-        activeDocumentPageId,
-        activeDocumentPage,
-        setActiveDocumentPageId,
-        insertDocumentPage,
-        appendAiGeneratedBundle,
-        applyAiGeneratedToActiveDocument,
-        insertSeparatorTitlePageAfter,
-        removeCompiledBookPage,
-        removeDocumentPage,
-        duplicateDocumentPage,
-        moveDocumentPage,
-        reorderDocumentPages,
-        updateDocumentPage,
-        replaceDocumentPages,
-        updateActiveTextModuleSettings,
-        applyTextSettingsToDocumentPages,
-        canUndo,
-        canRedo,
-        undo,
-        redo,
-        pushEditHistory,
-        persistPagePuzzleSettings,
-        applyTrimSizeLayoutChange,
-        applyLayoutSettingsToAllPuzzleDocuments,
-        projectName,
-        setProjectName,
-        isProjectDirty,
-        buildProjectSnapshot,
-        loadProjectSnapshot,
-        resetToNewProject,
-        markProjectSaved,
-        showEditorTutorial,
-        dismissEditorTutorial,
-      }}
-    >
+    <AppContext.Provider value={contextValue}>
       {children}
     </AppContext.Provider>
   );

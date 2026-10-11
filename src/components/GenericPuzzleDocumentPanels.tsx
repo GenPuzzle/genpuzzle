@@ -29,6 +29,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { MiniColorInput } from '@/components/ui/color-input';
 import { Textarea } from '@/components/ui/textarea';
 import { PUBLISHING_FONTS } from '@/lib/publishing-fonts';
+import { MazeStartEndImagesPanel } from '@/components/MazeStartEndImagesPanel';
 
 import { computeGenericAutoFit, fitValuesUnchanged, pageFitApplyKey } from '@/lib/auto-page-fit';
 import { DivideListsIntoChaptersControl } from '@/components/DivideListsIntoChaptersControl';
@@ -49,6 +50,7 @@ import type {
   SudokuDifficultyPlacement,
   SudokuMixedSizeCounts,
   SudokuPuzzleMode,
+  SudokuXMarkStyle,
   CalcudokuConcreteDifficulty,
 } from '@/lib/generic-puzzle-settings';
 import {
@@ -278,7 +280,7 @@ function selectedStandardSizes(core: GenericPuzzleSettings['core']): SudokuSize[
 
 function selectedStandardLevels(
   core: GenericPuzzleSettings['core']
-): Array<'easy' | 'medium' | 'hard'> {
+): Array<'easy' | 'medium' | 'hard' | 'expert'> {
   if (core.sudokuDifficulty === 'mixed') {
     const levels: Array<'easy' | 'medium' | 'hard'> = [];
     if (core.sudokuMixedEasyCount > 0) levels.push('easy');
@@ -286,7 +288,11 @@ function selectedStandardLevels(
     if (core.sudokuMixedHardCount > 0) levels.push('hard');
     return levels.length > 0 ? levels : ['easy', 'medium', 'hard'];
   }
-  if (core.sudokuDifficulty === 'easy' || core.sudokuDifficulty === 'hard') {
+  if (
+    core.sudokuDifficulty === 'easy' ||
+    core.sudokuDifficulty === 'hard' ||
+    core.sudokuDifficulty === 'expert'
+  ) {
     return [core.sudokuDifficulty];
   }
   return ['medium'];
@@ -698,6 +704,7 @@ function StandardSudokuGenerationFields({
           { value: 'easy', label: 'Easy' },
           { value: 'medium', label: 'Medium' },
           { value: 'hard', label: 'Hard' },
+          { value: 'expert', label: 'Expert' },
         ]}
         selected={selectedStandardLevels(core)}
         onChange={(selected) => {
@@ -705,7 +712,12 @@ function StandardSudokuGenerationFields({
             patchCore({ sudokuDifficulty: selected[0] });
             return;
           }
-          const counts = redistributeLevelCounts(selected, core.numberOfPuzzles);
+          // Expert is single-level only; mixing uses easy/medium/hard counts.
+          const mixSelected = selected.filter(
+            (level): level is 'easy' | 'medium' | 'hard' => level !== 'expert'
+          );
+          const levels = mixSelected.length > 0 ? mixSelected : (['easy', 'medium', 'hard'] as const);
+          const counts = redistributeLevelCounts([...levels], core.numberOfPuzzles);
           const patch: Partial<GenericPuzzleSettings['core']> = {
             sudokuDifficulty: 'mixed',
             sudokuMixedEasyCount: counts.easy,
@@ -726,7 +738,7 @@ function StandardSudokuGenerationFields({
           }
           patchCore(patch);
         }}
-        hint="Open the menu to pick one level, several levels, or Mix all. Clue density scales with board size."
+        hint="Open the menu to pick one level, several levels, or Mix all. Greater Than rates difficulty by logic, not by how many numbers are shown."
       />
 
       {core.sudokuDifficulty === 'mixed' ? (
@@ -913,24 +925,95 @@ function CalcudokuGenerationFields({
   );
 }
 
+type SudokuTypeOption = 'standard' | 'x' | 'greater-than' | 'calcudoku';
+
 function SudokuTypeSelector({
   selected,
   onChange,
 }: {
-  selected: Array<'standard' | 'calcudoku'>;
-  onChange: (next: Array<'standard' | 'calcudoku'>) => void;
+  selected: SudokuTypeOption[];
+  onChange: (next: SudokuTypeOption[]) => void;
 }) {
   return (
     <MultiSelectPicker
       label="Sudoku Type"
       options={[
         { value: 'standard', label: 'Standard Sudoku' },
+        { value: 'x', label: 'Sudoku X' },
+        { value: 'greater-than', label: 'Greater Than' },
         { value: 'calcudoku', label: 'Calcudoku' },
       ]}
       selected={selected}
       onChange={onChange}
-      hint="Open the menu to pick Standard, Calcudoku, or Mix all."
+      hint="Open the menu to pick Standard, Sudoku X, Greater Than, Calcudoku, or Mix all."
     />
+  );
+}
+
+function SudokuXDiagonalStyleFields({
+  core,
+  colors,
+  patchCore,
+  patchColors,
+}: {
+  core: GenericPuzzleSettings['core'];
+  colors: GenericPuzzleSettings['colors'];
+  patchCore: (patch: Partial<GenericPuzzleSettings['core']>) => void;
+  patchColors: (patch: Partial<GenericPuzzleSettings['colors']>) => void;
+}) {
+  const markStyle: SudokuXMarkStyle = core.sudokuXMarkStyle === 'lines' ? 'lines' : 'boxes';
+  return (
+    <div className="space-y-3 rounded-md border border-slate-200 p-3 dark:border-slate-700">
+      <p className="text-sm font-medium">Diagonal Mark Style</p>
+      <div className="space-y-1">
+        <Label className="text-xs text-gray-500">X Appearance</Label>
+        <Select
+          value={markStyle}
+          onValueChange={(value) =>
+            patchCore({ sudokuXMarkStyle: value as SudokuXMarkStyle })
+          }
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="boxes">Colored diagonal boxes</SelectItem>
+            <SelectItem value="lines">Crossing X lines</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      {markStyle === 'boxes' ? (
+        <MiniColorInput
+          label="Diagonal Box Color"
+          value={colors.sudokuXBoxColor || '#e6e6e6'}
+          onChange={(sudokuXBoxColor) => patchColors({ sudokuXBoxColor })}
+        />
+      ) : (
+        <>
+          <MiniColorInput
+            label="X Line Color"
+            value={colors.sudokuXLineColor || '#6b7280'}
+            onChange={(sudokuXLineColor) => patchColors({ sudokuXLineColor })}
+          />
+          <SliderField
+            label="X Line Thickness"
+            value={core.sudokuXLineThickness ?? 100}
+            onValueChange={(v) => patchCore({ sudokuXLineThickness: v })}
+            min={25}
+            max={300}
+            format="percent"
+          />
+          <SliderField
+            label="X Line Transparency"
+            value={core.sudokuXLineTransparency ?? 35}
+            onValueChange={(v) => patchCore({ sudokuXLineTransparency: v })}
+            min={0}
+            max={100}
+            format="percent"
+          />
+        </>
+      )}
+    </div>
   );
 }
 
@@ -977,14 +1060,16 @@ export function GenericPuzzleSettingsPanel({
                 if (moduleType === 'sudoku') {
                   const patch: Partial<GenericPuzzleSettings['core']> = { numberOfPuzzles: v };
                   const mode = core.sudokuPuzzleMode ?? 'standard';
-                  if (mode === 'standard' && core.sudokuDifficulty === 'mixed') {
+                  const latinMode =
+                    mode === 'standard' || mode === 'x' || mode === 'greater-than';
+                  if (latinMode && core.sudokuDifficulty === 'mixed') {
                     const counts = defaultMixedSudokuLevelCounts(v);
                     patch.sudokuMixedEasyCount = counts.easy;
                     patch.sudokuMixedMediumCount = counts.medium;
                     patch.sudokuMixedHardCount = counts.hard;
                     patch.numberOfPuzzles = counts.easy + counts.medium + counts.hard;
                   }
-                  if (mode === 'standard' && core.sudokuSize === 'mixed') {
+                  if (latinMode && core.sudokuSize === 'mixed') {
                     const sizes = defaultMixedSudokuSizeCounts(patch.numberOfPuzzles ?? v);
                     Object.assign(patch, patchFromSudokuSizeCounts(sizes, true));
                   }
@@ -1033,20 +1118,32 @@ export function GenericPuzzleSettingsPanel({
               selected={
                 core.sudokuPuzzleMode === 'calcudoku'
                   ? ['calcudoku']
-                  : core.sudokuPuzzleMode === 'mixed'
-                    ? [
-                        ...(core.sudokuMixedIncludeStandard !== false ? (['standard'] as const) : []),
-                        ...(core.sudokuMixedIncludeCalcudoku !== false
-                          ? (['calcudoku'] as const)
-                          : []),
-                      ]
-                    : ['standard']
+                  : core.sudokuPuzzleMode === 'x'
+                    ? ['x']
+                    : core.sudokuPuzzleMode === 'greater-than'
+                      ? ['greater-than']
+                      : core.sudokuPuzzleMode === 'mixed'
+                        ? [
+                            ...(core.sudokuMixedIncludeStandard !== false
+                              ? (['standard'] as const)
+                              : []),
+                            ...(core.sudokuMixedIncludeX === true ? (['x'] as const) : []),
+                            ...(core.sudokuMixedIncludeGreaterThan === true
+                              ? (['greater-than'] as const)
+                              : []),
+                            ...(core.sudokuMixedIncludeCalcudoku !== false
+                              ? (['calcudoku'] as const)
+                              : []),
+                          ]
+                        : ['standard']
               }
               onChange={(selected) => {
                 if (selected.length === 1) {
                   patchCore({
                     sudokuPuzzleMode: selected[0],
                     sudokuMixedIncludeStandard: selected[0] === 'standard',
+                    sudokuMixedIncludeX: selected[0] === 'x',
+                    sudokuMixedIncludeGreaterThan: selected[0] === 'greater-than',
                     sudokuMixedIncludeCalcudoku: selected[0] === 'calcudoku',
                   });
                   return;
@@ -1054,6 +1151,8 @@ export function GenericPuzzleSettingsPanel({
                 patchCore({
                   sudokuPuzzleMode: 'mixed',
                   sudokuMixedIncludeStandard: selected.includes('standard'),
+                  sudokuMixedIncludeX: selected.includes('x'),
+                  sudokuMixedIncludeGreaterThan: selected.includes('greater-than'),
                   sudokuMixedIncludeCalcudoku: selected.includes('calcudoku'),
                 });
               }}
@@ -1063,6 +1162,44 @@ export function GenericPuzzleSettingsPanel({
               <StandardSudokuGenerationFields core={core} patchCore={patchCore} syncQuantity />
             ) : null}
 
+            {core.sudokuPuzzleMode === 'x' ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Sudoku X Settings</p>
+                <p className="text-xs text-gray-500">
+                  Standard Sudoku rules plus both main diagonals (digits 1–N once each).
+                </p>
+                <SudokuXDiagonalStyleFields
+                  core={core}
+                  colors={colors}
+                  patchCore={patchCore}
+                  patchColors={patchColors}
+                />
+                <StandardSudokuGenerationFields core={core} patchCore={patchCore} syncQuantity />
+              </div>
+            ) : null}
+
+            {core.sudokuPuzzleMode === 'greater-than' ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Greater Than Settings</p>
+                <p className="text-xs text-gray-500">
+                  Traditional format: empty grid with inequality signs only. Difficulty is rated by
+                  logical solving (chains, singles, pairs), not by given digits.
+                </p>
+                <label className="flex items-start gap-2 text-xs text-slate-700 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={core.sudokuGreaterThanHybrid === true}
+                    onChange={(e) => patchCore({ sudokuGreaterThanHybrid: e.target.checked })}
+                  />
+                  <span>
+                    Hybrid mode — also place a few prefilled digits (optional; off by default).
+                  </span>
+                </label>
+                <StandardSudokuGenerationFields core={core} patchCore={patchCore} syncQuantity />
+              </div>
+            ) : null}
+
             {core.sudokuPuzzleMode === 'calcudoku' ? (
               <div className="space-y-2">
                 <p className="text-sm font-medium">Calcudoku Settings</p>
@@ -1070,12 +1207,47 @@ export function GenericPuzzleSettingsPanel({
               </div>
             ) : null}
 
-            {core.sudokuPuzzleMode === 'mixed' && core.sudokuMixedIncludeStandard !== false ? (
+            {core.sudokuPuzzleMode === 'mixed' &&
+            (core.sudokuMixedIncludeStandard !== false ||
+              core.sudokuMixedIncludeX === true ||
+              core.sudokuMixedIncludeGreaterThan === true) ? (
               <details open className="rounded-md border border-slate-200 dark:border-slate-700">
                 <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium">
-                  Standard Sudoku Settings
+                  {[
+                    core.sudokuMixedIncludeStandard !== false ? 'Standard' : null,
+                    core.sudokuMixedIncludeX === true ? 'Sudoku X' : null,
+                    core.sudokuMixedIncludeGreaterThan === true ? 'Greater Than' : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' / ') + ' Settings'}
                 </summary>
                 <div className="space-y-3 px-3 pb-3">
+                  {core.sudokuMixedIncludeX === true ? (
+                    <SudokuXDiagonalStyleFields
+                      core={core}
+                      colors={colors}
+                      patchCore={patchCore}
+                      patchColors={patchColors}
+                    />
+                  ) : null}
+                  {core.sudokuMixedIncludeGreaterThan === true ? (
+                    <div className="space-y-2">
+                      <p className="text-xs text-gray-500">
+                        Greater Than defaults to inequality-only (no starting numbers).
+                      </p>
+                      <label className="flex items-start gap-2 text-xs text-slate-700 dark:text-slate-200">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={core.sudokuGreaterThanHybrid === true}
+                          onChange={(e) =>
+                            patchCore({ sudokuGreaterThanHybrid: e.target.checked })
+                          }
+                        />
+                        <span>Hybrid Greater Than — include a few prefilled digits</span>
+                      </label>
+                    </div>
+                  ) : null}
                   <StandardSudokuGenerationFields
                     core={core}
                     patchCore={patchCore}
@@ -1930,6 +2102,904 @@ export function GenericPuzzleSettingsPanel({
             <p className="text-[11px] text-gray-500">
               Solution path is always drawn on solution pages.
             </p>
+            <MazeStartEndImagesPanel
+              images={core.mazeStartEndImages}
+              mazeCount={core.numberOfPuzzles}
+              patchCore={patchCore}
+            />
+          </>
+        ) : null}
+
+        {moduleType === 'binairo' ? (
+          <>
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Grid Size</Label>
+              <Select
+                value={String(core.binairoGridSize || 10)}
+                onValueChange={(value) =>
+                  patchCore({
+                    binairoGridSize: Number(value) as 4 | 6 | 8 | 10 | 12 | 14,
+                  })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="4">4 × 4</SelectItem>
+                  <SelectItem value="6">6 × 6</SelectItem>
+                  <SelectItem value="8">8 × 8</SelectItem>
+                  <SelectItem value="10">10 × 10</SelectItem>
+                  <SelectItem value="12">12 × 12</SelectItem>
+                  <SelectItem value="14">14 × 14</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Difficulty</Label>
+              <Select
+                value={core.binairoDifficulty || 'medium'}
+                onValueChange={(value) =>
+                  patchCore({
+                    binairoDifficulty: value as import('@/lib/generic-puzzle-settings').BinairoDifficulty,
+                  })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="easy">Easy</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="hard">Hard</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Symbols</Label>
+              <Select
+                value={core.binairoSymbols || '01'}
+                onValueChange={(value) =>
+                  patchCore({
+                    binairoSymbols: value as import('@/lib/generic-puzzle-settings').BinairoSymbols,
+                  })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="01">0 / 1</SelectItem>
+                  <SelectItem value="xo">X / O</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Grid line</Label>
+                <MiniColorInput
+                  value={core.binairoGridLineColor || '#000000'}
+                  onChange={(v) => patchCore({ binairoGridLineColor: v })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Symbol</Label>
+                <MiniColorInput
+                  value={core.binairoSymbolColor || '#000000'}
+                  onChange={(v) => patchCore({ binairoSymbolColor: v })}
+                />
+              </div>
+            </div>
+            <SliderField
+              label="Grid Line Thickness"
+              value={Math.round((core.binairoGridStrokeWidth || 1) * 100)}
+              onValueChange={(v) =>
+                patchCore({ binairoGridStrokeWidth: Math.max(0.5, Math.min(4, v / 100)) })
+              }
+              min={50}
+              max={400}
+              format="percent"
+            />
+          </>
+        ) : null}
+
+        {moduleType === 'kakuro' ? (
+          <>
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Grid Size</Label>
+              <Select
+                value={String(core.kakuroGridSize || 9)}
+                onValueChange={(value) =>
+                  patchCore({
+                    kakuroGridSize: Number(value) as import('@/lib/generic-puzzle-settings').KakuroGridSize,
+                  })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="7">7 × 7</SelectItem>
+                  <SelectItem value="8">8 × 8</SelectItem>
+                  <SelectItem value="9">9 × 9</SelectItem>
+                  <SelectItem value="10">10 × 10</SelectItem>
+                  <SelectItem value="12">12 × 12</SelectItem>
+                  <SelectItem value="15">15 × 15</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Difficulty</Label>
+              <Select
+                value={core.kakuroDifficulty || 'medium'}
+                onValueChange={(value) =>
+                  patchCore({
+                    kakuroDifficulty: value as import('@/lib/generic-puzzle-settings').KakuroDifficulty,
+                  })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="easy">Easy</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="hard">Hard</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Pattern</Label>
+              <Select
+                value={core.kakuroPattern || 'asymmetric'}
+                onValueChange={(value) =>
+                  patchCore({
+                    kakuroPattern: value as import('@/lib/generic-puzzle-settings').KakuroPattern,
+                  })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="asymmetric">Asymmetric</SelectItem>
+                  <SelectItem value="rotational">Rotational</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Grid line</Label>
+                <MiniColorInput
+                  value={core.kakuroGridLineColor || '#d4d4d4'}
+                  onChange={(v) => patchCore({ kakuroGridLineColor: v })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Block fill</Label>
+                <MiniColorInput
+                  value={core.kakuroBlockFill || '#000000'}
+                  onChange={(v) => patchCore({ kakuroBlockFill: v })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Clue cell</Label>
+                <MiniColorInput
+                  value={core.kakuroClueCellFill || '#000000'}
+                  onChange={(v) => patchCore({ kakuroClueCellFill: v })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Playable fill</Label>
+                <MiniColorInput
+                  value={core.kakuroPlayableFill || '#ffffff'}
+                  onChange={(v) => patchCore({ kakuroPlayableFill: v })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Clue text</Label>
+                <MiniColorInput
+                  value={core.kakuroClueTextColor || '#ffffff'}
+                  onChange={(v) => patchCore({ kakuroClueTextColor: v })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Digit</Label>
+                <MiniColorInput
+                  value={core.kakuroDigitColor || '#000000'}
+                  onChange={(v) => patchCore({ kakuroDigitColor: v })}
+                />
+              </div>
+            </div>
+            <SliderField
+              label="Grid Line Width"
+              value={Math.round((core.kakuroGridLineWidth || core.kakuroInnerLineWidth || 0.75) * 100) / 100}
+              onValueChange={(v) =>
+                patchCore({
+                  kakuroGridLineWidth: Math.max(0.35, Math.min(3, v)),
+                  kakuroInnerLineWidth: Math.max(0.35, Math.min(3, v)),
+                })
+              }
+              min={0.35}
+              max={3}
+              step={0.05}
+              format="pt"
+            />
+            <p className="text-xs text-gray-500">
+              Clue number font and size: select the clue numbers on the canvas and use the text toolbar.
+            </p>
+          </>
+        ) : null}
+
+        {moduleType === 'math-maze' ? (
+          <>
+            <SliderField
+              label="Equations Across"
+              value={core.mathMazeEquationsAcross}
+              onValueChange={(v) => patchCore({ mathMazeEquationsAcross: v })}
+              min={2}
+              max={12}
+            />
+            <SliderField
+              label="Equations Down"
+              value={core.mathMazeEquationsDown}
+              onValueChange={(v) => patchCore({ mathMazeEquationsDown: v })}
+              min={2}
+              max={15}
+            />
+            <SliderField
+              label="Max Digits"
+              value={core.mathMazeMaxDigits}
+              onValueChange={(v) => patchCore({ mathMazeMaxDigits: v })}
+              min={1}
+              max={4}
+            />
+            <SliderField
+              label="Max Dividend Digits"
+              value={core.mathMazeMaxDividendDigits}
+              onValueChange={(v) => patchCore({ mathMazeMaxDividendDigits: v })}
+              min={1}
+              max={6}
+            />
+            <SliderField
+              label="Max Divisor Digits"
+              value={core.mathMazeMaxDivisorDigits}
+              onValueChange={(v) => patchCore({ mathMazeMaxDivisorDigits: v })}
+              min={1}
+              max={4}
+            />
+            <SliderField
+              label="Max Answer Digits"
+              value={core.mathMazeMaxAnswerDigits}
+              onValueChange={(v) => patchCore({ mathMazeMaxAnswerDigits: v })}
+              min={1}
+              max={6}
+            />
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Numbers per Equation</Label>
+              <Select
+                value={String(core.mathMazeNumbersPerEquation)}
+                onValueChange={(value) =>
+                  patchCore({ mathMazeNumbersPerEquation: Number(value) as 2 | 3 | 4 })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="2">2</SelectItem>
+                  <SelectItem value="3">3</SelectItem>
+                  <SelectItem value="4">4</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Operations</Label>
+              <Checkbox
+                label="Addition"
+                checked={core.mathMazeOpAdd}
+                onCheckedChange={(c) => patchCore({ mathMazeOpAdd: !!c })}
+              />
+              <Checkbox
+                label="Subtraction"
+                checked={core.mathMazeOpSub}
+                onCheckedChange={(c) => patchCore({ mathMazeOpSub: !!c })}
+              />
+              <Checkbox
+                label="Multiplication"
+                checked={core.mathMazeOpMul}
+                onCheckedChange={(c) => patchCore({ mathMazeOpMul: !!c })}
+              />
+              <Checkbox
+                label="Division"
+                checked={core.mathMazeOpDiv}
+                onCheckedChange={(c) => patchCore({ mathMazeOpDiv: !!c })}
+              />
+            </div>
+            <Checkbox
+              label="Allow Negative Numbers"
+              checked={core.mathMazeAllowNegative}
+              onCheckedChange={(c) => patchCore({ mathMazeAllowNegative: !!c })}
+            />
+            <Checkbox
+              label="Use Parentheses"
+              checked={core.mathMazeUseParentheses}
+              onCheckedChange={(c) => patchCore({ mathMazeUseParentheses: !!c })}
+            />
+            {core.mathMazeUseParentheses ? (
+              <div className="space-y-1">
+                <Label className="text-sm font-medium">Parentheses Placement</Label>
+                <Select
+                  value={core.mathMazeParenthesesMode}
+                  onValueChange={(value) =>
+                    patchCore({ mathMazeParenthesesMode: value as 'all' | 'random' })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">In All Equations</SelectItem>
+                    <SelectItem value="random">Randomly In Equations</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Start Text</Label>
+              <Input
+                value={core.mathMazeStartText}
+                onChange={(e) => patchCore({ mathMazeStartText: e.target.value })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">End Text</Label>
+              <Input
+                value={core.mathMazeEndText}
+                onChange={(e) => patchCore({ mathMazeEndText: e.target.value })}
+              />
+            </div>
+            <SliderField
+              label="Rectangle Corner Rounding"
+              value={core.mathMazeCornerRoundingPercent}
+              onValueChange={(v) => patchCore({ mathMazeCornerRoundingPercent: v })}
+              min={0}
+              max={50}
+              format="%"
+            />
+            <SliderField
+              label="Channel Size"
+              value={core.mathMazeChannelSizePercent}
+              onValueChange={(v) => patchCore({ mathMazeChannelSizePercent: v })}
+              min={20}
+              max={100}
+              format="%"
+            />
+            <div className="space-y-1">
+              <Label className="text-xs text-gray-500">Solution Path Color</Label>
+              <MiniColorInput
+                value={core.mathMazeSolutionPathColor}
+                onChange={(v) => patchCore({ mathMazeSolutionPathColor: v })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-gray-500">Solution Cell Fill</Label>
+              <MiniColorInput
+                value={core.mathMazeSolutionCellFill || '#e5e7eb'}
+                onChange={(v) => patchCore({ mathMazeSolutionCellFill: v })}
+              />
+            </div>
+          </>
+        ) : null}
+
+        {moduleType === 'word-fill' || moduleType === 'number-fill' ? (
+          <>
+            <SliderField
+              label="Grid Width"
+              value={core.fillGridWidth}
+              onValueChange={(v) => patchCore({ fillGridWidth: v })}
+              min={5}
+              max={30}
+            />
+            <SliderField
+              label="Grid Height"
+              value={core.fillGridHeight}
+              onValueChange={(v) => patchCore({ fillGridHeight: v })}
+              min={5}
+              max={30}
+            />
+            {moduleType === 'word-fill' ? (
+              <>
+                <SliderField
+                  label="Words per Puzzle"
+                  value={core.fillWordsPerPuzzle}
+                  onValueChange={(v) => patchCore({ fillWordsPerPuzzle: v })}
+                  min={1}
+                  max={100}
+                />
+                <Checkbox
+                  label={`Make exactly ${Math.max(1, core.fillWordsPerPuzzle || 16)} words (this could take time)`}
+                  checked={core.fillExactWordCount === true}
+                  onCheckedChange={(c) => patchCore({ fillExactWordCount: c === true })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Words are assigned in order: puzzle 1 gets the first{' '}
+                  {core.fillWordsPerPuzzle}, puzzle 2 the next{' '}
+                  {core.fillWordsPerPuzzle}, and so on. Total needed:{' '}
+                  {Math.max(1, core.numberOfPuzzles || 1) *
+                    Math.max(1, core.fillWordsPerPuzzle || 1)}{' '}
+                  ({Math.max(1, core.numberOfPuzzles || 1)} ×{' '}
+                  {Math.max(1, core.fillWordsPerPuzzle || 1)})
+                </p>
+                <div className="space-y-1">
+                  <Label className="text-sm font-medium">Words (one per line)</Label>
+                  <Textarea
+                    value={core.fillWordsText}
+                    onChange={(e) => patchCore({ fillWordsText: e.target.value })}
+                    rows={6}
+                    placeholder="Leave blank to use Titles word list"
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Numbers per Puzzle</Label>
+                {([2, 3, 4, 5, 6, 7, 8, 9] as const).map((d) => (
+                  <SliderField
+                    key={d}
+                    label={`${d}-digit numbers`}
+                    value={core[`fillDigitCount${d}`]}
+                    onValueChange={(v) => patchCore({ [`fillDigitCount${d}`]: v } as any)}
+                    min={0}
+                    max={40}
+                  />
+                ))}
+              </div>
+            )}
+            <Checkbox
+              label={moduleType === 'word-fill' ? 'Include Starter Word' : 'Include Starter Number'}
+              checked={core.fillIncludeStarterWord}
+              onCheckedChange={(c) => patchCore({ fillIncludeStarterWord: !!c })}
+            />
+            <SliderField
+              label={moduleType === 'word-fill' ? 'Extra Letters to Show' : 'Extra Digits to Show'}
+              value={core.fillLettersToShow}
+              onValueChange={(v) => patchCore({ fillLettersToShow: v })}
+              min={0}
+              max={100}
+            />
+            <SliderField
+              label="Grid Line Width"
+              value={core.fillGridLineWidth}
+              onValueChange={(v) => patchCore({ fillGridLineWidth: v })}
+              min={0.35}
+              max={3}
+              step={0.05}
+              format="pt"
+            />
+            <div className="space-y-1">
+              <Label className="text-xs text-gray-500">Grid Line Color</Label>
+              <MiniColorInput
+                value={core.fillGridLineColor}
+                onChange={(v) => patchCore({ fillGridLineColor: v })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-gray-500">Block Cell Color</Label>
+              <MiniColorInput
+                value={core.fillBlockFill}
+                onChange={(v) => patchCore({ fillBlockFill: v })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-gray-500">Playable Cell Color</Label>
+              <MiniColorInput
+                value={core.fillPlayableFill}
+                onChange={(v) => patchCore({ fillPlayableFill: v })}
+              />
+            </div>
+          </>
+        ) : null}
+
+        {moduleType === 'snake' ? (
+          <>
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Mode</Label>
+              <Select
+                value={core.snakeMode}
+                onValueChange={(value) => patchCore({ snakeMode: value as 'word' | 'number' })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="word">Word Snake</SelectItem>
+                  <SelectItem value="number">Number Snake</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <SliderField
+              label="Grid Width"
+              value={core.snakeGridWidth}
+              onValueChange={(v) => patchCore({ snakeGridWidth: v })}
+              min={3}
+              max={30}
+            />
+            <SliderField
+              label="Grid Height"
+              value={core.snakeGridHeight}
+              onValueChange={(v) => patchCore({ snakeGridHeight: v })}
+              min={3}
+              max={30}
+            />
+            <SliderField
+              label="Words/Numbers per Puzzle"
+              value={core.snakeWordsPerPuzzle}
+              onValueChange={(v) => patchCore({ snakeWordsPerPuzzle: v })}
+              min={1}
+              max={100}
+            />
+            {core.snakeMode === 'word' ? (
+              <p className="text-xs text-muted-foreground">
+                Words are assigned in order: puzzle 1 gets the first{' '}
+                {core.snakeWordsPerPuzzle}, puzzle 2 the next{' '}
+                {core.snakeWordsPerPuzzle}, and so on. Total needed:{' '}
+                {Math.max(1, core.numberOfPuzzles || 1) *
+                  Math.max(1, core.snakeWordsPerPuzzle || 1)}{' '}
+                ({Math.max(1, core.numberOfPuzzles || 1)} ×{' '}
+                {Math.max(1, core.snakeWordsPerPuzzle || 1)})
+              </p>
+            ) : null}
+            {core.snakeMode === 'word' ? (
+              <div className="space-y-1">
+                <Label className="text-sm font-medium">Words (one per line)</Label>
+                <Textarea
+                  value={core.snakeWordsText}
+                  onChange={(e) => patchCore({ snakeWordsText: e.target.value })}
+                  rows={6}
+                  placeholder="Leave blank to use Titles word list"
+                />
+              </div>
+            ) : (
+              ([2, 3, 4, 5, 6, 7, 8, 9] as const).map((d) => (
+                <SliderField
+                  key={d}
+                  label={`${d}-digit numbers`}
+                  value={core[`snakeDigitCount${d}`]}
+                  onValueChange={(v) => patchCore({ [`snakeDigitCount${d}`]: v } as any)}
+                  min={0}
+                  max={40}
+                />
+              ))
+            )}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">Word List Layout</Label>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs text-gray-500">Columns</Label>
+                  <Select
+                    value={String(core.snakeWordListColumns || 2)}
+                    onValueChange={(value) =>
+                      patchCore({ snakeWordListColumns: parseInt(value, 10) })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[1, 2, 3, 4].map((n) => (
+                        <SelectItem key={n} value={String(n)}>
+                          {n} Column{n > 1 ? 's' : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="text-xs text-muted-foreground self-end pb-2">
+                  Words per column ≈ ceil(total ÷ columns)
+                </div>
+                <SliderField
+                  label="Space Horizontal"
+                  value={core.snakeWordSpacingHorizontal ?? 50}
+                  onValueChange={(v) => patchCore({ snakeWordSpacingHorizontal: v })}
+                  min={0}
+                  max={100}
+                  step={1}
+                  format="px"
+                />
+                <SliderField
+                  label="Space Vertical"
+                  value={core.snakeWordSpacingVertical ?? 8}
+                  onValueChange={(v) => patchCore({ snakeWordSpacingVertical: v })}
+                  min={0}
+                  max={40}
+                  step={1}
+                  format="px"
+                />
+              </div>
+            </div>
+            <Checkbox
+              label="No Box Around Puzzle"
+              checked={core.snakeNoBoxAroundPuzzle}
+              onCheckedChange={(c) => patchCore({ snakeNoBoxAroundPuzzle: !!c })}
+            />
+            <Checkbox
+              label="Add Grid Lines"
+              checked={core.snakeAddGridLines}
+              onCheckedChange={(c) => patchCore({ snakeAddGridLines: !!c })}
+            />
+            {core.snakeMode === 'word' ? (
+              <Checkbox
+                label="Allow Digits as Filler"
+                checked={core.snakeAllowNumbersInGrid}
+                onCheckedChange={(c) => patchCore({ snakeAllowNumbersInGrid: !!c })}
+              />
+            ) : null}
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Include Filler Characters</Label>
+              <Input
+                value={core.snakeIncludeFiller}
+                onChange={(e) => patchCore({ snakeIncludeFiller: e.target.value })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Exclude Filler Characters</Label>
+              <Input
+                value={core.snakeExcludeFiller}
+                onChange={(e) => patchCore({ snakeExcludeFiller: e.target.value })}
+              />
+            </div>
+            <SliderField
+              label="Grid Line Width"
+              value={core.snakeGridLineWidth}
+              onValueChange={(v) => patchCore({ snakeGridLineWidth: v })}
+              min={0.35}
+              max={3}
+              step={0.05}
+              format="pt"
+            />
+            <div className="space-y-1">
+              <Label className="text-xs text-gray-500">Grid Line Color</Label>
+              <MiniColorInput
+                value={core.snakeGridLineColor}
+                onChange={(v) => patchCore({ snakeGridLineColor: v })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-gray-500">Solution Path Color</Label>
+              <MiniColorInput
+                value={core.snakeSolutionPathColor}
+                onChange={(v) => patchCore({ snakeSolutionPathColor: v })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-gray-500">Non-path Color</Label>
+              <MiniColorInput
+                value={core.snakeNonPathColor}
+                onChange={(v) => patchCore({ snakeNonPathColor: v })}
+              />
+            </div>
+            <SliderField
+              label="Highlight Thickness"
+              value={core.snakeSolutionPathThickness ?? 18}
+              onValueChange={(v) => patchCore({ snakeSolutionPathThickness: v })}
+              min={5}
+              max={80}
+              step={1}
+              format="percent"
+            />
+            <SliderField
+              label="Transparency"
+              value={core.snakeSolutionPathOpacity ?? 100}
+              onValueChange={(v) => patchCore({ snakeSolutionPathOpacity: v })}
+              min={0}
+              max={100}
+              step={1}
+              format="percent"
+            />
+          </>
+        ) : null}
+
+        {moduleType === 'codewords' ? (
+          <>
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Language</Label>
+              <Select
+                value={core.codewordsLanguage || 'en'}
+                onValueChange={(value) => patchCore({ codewordsLanguage: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="en">English</SelectItem>
+                  <SelectItem value="fr">French</SelectItem>
+                  <SelectItem value="de">German</SelectItem>
+                  <SelectItem value="es">Spanish</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Grid Size</Label>
+              <Select
+                value={
+                  core.codewordsGridSize === 'custom'
+                    ? 'custom'
+                    : String(core.codewordsGridSize)
+                }
+                onValueChange={(value) => {
+                  if (value === 'custom') {
+                    patchCore({ codewordsGridSize: 'custom' });
+                    return;
+                  }
+                  patchCore({
+                    codewordsGridSize: Number(value) as 11 | 13 | 15 | 17 | 19 | 21,
+                  });
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="11">11 × 11</SelectItem>
+                  <SelectItem value="13">13 × 13</SelectItem>
+                  <SelectItem value="15">15 × 15</SelectItem>
+                  <SelectItem value="17">17 × 17</SelectItem>
+                  <SelectItem value="19">19 × 19</SelectItem>
+                  <SelectItem value="21">21 × 21</SelectItem>
+                  <SelectItem value="custom">Custom</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {core.codewordsGridSize === 'custom' ? (
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Custom size (11–21)</Label>
+                <IntegerInput
+                  value={core.codewordsCustomSize}
+                  onChange={(v) => patchCore({ codewordsCustomSize: v })}
+                  min={11}
+                  max={21}
+                />
+              </div>
+            ) : null}
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Difficulty</Label>
+              <Select
+                value={core.codewordsDifficulty}
+                onValueChange={(value) => {
+                  const difficulty = value as import('@/lib/generic-puzzle-settings').CodewordDifficulty;
+                  const patch: Partial<GenericPuzzleSettings['core']> = {
+                    codewordsDifficulty: difficulty,
+                  };
+                  if (!core.codewordsHintCountManual) {
+                    const defaults: Record<string, number> = {
+                      easy: 6,
+                      medium: 4,
+                      hard: 2,
+                      'very-hard': 1,
+                    };
+                    patch.codewordsHintCount = defaults[difficulty] ?? 3;
+                  }
+                  patchCore(patch);
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="easy">Easy</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="hard">Hard</SelectItem>
+                  <SelectItem value="very-hard">Very Hard</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Number of Hint Letters</Label>
+              <IntegerInput
+                value={core.codewordsHintCount}
+                onChange={(v) =>
+                  patchCore({ codewordsHintCount: v, codewordsHintCountManual: true })
+                }
+                min={0}
+                max={26}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Hint Letter Placement</Label>
+              <Select
+                value={core.codewordsHintPlacement}
+                onValueChange={(value) =>
+                  patchCore({
+                    codewordsHintPlacement:
+                      value as import('@/lib/generic-puzzle-settings').CodewordHintPlacement,
+                  })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all-occurrences">Show in all matching squares</SelectItem>
+                  <SelectItem value="single-occurrence">Show once per hint letter</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Letter Case</Label>
+              <Select
+                value={core.letterCase}
+                onValueChange={(value) =>
+                  patchCore({ letterCase: value as GenericLetterCase })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="upper">UPPERCASE</SelectItem>
+                  <SelectItem value="lower">lowercase</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="gp-show-code-box"
+                checked={core.showCodewordsCodeBox !== false}
+                onCheckedChange={(checked) =>
+                  patchCore({ showCodewordsCodeBox: checked === true })
+                }
+              />
+              <Label htmlFor="gp-show-code-box" className="text-sm font-normal">
+                Show code / alphabet box
+              </Label>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Blocked square</Label>
+                <MiniColorInput
+                  value={core.codewordsBlockedCellColor || '#888888'}
+                  onChange={(v) => patchCore({ codewordsBlockedCellColor: v })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Playable square</Label>
+                <MiniColorInput
+                  value={core.codewordsPlayableCellColor || '#FFFFFF'}
+                  onChange={(v) => patchCore({ codewordsPlayableCellColor: v })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Grid line</Label>
+                <MiniColorInput
+                  value={core.codewordsGridLineColor || '#000000'}
+                  onChange={(v) => patchCore({ codewordsGridLineColor: v })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Number color</Label>
+                <MiniColorInput
+                  value={core.codewordsNumberColor || '#000000'}
+                  onChange={(v) => patchCore({ codewordsNumberColor: v })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Letter color</Label>
+                <MiniColorInput
+                  value={core.codewordsLetterColor || '#000000'}
+                  onChange={(v) => patchCore({ codewordsLetterColor: v })}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-gray-500">Stroke width</Label>
+                <IntegerInput
+                  value={Math.round((core.codewordsGridStrokeWidth || 1) * 10) / 10}
+                  onChange={(v) => patchCore({ codewordsGridStrokeWidth: v })}
+                  min={1}
+                  max={4}
+                />
+              </div>
+            </div>
           </>
         ) : null}
 
@@ -2041,8 +3111,7 @@ export function GenericPuzzleSettingsPanel({
                     </SelectContent>
                   </Select>
                   <p className="text-[11px] text-gray-500">
-                    Full-width A–Z grid under the title at 18pt; only hint letters are filled
-                    in.
+                    Full-width alphabet grid under the title; only hint letters are filled in.
                   </p>
                 </div>
               </>
@@ -2182,81 +3251,14 @@ export function GenericPuzzleSettingsPanel({
           </Select>
         </div>
 
-        {(moduleType === 'cryptogram' || moduleType === 'word-scramble' || moduleType === 'sudoku') ? (
+        {(moduleType === 'cryptogram' || moduleType === 'word-scramble' || moduleType === 'sudoku' || moduleType === 'codewords' || moduleType === 'binairo' || moduleType === 'kakuro') ? (
           <>
             {moduleType === 'cryptogram' ? (
               <>
-                <div className="space-y-1">
-                  <Label className="text-sm font-medium">Puzzle Font</Label>
-                  <Select
-                    value={typography.puzzleFontFamily}
-                    onValueChange={(value) => patchTypography({ puzzleFontFamily: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PUBLISHING_FONTS.map((font) => (
-                        <SelectItem key={font} value={font}>
-                          {font}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <SliderField
-                  label="Puzzle Font Size"
-                  value={typography.puzzleFontSize}
-                  onValueChange={(v) => patchTypography({ puzzleFontSize: v })}
-                  min={0}
-                  max={72}
-                  format="pt"
-                />
-                <div className="space-y-1">
-                  <Label className="text-sm font-medium">Answer Key Font</Label>
-                  <Select
-                    value={typography.answerKeyFontFamily}
-                    onValueChange={(value) => patchTypography({ answerKeyFontFamily: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PUBLISHING_FONTS.map((font) => (
-                        <SelectItem key={font} value={font}>
-                          {font}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-[11px] text-gray-500">Answer key size is fixed at 18pt.</p>
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-sm font-medium">Solution Font</Label>
-                  <Select
-                    value={typography.answerFontFamily}
-                    onValueChange={(value) => patchTypography({ answerFontFamily: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PUBLISHING_FONTS.map((font) => (
-                        <SelectItem key={font} value={font}>
-                          {font}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <SliderField
-                  label="Solution Font Size"
-                  value={typography.answerFontSize}
-                  onValueChange={(v) => patchTypography({ answerFontSize: v })}
-                  min={0}
-                  max={72}
-                  format="pt"
-                />
+                <p className="text-xs text-gray-500">
+                  Fonts: select the answer key, the cipher text, or the solution text on the
+                  canvas and use the text toolbar.
+                </p>
                 <SliderField
                   label="Title to Puzzle Gap"
                   value={typography.spaceBetweenTitleAndPuzzle}
@@ -2286,10 +3288,81 @@ export function GenericPuzzleSettingsPanel({
                   format="pt"
                 />
               </>
+            ) : moduleType === 'codewords' ? (
+              <>
+                <div className="space-y-1">
+                  <Label className="text-sm font-medium">Numbers Font</Label>
+                  <Select
+                    value={typography.codewordsNumberFontFamily || 'Arial'}
+                    onValueChange={(value) =>
+                      patchTypography({ codewordsNumberFontFamily: value })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PUBLISHING_FONTS.map((font) => (
+                        <SelectItem key={font} value={font}>
+                          {font}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <SliderField
+                  label="Numbers Font Size"
+                  value={typography.codewordsNumberFontSize ?? 9}
+                  onValueChange={(v) => patchTypography({ codewordsNumberFontSize: v })}
+                  min={5}
+                  max={36}
+                  format="pt"
+                />
+                <div className="space-y-1">
+                  <Label className="text-sm font-medium">Letters Font</Label>
+                  <Select
+                    value={typography.codewordsLetterFontFamily || 'Arial'}
+                    onValueChange={(value) =>
+                      patchTypography({ codewordsLetterFontFamily: value })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PUBLISHING_FONTS.map((font) => (
+                        <SelectItem key={font} value={font}>
+                          {font}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <SliderField
+                  label="Letters Font Size"
+                  value={typography.codewordsLetterFontSize ?? 14}
+                  onValueChange={(v) => patchTypography({ codewordsLetterFontSize: v })}
+                  min={6}
+                  max={48}
+                  format="pt"
+                />
+                <SliderField
+                  label="Solution to Solution Gap"
+                  value={typography.solutionToSolutionGapPx ?? 14}
+                  onValueChange={(v) => patchTypography({ solutionToSolutionGapPx: v })}
+                  min={0}
+                  max={80}
+                  format="px"
+                />
+              </>
             ) : (
               <>
                 <SliderField
-                  label={moduleType === 'sudoku' ? 'Puzzle Numbers Font Size' : 'Puzzle Font Size'}
+                  label={
+                    moduleType === 'sudoku' || moduleType === 'binairo' || moduleType === 'kakuro'
+                      ? 'Puzzle Numbers Font Size'
+                      : 'Puzzle Font Size'
+                  }
                   value={typography.puzzleFontSize}
                   onValueChange={(v) => patchTypography({ puzzleFontSize: v })}
                   min={0}
@@ -2298,7 +3371,9 @@ export function GenericPuzzleSettingsPanel({
                 />
                 <SliderField
                   label={
-                    moduleType === 'sudoku' ? 'Solution Numbers Font Size' : 'Answer Font Size'
+                    moduleType === 'sudoku' || moduleType === 'binairo' || moduleType === 'kakuro'
+                      ? 'Solution Numbers Font Size'
+                      : 'Answer Font Size'
                   }
                   value={typography.answerFontSize}
                   onValueChange={(v) => patchTypography({ answerFontSize: v })}
@@ -2306,6 +3381,20 @@ export function GenericPuzzleSettingsPanel({
                   max={72}
                   format="pt"
                 />
+                {moduleType === 'word-fill' ||
+                moduleType === 'number-fill' ||
+                moduleType === 'snake' ? (
+                  <SliderField
+                    label={
+                      moduleType === 'number-fill' ? 'Number Bank Font Size' : 'Word Bank Font Size'
+                    }
+                    value={typography.wordListFontSize ?? 16}
+                    onValueChange={(v) => patchTypography({ wordListFontSize: v })}
+                    min={10}
+                    max={28}
+                    format="pt"
+                  />
+                ) : null}
                 {moduleType === 'word-scramble' ? (
                   <>
                     <SliderField
@@ -2340,11 +3429,21 @@ export function GenericPuzzleSettingsPanel({
                     />
                   </>
                 ) : null}
+                {(moduleType === 'sudoku' || moduleType === 'maze' || moduleType === 'binairo' || moduleType === 'kakuro') ? (
+                  <SliderField
+                    label="Solution to Solution Gap"
+                    value={typography.solutionToSolutionGapPx ?? 14}
+                    onValueChange={(v) => patchTypography({ solutionToSolutionGapPx: v })}
+                    min={0}
+                    max={80}
+                    format="px"
+                  />
+                ) : null}
               </>
             )}
           </>
         ) : null}
-        {(moduleType === 'sudoku' || moduleType === 'maze') ? (
+        {(moduleType === 'sudoku' || moduleType === 'maze' || moduleType === 'codewords' || moduleType === 'binairo' || moduleType === 'kakuro') ? (
           <>
             <SliderField
               label="Puzzle Grid Scale"
@@ -2509,6 +3608,28 @@ export function GenericPuzzleTitlesPanel({
           max={72}
           format="pt"
         />
+
+        {moduleType === 'trivia' ? (
+          <div className="space-y-2 border-t pt-3">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <Checkbox
+                checked={typography.includeFunFacts}
+                onCheckedChange={(checked) =>
+                  patchTypography({ includeFunFacts: checked === true })
+                }
+              />
+              Add Fun Facts / Quotes
+            </label>
+            {typography.includeFunFacts ? (
+              <Textarea
+                value={typography.funFactsText}
+                onChange={(event) => patchTypography({ funFactsText: event.target.value })}
+                placeholder="One fun fact per line"
+                rows={4}
+              />
+            ) : null}
+          </div>
+        ) : null}
 
         <MiniColorInput
           label="Title Color"

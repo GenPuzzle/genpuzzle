@@ -48,6 +48,10 @@ import { drawPageNumberOnPdfPage } from './page-number-pdf-draw';
 import { normalizePageNumberSettings } from './page-number/settings';
 import type { ResolvedTocEntry } from './book-compiler';
 import {
+  drawPageVariablesOnPdfPage,
+} from './page-variables-draw';
+import { normalizePageVariables } from './page-variables';
+import {
   buildTocExportLayout,
   isTocModuleSettings,
   parseTocEntriesFromContent,
@@ -723,6 +727,21 @@ export async function drawTextModuleOnPdfPage(
       pageNumberFont,
       getColor
     );
+  }
+
+  const overlayFields = normalizePageVariables(settings.pageVariables);
+  if (overlayFields.length > 0) {
+    await drawPageVariablesOnPdfPage({
+      pdfDoc,
+      page,
+      pageWidthPt: pageWidth,
+      pageHeightPt: pageHeight,
+      fields: overlayFields,
+      contentIndex: settings.tocPageIndex ?? 0,
+      bookPageNumber: bookPageIndex + 1,
+      puzzleNumber: 1,
+      getFont: resolveFont,
+    });
   }
 }
 

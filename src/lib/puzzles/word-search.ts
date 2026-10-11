@@ -5,7 +5,8 @@ import {
   WordSearchPuzzle,
 } from './types';
 import { isWordSearchShapeCell } from './word-search-shape-mask';
-import { getWordSearchAlphabet, normalizeWordSearchWord, uppercaseWordSearchWord } from './word-search-letters';
+import { getWordSearchFillerAlphabet, normalizeWordSearchWord, uppercaseWordSearchWord } from './word-search-letters';
+import { normalizePuzzleText, segmentGraphemes } from '../unicode-text';
 
 const DIRECTIONS: Direction[] = [
   'horizontal',
@@ -37,9 +38,10 @@ function getDirectionVector(dir: Direction): { dr: number; dc: number } {
   }
 }
 
+/** `letters` is the word split into graphemes — one grapheme occupies one cell. */
 function canPlaceWord(
   grid: string[][],
-  word: string,
+  letters: string[],
   start: Position,
   direction: Direction,
   shapeMask?: boolean[][]
@@ -48,7 +50,7 @@ function canPlaceWord(
   const rows = grid.length;
   const cols = grid[0].length;
 
-  for (let i = 0; i < word.length; i++) {
+  for (let i = 0; i < letters.length; i++) {
     const row = start.row + dr * i;
     const col = start.col + dc * i;
 
@@ -60,7 +62,7 @@ function canPlaceWord(
       return false;
     }
 
-    if (grid[row][col] !== '' && grid[row][col] !== word[i]) {
+    if (grid[row][col] !== '' && grid[row][col] !== letters[i]) {
       return false;
     }
   }
@@ -71,16 +73,17 @@ function canPlaceWord(
 function placeWord(
   grid: string[][],
   word: string,
+  letters: string[],
   start: Position,
   direction: Direction
 ): WordPlacement {
   const { dr, dc } = getDirectionVector(direction);
   const positions: Position[] = [];
 
-  for (let i = 0; i < word.length; i++) {
+  for (let i = 0; i < letters.length; i++) {
     const row = start.row + dr * i;
     const col = start.col + dc * i;
-    grid[row][col] = word[i];
+    grid[row][col] = letters[i];
     positions.push({ row, col });
   }
 
@@ -94,7 +97,7 @@ function placeWord(
 
 function findValidPosition(
   grid: string[][],
-  word: string,
+  letters: string[],
   directions: Direction[],
   shapeMask?: boolean[][]
 ): { start: Position; direction: Direction } | null {
@@ -118,7 +121,7 @@ function findValidPosition(
     positions.sort(() => Math.random() - 0.5);
 
     for (const pos of positions) {
-      if (canPlaceWord(grid, word, pos, dir, shapeMask)) {
+      if (canPlaceWord(grid, letters, pos, dir, shapeMask)) {
         return { start: pos, direction: dir };
       }
     }
@@ -133,16 +136,19 @@ function fillEmptyCells(
   shapeMask?: boolean[][],
   letterPool?: string
 ): void {
-  let letters = getWordSearchAlphabet(language);
+  let letterSource = getWordSearchFillerAlphabet(language);
 
-  if (language === 'Arabic') {
+  if (language.trim().toLowerCase() === 'arabic' || language === 'Arabic') {
     // Arabic letters (excluding diacritics, using main alphabet)
-    letters = 'ابجدهوزحطيكلمنسعفصقرشتثخذضظغ';
+    letterSource = 'ابجدهوزحطيكلمنسعفصقرشتثخذضظغ';
   }
 
   if (letterPool && letterPool.length > 0) {
-    letters = letterPool;
+    letterSource = letterPool;
   }
+
+  // One grapheme per cell — never index into the pool by code unit.
+  const letters = segmentGraphemes(letterSource);
 
   for (let r = 0; r < grid.length; r++) {
     for (let c = 0; c < grid[0].length; c++) {
@@ -181,17 +187,29 @@ export function generateWordSearch(
   const maxWordLength = Math.max(lettersAcross, lettersDown);
   const repeats = Math.max(1, Math.min(40, Math.round(wordRepeatCount) || 1));
 
+  // One grapheme = one cell, so word length is measured in graphemes (é counts once).
+  const graphemeCache = new Map<string, string[]>();
+  const graphemesOf = (word: string): string[] => {
+    let letters = graphemeCache.get(word);
+    if (!letters) {
+      letters = segmentGraphemes(word);
+      graphemeCache.set(word, letters);
+    }
+    return letters;
+  };
+  const cellCount = (word: string) => graphemesOf(word).length;
+
   if (language === 'Arabic') {
-    // For Arabic: convert to uppercase (Arabic doesn't have case), keep only Arabic chars
+    // For Arabic: no case to fold, keep only Arabic chars
     cleanWords = words
-      .map((w) => w.trim().toUpperCase())
+      .map((w) => normalizePuzzleText(w.trim()))
       .map((w) => {
-        const cleaned = w.split('').filter(isArabicChar).join('');
+        const cleaned = segmentGraphemes(w).filter(isArabicChar).join('');
         cleanToDisplay.set(cleaned, w);
         return cleaned;
       })
-      .filter((w) => w.length > 1 && w.length <= maxWordLength)
-      .sort((a, b) => b.length - a.length);
+      .filter((w) => cellCount(w) > 1 && cellCount(w) <= maxWordLength)
+      .sort((a, b) => cellCount(b) - cellCount(a));
   } else {
     // Preserve the language's accented letters in the grid.
     // But preserve spaces in the display version
@@ -202,8 +220,8 @@ export function generateWordSearch(
         cleanToDisplay.set(cleaned, trimmed);
         return cleaned;
       })
-      .filter((w) => w.length > 1 && w.length <= maxWordLength)
-      .sort((a, b) => b.length - a.length);
+      .filter((w) => cellCount(w) > 1 && cellCount(w) <= maxWordLength)
+      .sort((a, b) => cellCount(b) - cellCount(a));
   }
 
   // De-dupe input list for placement targets (repeat count handles multiple placements)
@@ -227,12 +245,13 @@ export function generateWordSearch(
 
   // Place each unique word `repeats` times on the grid
   for (const word of uniqueCleanWords) {
+    const letters = graphemesOf(word);
     for (let t = 0; t < repeats; t++) {
       let placed = false;
       for (let attempt = 0; attempt < placementAttempts && !placed; attempt++) {
-        const result = findValidPosition(grid, word, directions, shapeMask);
+        const result = findValidPosition(grid, letters, directions, shapeMask);
         if (result) {
-          const placement = placeWord(grid, word, result.start, result.direction);
+          const placement = placeWord(grid, word, letters, result.start, result.direction);
           placements.push(placement);
           placed = true;
         }
@@ -241,13 +260,12 @@ export function generateWordSearch(
   }
 
   // Fill remaining cells (inside shape only)
+  const wordLetters = uniqueCleanWords.join('');
   let fillerPool: string | undefined;
   if (fillWithWordLettersOnly && uniqueCleanWords.length > 0) {
-    const chars = new Set<string>();
-    for (const word of uniqueCleanWords) {
-      for (const ch of word) chars.add(ch);
-    }
-    fillerPool = [...chars].join('');
+    fillerPool = [...new Set(segmentGraphemes(wordLetters))].join('');
+  } else if (wordLetters) {
+    fillerPool = getWordSearchFillerAlphabet(language, wordLetters);
   }
   fillEmptyCells(grid, language, shapeMask, fillerPool);
 
@@ -256,7 +274,7 @@ export function generateWordSearch(
   for (const placement of placements) {
     const positions: Position[] = [];
     const { dr, dc } = getDirectionVector(placement.direction);
-    for (let i = 0; i < placement.word.length; i++) {
+    for (let i = 0; i < graphemesOf(placement.word).length; i++) {
       positions.push({
         row: placement.start.row + dr * i,
         col: placement.start.col + dc * i,

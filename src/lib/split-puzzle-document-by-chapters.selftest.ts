@@ -1,6 +1,8 @@
 import { createDocumentPage, getDefaultTextModuleSettings } from './document-model';
 import { getDefaultWordSearchSettings } from './puzzles/types';
 import { getDefaultCrosswordSettings } from './crossword-settings';
+import { getDefaultGenericPuzzleSettings } from './generic-puzzle-settings';
+import { ensureMazeStartEndPairs } from './maze-start-end-images';
 import {
   buildChapterSplitPlan,
   evenChapterPuzzleCounts,
@@ -110,5 +112,73 @@ const cwFirst = cwSplit!.documentPages.find((doc) => doc.moduleType === 'crosswo
 assert(cwFirst.crosswordSettings?.core.numberOfPuzzles === 20, 'cw count');
 assert(cwFirst.crosswordSettings?.core.answersText.split('\n').length === 300, '300 answers');
 assert(cwFirst.crosswordSettings?.core.puzzlesStartingNumber === 1, 'cw start');
+
+const maze = createDocumentPage('maze');
+const mazeSettings = maze.settings as PuzzleModuleSettings;
+mazeSettings.genericPuzzleSettings = getDefaultGenericPuzzleSettings('maze');
+mazeSettings.genericPuzzleSettings.core.numberOfPuzzles = 20;
+mazeSettings.genericPuzzleSettings.core.mazeSize = 'mixed';
+mazeSettings.genericPuzzleSettings.core.mazeMixedEasyCount = 4;
+mazeSettings.genericPuzzleSettings.core.mazeMixedMediumCount = 6;
+mazeSettings.genericPuzzleSettings.core.mazeMixedHardCount = 10;
+mazeSettings.genericPuzzleSettings.core.mazeStartEndImages = {
+  ...mazeSettings.genericPuzzleSettings.core.mazeStartEndImages,
+  enabled: true,
+  theme: 'forest',
+  pairs: ensureMazeStartEndPairs([], 'forest', 20).map((pair, index) => ({
+    ...pair,
+    startImage: `data:image/png;base64,start${index}`,
+    endImage: `data:image/png;base64,end${index}`,
+    startWidth: 10,
+    startHeight: 10,
+    endWidth: 10,
+    endHeight: 10,
+  })),
+  sheetSources: {
+    0: 'data:image/png;base64,sheet0',
+    1: 'data:image/png;base64,sheet1',
+  },
+};
+const mazePlan = buildChapterSplitPlan({
+  numberOfPuzzles: 20,
+  chapterCount: 2,
+  chapterTitles: [],
+  puzzlesStartingNumber: 1,
+});
+const mazeSplit = splitPuzzleDocumentByChapters({
+  documents: [maze],
+  sourceDocumentId: maze.id,
+  plan: mazePlan!,
+});
+assert(mazeSplit?.puzzleDocIds.length === 2, 'maze 2 docs');
+const mazeDocs = mazeSplit!.documentPages.filter((doc) => doc.moduleType === 'maze');
+const mazeFirst = mazeDocs[0].settings as PuzzleModuleSettings;
+const mazeSecond = mazeDocs[1].settings as PuzzleModuleSettings;
+assert(mazeFirst.genericPuzzleSettings?.core.numberOfPuzzles === 10, 'chapter 1 quantity is 10');
+assert(mazeSecond.genericPuzzleSettings?.core.numberOfPuzzles === 10, 'chapter 2 quantity is 10');
+assert(mazeFirst.genericPuzzleSettings?.core.mazeMixedEasyCount === 4, 'chapter 1 keeps the first mixed easy mazes');
+assert(mazeFirst.genericPuzzleSettings?.core.mazeMixedMediumCount === 6, 'chapter 1 keeps the first mixed medium mazes');
+assert(mazeSecond.genericPuzzleSettings?.core.mazeMixedHardCount === 10, 'chapter 2 keeps the remaining hard mazes');
+assert(mazeFirst.genericPuzzleSettings?.core.mazeStartEndImages.pairs.length === 10, 'chapter 1 has 10 start/end pairs');
+assert(
+  mazeFirst.genericPuzzleSettings?.core.mazeStartEndImages.pairs[0].startImage.includes('start0'),
+  'chapter 1 keeps its own start images'
+);
+assert(
+  mazeSecond.genericPuzzleSettings?.core.mazeStartEndImages.pairs[0].startImage.includes('start10'),
+  'chapter 2 starts at the 11th original pair'
+);
+assert(
+  Object.keys(mazeFirst.genericPuzzleSettings?.core.mazeStartEndImages.sheetSources ?? {}).join(',') === '0',
+  'chapter 1 keeps only the first sheet'
+);
+assert(
+  mazeSecond.genericPuzzleSettings?.core.mazeStartEndImages.sheetSources[0]?.includes('sheet1'),
+  'chapter 2 remaps the second original sheet'
+);
+assert(
+  !mazeSecond.genericPuzzleSettings?.core.mazeStartEndImages.sheetSources[1],
+  'chapter 2 does not keep the original first sheet'
+);
 
 console.log('split-puzzle-document-by-chapters.selftest ok');

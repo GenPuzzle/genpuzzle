@@ -3,10 +3,49 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useApp } from '@/lib/app-context';
 import { useOptionalAppBusy } from '@/lib/app-busy-context';
-import { Eye, EyeOff, ChevronLeft, ChevronRight, AlertCircle, Layout, FileText, Files, BookOpen, X } from 'lucide-react';
+import { Eye, EyeOff, ChevronLeft, ChevronRight, AlertCircle, Layout, FileText, Files, BookOpen, X, Sparkles } from 'lucide-react';
+import { CanvasFormatBar, type CanvasBarSelection, type HeaderCanvasShapePatch, type HeaderCanvasShapeSelection } from '@/components/CanvasFormatBar';
+import { selectedPageVariablesAsAgentElements } from '@/components/ai/AiCopilotPanel';
+import { useOptionalAiCopilotUi } from '@/lib/ai-copilot-ui-context';
+import {
+  nativeCanvasFont,
+  patchedCrosswordSettings,
+  patchedGenericSettings,
+  patchedWordSearchSettings,
+  type CanvasFormatTarget,
+  type NativeCanvasPatch,
+} from '@/lib/canvas-native-format';
+import { cssTextEffect } from '@/lib/text-effects';
+import type { CanvasShapeType } from '@/lib/canvas-shapes';
+import {
+  PageVariableImageDialog,
+  PageVariableTextDialog,
+} from '@/components/PageVariableDialogs';
+import {
+  PageVariableOverlay,
+  type PageVariableEditorState,
+} from '@/components/PageVariableOverlay';
+import {
+  createPageVariableField,
+  findPageVariableAtPercent,
+  isImagePageVariable,
+  isShapePageVariable,
+  isSinglePageVariable,
+  isTextPageVariable,
+  movePageVariable,
+  normalizePageVariables,
+  pageVariableContentIndex,
+  pageVariableDisplayIndex,
+  setPageVariableTextAt,
+  type PageVariableField,
+  type PageVariableKind,
+  type PageVariableScope,
+} from '@/lib/page-variables';
+import { pageVariablesFromDocument } from '@/lib/page-variables-draw';
+import { headerPartHitBoxes } from '@/lib/canvas-header-hits';
 import { Button } from './ui/button';
 import { resolvePageFrameSettings } from '@/lib/page-frame-settings';
-import type { PageFrameSettings } from '@/lib/puzzles/types';
+import { normalizeAnswersPerPage, type PageFrameSettings } from '@/lib/puzzles/types';
 import {
   buildGenericHeaderAssembly,
   getHeaderAssemblySettings,
@@ -23,7 +62,12 @@ import {
   computeSolutionPageLayout,
   getSolutionGridLayout,
 } from '@/lib/solution-page-layout';
-import { WordSearchPuzzle, WordSearchSettings, TitleWordsSettings, CrosswordPuzzle } from '@/lib/puzzles/types';
+import {
+  WordSearchPuzzle,
+  WordSearchSettings,
+  TitleWordsSettings,
+  CrosswordPuzzle,
+} from '@/lib/puzzles/types';
 import type { MurdokuPuzzle } from '@/lib/puzzles/murdoku';
 import { MurdokuPageCanvas } from '@/components/puzzle/MurdokuPagePreview';
 import {
@@ -32,7 +76,7 @@ import {
   type MurdokuSettings,
 } from '@/lib/murdoku-settings';
 import type { MurdokuPagePart } from '@/lib/murdoku-page-layout';
-import { DocumentPage, TextModuleSettings, PuzzleModuleSettings, isTextModuleType, isPuzzleModuleType, isTextModuleSettings, getDefaultTextModuleSettings } from '@/lib/document-model';
+import { DocumentPage, TextModuleSettings, PuzzleModuleSettings, isTextModuleType, isPuzzleModuleType, isTextModuleSettings, isPuzzleModuleSettings, getDefaultTextModuleSettings, type TextPageBlock } from '@/lib/document-model';
 import {
   resolveTextPageBackground,
   resolveTextPageFrameSettings,
@@ -66,8 +110,8 @@ import {
 } from '@/lib/generic-puzzle-settings';
 import {
   computeTriviaSolutionsPerPage,
-  packTriviaGamesForSolutionPages,
   formatTriviaSolutionHeading,
+  packTriviaGamesForSolutionPages,
   resolveTriviaAnswerLabel,
 } from '@/lib/puzzles/trivia';
 import { TextPageBlockCanvas } from '@/components/TextPageBlockCanvas';
@@ -76,7 +120,9 @@ import {
   resolveTextPageBlocks,
   removeTextPageBlock,
   syncLegacyFieldsFromBlocks,
+  updateTextPageBlock,
 } from '@/lib/text-page-blocks';
+import { normalizeTocSettings } from '@/lib/toc-settings';
 import { isSpecialBlankTitlePage } from '@/lib/insert-separator-page';
 import {
   compileBook,
@@ -116,6 +162,7 @@ import {
   isHeaderAssemblyEnabled,
   resolvePageHeaderTitleFontSizePt,
 } from '@/lib/header-assembly/book-title-size';
+import { resolveFittedHeaderTitleFontSizePt } from '@/lib/header-assembly/fit-title';
 import { getPuzzleContentLine } from '@/lib/puzzle-line-index';
 import { PageNumberOverlay } from '@/components/page-number/PageNumberOverlay';
 import { computePageNumberLayout } from '@/lib/page-number/layout';
@@ -142,6 +189,13 @@ import {
 } from '@/lib/grid-border-settings';
 import { layoutSolutionBlockTitlePt } from '@/lib/header-assembly/fit-title';
 import { HeaderAssemblyBar } from '@/components/header/HeaderAssemblyBar';
+import { CanvasSelectable, CanvasChrome } from '@/components/CanvasSelectable';
+import { CanvasObjectChrome } from '@/components/CanvasObjectChrome';
+import {
+  CanvasNativePositionProvider,
+  useCanvasNativePositionChrome,
+} from '@/components/CanvasNativePositionContext';
+import type { CanvasLayoutOffsets } from '@/lib/canvas-element-position';
 import {
   type CanvasEditTarget,
 } from '@/components/CanvasContextualControls';
@@ -189,16 +243,85 @@ import '@/components/preview-canvas-toolbar.css';
 import { cn } from '@/lib/utils';
 import { WordSearchGrid } from './puzzle/WordSearchGrid';
 import { resolveShapeMaskImageSrc } from '@/lib/puzzles/word-search-shape-mask';
-import { SudokuGrid } from './puzzle/SudokuGrid';
-import { PageBackgroundImage } from './puzzle/PageBackgroundImage';
-import { CrosswordGrid, CrosswordClueLists } from './puzzle/CrosswordGrid';
-import { MazeDisplay } from './puzzle/MazeDisplay';
-import { CryptogramDisplay } from './puzzle/CryptogramDisplay';
-import { WordScrambleDisplay } from './puzzle/WordScrambleDisplay';
+import { SharedMazeSudokuView } from '@/lib/resolved-layout/SharedMazeSudokuView';
+import { SelectableMazeView } from '@/components/SelectableMazeView';
+import { SelectableSudokuView } from '@/components/SelectableSudokuView';
+import { SelectableCodewordsView } from '@/components/SelectableCodewordsView';
+import { SelectableBinairoView } from '@/components/SelectableBinairoView';
+import { SelectableKakuroView } from '@/components/SelectableKakuroView';
+import {
+  SelectableMathMazeView,
+  SelectableFillView,
+  SelectableSnakeView,
+} from '@/components/SelectableMathFillSnakeViews';
+import { SolutionGapDragHandle } from '@/components/SolutionGapDragHandle';
+import { ResolvedElementsView } from '@/lib/resolved-layout/ResolvedElementsView';
+import { CrosswordGrid } from './puzzle/CrosswordGrid';
+import { SelectableCryptogramView } from '@/components/SelectableCryptogramView';
 import { TriviaDisplay } from './puzzle/TriviaDisplay';
+import { buildScrambleElements, buildWordListElements } from '@/lib/resolved-layout/book-elements';
+import {
+  buildWordSearchGridElements,
+  wordSearchSolutionStyle,
+} from '@/lib/resolved-layout/word-search-elements';
+import { shiftElements } from '@/lib/resolved-layout/shift';
+import { PageBackgroundImage } from './puzzle/PageBackgroundImage';
 import { FitToSafeArea } from './puzzle/FitToSafeArea';
 import { WordMatchDisplay } from './puzzle/WordMatchDisplay';
 import { DotToDotDisplay } from './puzzle/DotToDotDisplay';
+
+const EMPTY_PAGE_VARIABLE_LINES: string[] = [];
+const EMPTY_PAGE_VARIABLE_HREFS: string[] = [];
+
+type FrontMatterFormatTarget = 'title' | 'body' | 'toc-title' | 'toc-entries';
+type NativeTextTarget = 'title' | 'subtitle';
+
+function idlePageVariableEditor(fields: PageVariableField[]): PageVariableEditorState {
+  return {
+    fields,
+    selectedId: null,
+    placingKind: null,
+    interactive: false,
+    onSelect: () => {},
+    onMove: () => {},
+    onResize: () => {},
+    onPlace: () => {},
+    onPatchField: () => {},
+    onDelete: () => {},
+    onReorder: () => {},
+  };
+}
+
+function TextPageVariableLayer({
+  editor,
+  pageWidthPt,
+  pageHeightPt,
+  ptToPx,
+  contentIndex = 0,
+  bookPageIndex = 0,
+}: {
+  editor?: PageVariableEditorState | null;
+  pageWidthPt: number;
+  pageHeightPt: number;
+  ptToPx: (pt: number) => number;
+  contentIndex?: number;
+  bookPageIndex?: number;
+}) {
+  if (!editor) return null;
+  return (
+    <PageVariableOverlay
+      editor={editor}
+      context={{
+        contentIndex,
+        bookPageNumber: bookPageIndex + 1,
+        puzzleNumber: 1,
+        pageWidthPt,
+        pageHeightPt,
+        ptToPx,
+      }}
+    />
+  );
+}
 
 /** Global page container frame overlay (Color Settings) — separate from grid border. */
 function PageFrameOverlay({
@@ -341,125 +464,50 @@ function checkKDPSafety(layout: UnifiedPageLayout, safetyMarginPt: number): bool
 /** Helper component to draw word list inside content area in preview */
 function WordListPreview({ layout, ptToPx }: { layout: UnifiedPageLayout; ptToPx: (pt: number) => number }) {
   const wl = layout.wordList;
-  if (!wl) return null;
-
-  const columns = distributeWordsIntoColumns(wl.words, wl.columns);
-
-  // Fallback safe values (in points) to avoid NaN when layout fields are missing
-  const DEFAULT_FONT_PT = 12;
-  const DEFAULT_BLOCK_WIDTH_PT = 120;
-
-  const safeNumber = (v: any, fallback: number) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : fallback;
-  };
-
-  const fontSizePt = safeNumber(wl.fontSizePt, DEFAULT_FONT_PT);
-  const lineHeightPt = safeNumber(wl.lineHeightPt, Math.max(fontSizePt, 14));
-  const blockWidthPt = safeNumber(wl.blockWidthPt, DEFAULT_BLOCK_WIDTH_PT);
-  const columnGapPt = safeNumber(wl.columnGapPt, 6);
-
-  const marginPt = safeNumber(layout.page?.marginPt, 0);
-  const topPx = ptToPx(safeNumber(wl.topPt, 0));
-  const leftPx = ptToPx(
-    safeNumber(wl.centeredLeftPt, marginPt + safeNumber(wl.contentLeftPt, 0))
-  );
-  const minWidthPx = ptToPx(blockWidthPt);
-  const fontSizePx = ptToPx(fontSizePt);
-  const lineHeightPx = ptToPx(lineHeightPt);
-  const gapPx = ptToPx(columnGapPt);
-
+  if (!wl || wl.words.length === 0) return null;
   return (
-    <div
-      style={{
-        position: 'absolute',
-        top: topPx,
-        left: leftPx,
-        minWidth: minWidthPx,
-        fontFamily: wl.fontFamily,
-        fontSize: fontSizePx,
-        fontWeight: 400,
-        color: wl.color,
-        display: 'flex',
-        flexDirection: 'row',
-        gap: gapPx,
-        textAlign: 'left',
-        overflow: 'visible',
-        flexWrap: 'nowrap',
-        zIndex: 2,
-      }}
-    >
-      {columns.map((col, colIdx) => (
-        <div
-          key={colIdx}
-          style={{
-            position: 'relative',
-            width: ptToPx(safeNumber(wl.columnWidthsPt?.[colIdx], blockWidthPt / wl.columns || 40)),
-            minWidth: ptToPx(safeNumber(wl.columnWidthsPt?.[colIdx], blockWidthPt / wl.columns || 40)),
-            flex: '0 0 auto',
-            height: ptToPx(col.length * lineHeightPt),
-            overflow: 'visible',
-          }}
-        >
-          {col.map((word, rowIdx) => (
-            <div
-              key={`${colIdx}-${rowIdx}`}
-              className="flex items-center"
-              style={{
-                position: 'absolute',
-                top: ptToPx(getWordListRowTopOffsetPt(rowIdx, lineHeightPt)),
-                left: 0,
-                height: ptToPx(lineHeightPt),
-                lineHeight: `${lineHeightPx}px`,
-                fontWeight: 400,
-                gap: ptToPx(safeNumber(wl.checkboxGapPt, 6)),
-              }}
-            >
-              {wl.addCheckboxes && (
-                <span
-                  className="border border-current shrink-0"
-                  style={{
-                    width: ptToPx(safeNumber(wl.checkboxSizePt, Math.round(fontSizePt * 0.8))),
-                    height: ptToPx(safeNumber(wl.checkboxSizePt, Math.round(fontSizePt * 0.8))),
-                    borderColor: wl.checkboxColor,
-                  }}
-                />
-              )}
-              <span
-                style={{
-                  whiteSpace: 'nowrap',
-                  display: 'inline-flex',
-                  flexShrink: 0,
-                  wordBreak: 'normal',
-                  overflowWrap: 'normal',
-                }}
-              >
-                {word}
-              </span>
-            </div>
-          ))}
-        </div>
-      ))}
+    <div style={{ position: 'absolute', left: 0, top: 0, zIndex: 6, pointerEvents: 'none' }}>
+      <ResolvedElementsView
+        elements={buildWordListElements(wl)}
+        widthPt={layout.page.widthPt}
+        heightPt={layout.page.heightPt}
+        scale={ptToPx(1)}
+      />
     </div>
   );
 }
-
 function CanvasHitZone({
   active,
   label,
   onSelect,
   style,
   hideGuides = false,
+  formatTarget = null,
+  positionMetrics = null,
 }: {
   active: boolean;
   label: string;
   onSelect: () => void;
   style: React.CSSProperties;
   hideGuides?: boolean;
+  formatTarget?: import('@/lib/canvas-native-format').CanvasFormatTarget | null;
+  positionMetrics?: {
+    topPt: number;
+    leftPt: number;
+    widthPt: number;
+    heightPt: number;
+  } | null;
 }) {
+  const positionChrome = useCanvasNativePositionChrome(
+    active && !hideGuides ? formatTarget : null,
+    positionMetrics
+  );
+  // Use a div (not <button>): CanvasObjectChrome mounts real buttons for move /
+  // center, and nested buttons are invalid HTML / break hydration.
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       className={cn(
         'canvas-hit-zone',
         active && !hideGuides && 'canvas-hit-zone--active',
@@ -470,11 +518,20 @@ function CanvasHitZone({
         event.stopPropagation();
         onSelect();
       }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        onSelect();
+      }}
       aria-label={`Edit ${label}`}
       aria-pressed={active && !hideGuides}
     >
+      {active && !hideGuides && positionChrome ? (
+        <CanvasObjectChrome actions={positionChrome} />
+      ) : null}
       {active && !hideGuides && <span className="canvas-hit-zone__badge">{label}</span>}
-    </button>
+    </div>
   );
 }
 
@@ -495,7 +552,13 @@ function PuzzlePageCanvas({
   canvasEditHighlightTarget = null,
   canvasEditHideGuides = false,
   onCanvasEditTargetChange,
+  canvasFormatTarget = null,
+  onFormatTargetChange,
+  onNativeTextChange,
+  onGridScaleChange,
+  onCanvasLayoutOffsetsChange,
   pagePart = 'clues',
+  pageVariableEditor = null,
 }: {
   puzzle: WordSearchPuzzle;
   settings: WordSearchSettings;
@@ -513,9 +576,16 @@ function PuzzlePageCanvas({
   canvasEditHighlightTarget?: CanvasEditTarget | null;
   canvasEditHideGuides?: boolean;
   onCanvasEditTargetChange?: (target: CanvasEditTarget | null) => void;
+  canvasFormatTarget?: CanvasFormatTarget | null;
+  onFormatTargetChange?: (target: CanvasFormatTarget | null) => void;
+  onNativeTextChange?: (target: NativeTextTarget, text: string) => void;
+  onGridScaleChange?: (scale: number) => void;
+  onCanvasLayoutOffsetsChange?: (offsets: CanvasLayoutOffsets) => void;
   pagePart?: 'clues' | 'grid';
+  pageVariableEditor?: PageVariableEditorState | null;
 }) {
   const editHighlight = canvasEditHighlightTarget ?? canvasEditTarget;
+  const nativeSelected = canvasFormatTarget;
   const isGridOnlyPage = pagePart === 'grid';
 
   const layout = useMemo(() => {
@@ -533,6 +603,23 @@ function PuzzlePageCanvas({
 
   const { page, title, subtitle, headerAssembly, grid, wordList } = layout;
   const shouldRenderGrid = !settings.core.twoPagePuzzles || pagePart === 'grid';
+  const wordSearchGridElements = useMemo(
+    () =>
+      shiftElements(
+        buildWordSearchGridElements({
+          puzzle,
+          grid,
+          showSolution,
+          solution: showSolution
+            ? wordSearchSolutionStyle(settings.colors.answerPage)
+            : undefined,
+        }),
+        grid.leftPt,
+        grid.topPt
+      ),
+    [grid, puzzle, settings.colors.answerPage, showSolution]
+  );
+  const wordSearchHasSharedLetters = wordSearchGridElements.some((el) => el.kind === 'text');
 
   const widthPx = ptToPx(page.widthPt);
   const heightPx = ptToPx(page.heightPt);
@@ -549,22 +636,20 @@ function PuzzlePageCanvas({
   const gridRootTopPt = grid.topPt - borderThicknessPt - framePaddingPt;
 
   const canvasHitZones = useMemo(() => {
-    if (!canvasEditEnabled || showSolution) return null;
+    if (showSolution) return null;
+    if (!canvasEditEnabled && !onFormatTargetChange) return null;
 
-    let titleTopPt = page.marginPt;
-    let titleLeftPt = page.marginPt;
-    let titleWidthPt = page.widthPt - page.marginPt * 2;
-    let titleHeightPt = Math.max(36, grid.topPt - titleTopPt - 6);
-
-    if (headerAssembly && headerAssembly.settings.enabled) {
-      titleTopPt = headerAssembly.topPt;
-      titleLeftPt = headerAssembly.leftPt;
-      titleWidthPt = headerAssembly.widthPt;
-      titleHeightPt = headerAssembly.heightPt;
-    } else if (title) {
-      titleTopPt = title.topPt;
-      titleHeightPt = Math.max(36, grid.topPt - title.topPt - 6);
-    }
+    const numberingStyle =
+      (settings.typography.puzzleNumberingStyle as 'none' | 'prefix' | 'suffix') || 'none';
+    const headerParts = headerPartHitBoxes({
+      headerAssembly: headerAssembly && headerAssembly.settings.enabled ? headerAssembly : null,
+      title: !headerAssembly || !headerAssembly.settings.enabled ? title : null,
+      subtitle:
+        !headerAssembly || !headerAssembly.settings.enabled ? subtitle : null,
+      numberingStyle,
+      pageMarginPt: page.marginPt,
+      pageWidthPt: page.widthPt,
+    });
 
     const gridOuterPadPt = borderThicknessPt + framePaddingPt;
     const gridZone = {
@@ -600,7 +685,7 @@ function PuzzlePageCanvas({
         : null;
 
     return {
-      title: { topPt: titleTopPt, leftPt: titleLeftPt, widthPt: titleWidthPt, heightPt: titleHeightPt },
+      headerParts,
       grid: gridZone,
       wordList: wordListZone,
       pageNumber: pageNumberLayout,
@@ -615,7 +700,7 @@ function PuzzlePageCanvas({
     settings,
     headerAssembly,
     title,
-    grid.topPt,
+    subtitle,
     grid.widthPt,
     grid.heightPt,
     gridRootTopPt,
@@ -624,9 +709,17 @@ function PuzzlePageCanvas({
     framePaddingPt,
     wordList,
     settings.wordList.hideWordList,
+    onFormatTargetChange,
   ]);
 
   return (
+    <CanvasNativePositionProvider
+      offsets={settings.typography.canvasLayoutOffsets ?? {}}
+      pageHeightPt={page.heightPt}
+      marginPt={page.marginPt}
+      ptToCssPx={ptToPx}
+      onOffsetsChange={(next) => onCanvasLayoutOffsetsChange?.(next)}
+    >
     <div
       className="relative shadow-2xl border border-gray-300 select-none transition-shadow duration-300 hover:shadow-3xl"
       style={{
@@ -689,18 +782,18 @@ function PuzzlePageCanvas({
       {/* Content — page-absolute coordinates (matches PDF/PPT export) */}
       <>
         {/* Modular header assembly */}
-        {!isGridOnlyPage && headerAssembly && (
-      <div
-        style={{
-          position: 'absolute',
+        {!showSolution && !isGridOnlyPage && headerAssembly && (
+          <div
+            style={{
+              position: 'absolute',
               top: ptToPx(headerAssembly.topPt),
               left: ptToPx(headerAssembly.leftPt),
               width: ptToPx(headerAssembly.widthPt),
               maxWidth: ptToPx(headerAssembly.widthPt),
-              overflow: 'hidden',
-          zIndex: 2,
-        }}
-      >
+              overflow: 'visible',
+              zIndex: 28,
+            }}
+          >
             <HeaderAssemblyBar
               parts={headerAssembly.parts}
               settings={headerAssembly.settings}
@@ -714,13 +807,36 @@ function PuzzlePageCanvas({
               subtitleFontFamily={headerAssembly.subtitleFontFamily}
               subtitleTextWidthPt={headerAssembly.subtitleTextWidthPt}
               ptToPx={ptToPx}
+              selectedTarget={nativeSelected}
+              onSelectTarget={onFormatTargetChange ?? undefined}
+              onTitleTextChange={
+                onNativeTextChange ? (text) => onNativeTextChange('title', text) : undefined
+              }
+              onSubtitleTextChange={
+                onNativeTextChange ? (text) => onNativeTextChange('subtitle', text) : undefined
+              }
             />
           </div>
         )}
 
         {/* Title (legacy plain text) */}
         {!isGridOnlyPage && !headerAssembly && title && (
-          <div
+          <CanvasSelectable
+            target="title"
+            label="Title"
+            active={nativeSelected === 'title'}
+            onSelect={onFormatTargetChange ?? undefined}
+            editable={!!onNativeTextChange}
+            value={title.text}
+            onTextChange={
+              onNativeTextChange ? (text) => onNativeTextChange('title', text) : undefined
+            }
+            positionMetrics={{
+              topPt: title.topPt,
+              leftPt: 0,
+              widthPt: page.widthPt,
+              heightPt: title.fontSizePt * 1.2,
+            }}
             style={{
               position: 'absolute',
               top: ptToPx(title.topPt),
@@ -731,17 +847,34 @@ function PuzzlePageCanvas({
               fontSize: ptToPx(title.fontSizePt),
               fontWeight: 700,
               color: title.color,
+              fontStyle: title.italic ? 'italic' : undefined,
               lineHeight: 1.1,
-              zIndex: 2,
+              zIndex: 28,
+              ...cssTextEffect(title.textEffect, title.color),
             }}
           >
             {title.text}
-          </div>
+          </CanvasSelectable>
         )}
 
         {/* Subtitle / Fun facts (legacy) */}
-        {!isGridOnlyPage && !headerAssembly && subtitle && (
-          <div
+        {!showSolution && !isGridOnlyPage && !headerAssembly && subtitle && (
+          <CanvasSelectable
+            target="subtitle"
+            label="Subtitle"
+            active={nativeSelected === 'subtitle'}
+            onSelect={onFormatTargetChange ?? undefined}
+            editable={!!onNativeTextChange}
+            value={subtitle.text}
+            onTextChange={
+              onNativeTextChange ? (text) => onNativeTextChange('subtitle', text) : undefined
+            }
+            positionMetrics={{
+              topPt: subtitle.topPt,
+              leftPt: subtitle.leftPt,
+              widthPt: subtitle.widthPt,
+              heightPt: subtitle.fontSizePt * 1.2 * Math.max(1, subtitle.wrappedLines?.length || 1),
+            }}
             style={{
               position: 'absolute',
               top: ptToPx(subtitle.topPt),
@@ -753,7 +886,8 @@ function PuzzlePageCanvas({
               color: subtitle.color,
               lineHeight: 1.2,
               whiteSpace: 'pre-wrap',
-              zIndex: 2,
+              zIndex: 28,
+              ...cssTextEffect(subtitle.textEffect, subtitle.color),
             }}
           >
             {(subtitle.wrappedLines || [subtitle.text]).map((line, i) => (
@@ -761,24 +895,46 @@ function PuzzlePageCanvas({
                 {line}
               </div>
             ))}
-          </div>
+          </CanvasSelectable>
         )}
 
         {/* Puzzle grid — only shown on the grid page for split-page puzzles */}
         {shouldRenderGrid && (
-          <div
+          <CanvasSelectable
+            target="grid"
+            label="Grid"
+            active={nativeSelected === 'grid'}
+            onSelect={
+              onFormatTargetChange
+                ? (target) => {
+                    onFormatTargetChange(target);
+                    if (canvasEditEnabled) onCanvasEditTargetChange?.('grid');
+                  }
+                : undefined
+            }
+            scalePercent={onGridScaleChange ? puzzleGridScale : undefined}
+            onScaleChange={onGridScaleChange}
+            scaleMin={40}
+            scaleMax={200}
+            positionMetrics={{
+              topPt: gridRootTopPt,
+              leftPt: gridRootLeftPt,
+              widthPt: grid.widthPt + (borderThicknessPt + framePaddingPt) * 2,
+              heightPt: grid.heightPt + (borderThicknessPt + framePaddingPt) * 2,
+            }}
             style={{
               position: 'absolute',
               left: ptToPx(gridRootLeftPt),
               top: ptToPx(gridRootTopPt),
               display: 'block',
               lineHeight: 0,
-              zIndex: 2,
+              zIndex: 28,
             }}
           >
             <WordSearchGrid
               puzzle={puzzle}
               showSolution={showSolution}
+              hideCellLetters={wordSearchHasSharedLetters}
               cellSize={ptToPx(grid.cellSizePt)}
               noBoxAroundPuzzle={grid.noBox}
               borderStrokeThickness={borderThicknessCssPx}
@@ -817,8 +973,16 @@ function PuzzlePageCanvas({
               )}
               shapeImageOpacity={settings.core.shapeMaskImageOpacity ?? 35}
               shapeImageFit={settings.core.shapeMaskFit ?? 'contain'}
+              letterOverlay={
+                <ResolvedElementsView
+                  elements={wordSearchGridElements}
+                  widthPt={grid.widthPt}
+                  heightPt={grid.heightPt}
+                  scale={ptToPx(1)}
+                />
+              }
             />
-          </div>
+          </CanvasSelectable>
         )}
 
         {/* Word List */}
@@ -833,56 +997,83 @@ function PuzzlePageCanvas({
           pageWidthPt={page.widthPt}
           pageHeightPt={page.heightPt}
           ptToPx={ptToPx}
+          selected={nativeSelected === 'page-number'}
+          onSelect={onFormatTargetChange ?? undefined}
         />
         ) : null}
 
-        {canvasHitZones && onCanvasEditTargetChange && (
+        {pageVariableEditor ? (
+          <PageVariableOverlay
+            editor={pageVariableEditor}
+            context={{
+              contentIndex: pageVariableContentIndex(puzzle.puzzleIndexInDocument ?? 0, 1),
+              bookPageNumber: (bookPageIndex ?? 0) + 1,
+              puzzleNumber:
+                puzzle.puzzleNumber ??
+                (settings.core.puzzlesStartingNumber ?? 1) + (puzzle.puzzleIndexInDocument ?? 0),
+              pageWidthPt: page.widthPt,
+              pageHeightPt: page.heightPt,
+              ptToPx,
+              resolveContext: {
+                contentIndex: pageVariableContentIndex(puzzle.puzzleIndexInDocument ?? 0, 1),
+                funFactsByIndex: (settings.typography?.funFactsText || '')
+                  .split(/\r?\n/)
+                  .map((line: string) => line.normalize('NFC')),
+                titlesByIndex: (settings.typography?.titleText || '')
+                  .split(/\r?\n/)
+                  .map((line: string) => line.normalize('NFC')),
+                puzzleNumber:
+                  puzzle.puzzleNumber ??
+                  (settings.core.puzzlesStartingNumber ?? 1) + (puzzle.puzzleIndexInDocument ?? 0),
+                pageNumber: (bookPageIndex ?? 0) + 1,
+                puzzleType: 'word-search',
+              },
+            }}
+          />
+        ) : null}
+
+        {onFormatTargetChange ? (
+          <div
+            className="absolute inset-0 z-[12]"
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              onFormatTargetChange(null);
+              pageVariableEditor?.onSelect(null);
+            }}
+          />
+        ) : null}
+
+        {canvasHitZones && (onCanvasEditTargetChange || onFormatTargetChange) ? (
           <>
-            <CanvasHitZone
-              active={editHighlight === 'page-background'}
-              hideGuides={canvasEditHideGuides}
-              label="Background"
-              onSelect={() => onCanvasEditTargetChange?.('page-background')}
-              style={{
-                position: 'absolute',
-                inset: 0,
-                zIndex: 15,
-              }}
-            />
-            <CanvasHitZone
-              active={editHighlight === 'title'}
-              hideGuides={canvasEditHideGuides}
-              label="Title"
-              onSelect={() => onCanvasEditTargetChange?.('title')}
-              style={{
-                position: 'absolute',
-                top: ptToPx(canvasHitZones.title.topPt),
-                left: ptToPx(canvasHitZones.title.leftPt),
-                width: ptToPx(canvasHitZones.title.widthPt),
-                height: ptToPx(canvasHitZones.title.heightPt),
-                zIndex: 25,
-              }}
-            />
-            <CanvasHitZone
-              active={editHighlight === 'grid'}
-              hideGuides={canvasEditHideGuides}
-              label="Grid"
-              onSelect={() => onCanvasEditTargetChange?.('grid')}
-              style={{
-                position: 'absolute',
-                top: ptToPx(canvasHitZones.grid.topPt),
-                left: ptToPx(canvasHitZones.grid.leftPt),
-                width: ptToPx(canvasHitZones.grid.widthPt),
-                height: ptToPx(canvasHitZones.grid.heightPt),
-                zIndex: 25,
-              }}
-            />
+            {canvasEditEnabled ? (
+              <CanvasHitZone
+                active={editHighlight === 'page-background'}
+                hideGuides={canvasEditHideGuides}
+                label="Background"
+                onSelect={() => onCanvasEditTargetChange?.('page-background')}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  zIndex: 15,
+                }}
+              />
+            ) : null}
             {canvasHitZones.wordList && (
               <CanvasHitZone
-                active={editHighlight === 'word-list'}
-                hideGuides={canvasEditHideGuides}
+                active={nativeSelected === 'word-list' || editHighlight === 'word-list'}
+                hideGuides={canvasEditHideGuides && !nativeSelected}
                 label="Word List"
-                onSelect={() => onCanvasEditTargetChange?.('word-list')}
+                formatTarget="word-list"
+                positionMetrics={{
+                  topPt: canvasHitZones.wordList.topPt,
+                  leftPt: canvasHitZones.wordList.leftPt,
+                  widthPt: canvasHitZones.wordList.widthPt,
+                  heightPt: canvasHitZones.wordList.heightPt,
+                }}
+                onSelect={() => {
+                  onFormatTargetChange?.('word-list');
+                  if (canvasEditEnabled) onCanvasEditTargetChange?.('word-list');
+                }}
                 style={{
                   position: 'absolute',
                   top: ptToPx(canvasHitZones.wordList.topPt),
@@ -893,26 +1084,11 @@ function PuzzlePageCanvas({
                 }}
               />
             )}
-            {canvasHitZones.pageNumber && (
-              <CanvasHitZone
-                active={editHighlight === 'page-number'}
-                hideGuides={canvasEditHideGuides}
-                label="Page #"
-                onSelect={() => onCanvasEditTargetChange?.('page-number')}
-                style={{
-                  position: 'absolute',
-                  top: ptToPx(canvasHitZones.pageNumber.topPt),
-                  left: ptToPx(canvasHitZones.pageNumber.leftPt),
-                  width: ptToPx(canvasHitZones.pageNumber.widthPt),
-                  height: ptToPx(canvasHitZones.pageNumber.heightPt),
-                  zIndex: 26,
-                }}
-              />
-            )}
           </>
-        )}
+        ) : null}
       </>
     </div>
+    </CanvasNativePositionProvider>
   );
 }
 
@@ -953,6 +1129,9 @@ function TextPageCanvas({
   onTextEditTargetChange,
   onSettingsChange,
   bookPageIndex = null,
+  pageVariableEditor = null,
+  frontMatterTarget = null,
+  onFrontMatterTargetChange,
 }: {
   page: DocumentPage;
   settings: TextModuleSettings;
@@ -967,6 +1146,9 @@ function TextPageCanvas({
   onTextEditTargetChange?: (target: TextPageEditTarget) => void;
   onSettingsChange?: (updates: Partial<TextModuleSettings>) => void;
   bookPageIndex?: number | null;
+  pageVariableEditor?: PageVariableEditorState | null;
+  frontMatterTarget?: FrontMatterFormatTarget | null;
+  onFrontMatterTargetChange?: (target: FrontMatterFormatTarget) => void;
 }) {
   const titleRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -1108,6 +1290,15 @@ function TextPageCanvas({
             lineHeight: 1.3,
           }}
         >
+          <CanvasChrome
+            label="Title"
+            active={frontMatterTarget === 'title'}
+            onSelect={
+              isEditing && onFrontMatterTargetChange
+                ? () => onFrontMatterTargetChange('title')
+                : undefined
+            }
+          >
           <div
             ref={titleRef}
             className="font-bold mb-4 outline-none"
@@ -1115,16 +1306,33 @@ function TextPageCanvas({
             contentEditable={isEditing}
             suppressContentEditableWarning
             onInput={handleTitleInput}
-            onClick={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (isEditing) onFrontMatterTargetChange?.('title');
+            }}
           />
+          </CanvasChrome>
+          <CanvasChrome
+            label="Body"
+            active={frontMatterTarget === 'body'}
+            onSelect={
+              isEditing && onFrontMatterTargetChange
+                ? () => onFrontMatterTargetChange('body')
+                : undefined
+            }
+          >
           <div
             ref={contentRef}
             className="outline-none min-h-[1.5em]"
             contentEditable={isEditing}
             suppressContentEditableWarning
             onInput={handleContentInput}
-            onClick={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (isEditing) onFrontMatterTargetChange?.('body');
+            }}
           />
+          </CanvasChrome>
           {!content && !title && isEditing && (
             <span className="pointer-events-none text-slate-400 italic" aria-hidden>
               Click to add text…
@@ -1142,6 +1350,13 @@ function TextPageCanvas({
           ptToPx={ptToPx}
         />
       )}
+      <TextPageVariableLayer
+        editor={pageVariableEditor}
+        pageWidthPt={pageWidthPt}
+        pageHeightPt={pageHeightPt}
+        ptToPx={ptToPx}
+        bookPageIndex={bookPageIndex ?? 0}
+      />
     </div>
   );
 }
@@ -1228,6 +1443,15 @@ function DocumentPageCanvas({
   canvasEditHighlightTarget = null,
   canvasEditHideGuides = false,
   onCanvasEditTargetChange,
+  canvasFormatTarget = null,
+  onFormatTargetChange,
+  onNativeTextChange,
+  onGridScaleChange,
+  onCanvasLayoutOffsetsChange,
+  onStartEndImageScaleChange,
+  onSolutionGapChange,
+  frontMatterTarget = null,
+  onFrontMatterTargetChange,
   textEditEnabled = false,
   textEditTarget = null,
   textEditHideGuides = false,
@@ -1254,6 +1478,7 @@ function DocumentPageCanvas({
   onGenericPuzzleEditTargetChange,
   murdokuSettings = null,
   murdokuBatchPuzzles = [],
+  pageVariableEditor = null,
 }: {
   page: DocumentPage;
   activeDocumentPageId: string;
@@ -1282,6 +1507,15 @@ function DocumentPageCanvas({
   canvasEditHighlightTarget?: CanvasEditTarget | null;
   canvasEditHideGuides?: boolean;
   onCanvasEditTargetChange?: (target: CanvasEditTarget | null) => void;
+  canvasFormatTarget?: CanvasFormatTarget | null;
+  onFormatTargetChange?: (target: CanvasFormatTarget | null) => void;
+  onNativeTextChange?: (target: NativeTextTarget, text: string) => void;
+  onGridScaleChange?: (scale: number) => void;
+  onCanvasLayoutOffsetsChange?: (offsets: CanvasLayoutOffsets) => void;
+  onStartEndImageScaleChange?: (scale: number) => void;
+  onSolutionGapChange?: (gapPx: number) => void;
+  frontMatterTarget?: FrontMatterFormatTarget | null;
+  onFrontMatterTargetChange?: (target: FrontMatterFormatTarget) => void;
   textEditEnabled?: boolean;
   textEditTarget?: TextPageEditTarget | null;
   textEditHideGuides?: boolean;
@@ -1308,7 +1542,17 @@ function DocumentPageCanvas({
   onGenericPuzzleEditTargetChange?: (target: GenericPuzzleEditTarget) => void;
   murdokuSettings?: MurdokuSettings | null;
   murdokuBatchPuzzles?: MurdokuPuzzle[];
+  pageVariableEditor?: PageVariableEditorState | null;
 }) {
+  const liveVariableEditor =
+    pageVariableEditor && page.id === activeDocumentPageId
+      ? pageVariableEditor
+      : idlePageVariableEditor(
+          isPuzzleModuleSettings(page.settings) || isTextModuleSettings(page.settings)
+            ? normalizePageVariables(page.settings.pageVariables)
+            : []
+        );
+
   if (page.moduleType === 'word-search') {
     const pageSettings = page.settings as PuzzleModuleSettings;
     const pageWordSearchSettings =
@@ -1323,7 +1567,9 @@ function DocumentPageCanvas({
     const pageStartIndex = batchPuzzles.findIndex((puzzle) => puzzle.pageId === page.id);
     const includeBlankAfterEachPuzzle =
       !!pageWordSearchSettings.bookCanvas.includePageBetweenPuzzleAndSolutions;
-    const answersPerPage = pageWordSearchSettings.bookCanvas.answersPerPage || 1;
+    const answersPerPage = normalizeAnswersPerPage(
+      pageWordSearchSettings.bookCanvas.answersPerPage
+    );
     const activePagePuzzle = page.id === activeDocumentPageId
       ? pagePuzzles[Math.max(0, Math.min(pagePuzzles.length - 1, currentBatchIndex - Math.max(pageStartIndex, 0)))]
       : pagePuzzles[0];
@@ -1378,7 +1624,13 @@ function DocumentPageCanvas({
                   canvasEditHighlightTarget={canvasEditHighlightTarget}
                   canvasEditHideGuides={canvasEditHideGuides}
                   onCanvasEditTargetChange={onCanvasEditTargetChange}
+                  canvasFormatTarget={canvasFormatTarget}
+                  onFormatTargetChange={onFormatTargetChange}
+                  onNativeTextChange={onNativeTextChange}
+                  onGridScaleChange={onGridScaleChange}
+                  onCanvasLayoutOffsetsChange={onCanvasLayoutOffsetsChange}
                   pagePart={pagePart}
+                  pageVariableEditor={liveVariableEditor}
                 />
               </div>
             ))}
@@ -1414,6 +1666,12 @@ function DocumentPageCanvas({
                           )
                     )}
                     pagePart={pagePart}
+                    pageVariableEditor={liveVariableEditor}
+                    canvasFormatTarget={canvasFormatTarget}
+                    onFormatTargetChange={onFormatTargetChange}
+                    onNativeTextChange={onNativeTextChange}
+                    onGridScaleChange={onGridScaleChange}
+                    onCanvasLayoutOffsetsChange={onCanvasLayoutOffsetsChange}
                   />
                 </div>
               ));
@@ -1488,6 +1746,7 @@ function DocumentPageCanvas({
           canvasEditHighlightTarget={canvasEditHighlightTarget}
           canvasEditHideGuides={canvasEditHideGuides}
           onCanvasEditTargetChange={onCanvasEditTargetChange}
+          onSolutionGapChange={onSolutionGapChange}
         />
       );
     }
@@ -1519,6 +1778,7 @@ function DocumentPageCanvas({
               titleToAnswerGap={titleToAnswerGap}
               solutionToSolutionGap={solutionToSolutionGap}
               pageMargin={pageMargin}
+              onSolutionGapChange={onSolutionGapChange}
             />
           </div>
         ))}
@@ -1559,6 +1819,7 @@ function DocumentPageCanvas({
           onSettingsChange={onTextSettingsChange}
           onCanvasBackgroundClick={onCanvasBackgroundClick}
           onDeleteBlock={onDeleteTextBlock}
+          pageVariableEditor={liveVariableEditor}
         />
       );
     }
@@ -1617,6 +1878,9 @@ function DocumentPageCanvas({
               textEditEnabled={textEditEnabled && page.id === activeDocumentPageId}
               onSettingsChange={onTextSettingsChange}
               onCanvasClick={onTocCanvasClick}
+              frontMatterTarget={frontMatterTarget}
+              onFrontMatterTargetChange={onFrontMatterTargetChange}
+              pageVariableEditor={liveVariableEditor}
             />
           ))}
         </div>
@@ -1638,6 +1902,9 @@ function DocumentPageCanvas({
         onTextEditTargetChange={onTextEditTargetChange}
         onSettingsChange={onTextSettingsChange}
         bookPageIndex={showTextPageNumber ? textBookPageIndex : null}
+        frontMatterTarget={frontMatterTarget}
+        onFrontMatterTargetChange={onFrontMatterTargetChange}
+        pageVariableEditor={liveVariableEditor}
       />
     );
   }
@@ -1671,6 +1938,24 @@ function DocumentPageCanvas({
         : isMurdokuModule
           ? pageMurdokuBatch
           : pageGenericBatch;
+
+    if (
+      page.moduleType === 'crossword' &&
+      pageBatch.length === 0 &&
+      !(page.id === activeDocumentPageId && currentPuzzle?.type === 'crossword')
+    ) {
+      return (
+        <PuzzleModulePlaceholderCanvas
+          page={page}
+          wordSearchSettings={wordSearchSettings}
+          showMargins={showMargins}
+          showSafetyZone={showSafetyZone}
+          safetyMarginPx={safetyMarginPx}
+          ptToPx={ptToPx}
+        />
+      );
+    }
+
     const pageCwSettings =
       page.moduleType === 'crossword'
         ? page.id === activeDocumentPageId
@@ -1834,6 +2119,11 @@ function DocumentPageCanvas({
           puzzleIndex={thumbIndex}
           bookPageIndex={thumbBookPageIndex}
           canvasEditEnabled={false}
+          pageVariableEditor={idlePageVariableEditor(
+            normalizePageVariables(
+              isPuzzleModuleSettings(moduleSettings) ? moduleSettings.pageVariables : []
+            )
+          )}
         />
       );
     }
@@ -1922,6 +2212,14 @@ function DocumentPageCanvas({
       canvasEditHideGuides={crosswordEditHideGuides || genericPuzzleEditHideGuides}
       onCrosswordEditTargetChange={onCrosswordEditTargetChange}
       onGenericPuzzleEditTargetChange={onGenericPuzzleEditTargetChange}
+      canvasFormatTarget={canvasFormatTarget}
+      onFormatTargetChange={onFormatTargetChange}
+      onNativeTextChange={onNativeTextChange}
+      onGridScaleChange={onGridScaleChange}
+      onCanvasLayoutOffsetsChange={onCanvasLayoutOffsetsChange}
+      onStartEndImageScaleChange={onStartEndImageScaleChange}
+      onSolutionGapChange={onSolutionGapChange}
+      pageVariableEditor={liveVariableEditor}
     />
       );
     }
@@ -1952,6 +2250,7 @@ function DocumentPageCanvas({
       textEditHideGuides={textEditHideGuides}
       onTextEditTargetChange={onTextEditTargetChange}
       onSettingsChange={onTextSettingsChange}
+      pageVariableEditor={liveVariableEditor}
     />
   );
 }
@@ -1971,6 +2270,7 @@ function CompiledBookPageCanvas({
   solutionToSolutionGap,
   pageMargin,
   bookHeaderTitleFontSizePt,
+  pageVariableEditor = null,
 }: {
   compiledPage: CompiledPage;
   compiledPages: CompiledPage[];
@@ -1986,11 +2286,17 @@ function CompiledBookPageCanvas({
   solutionToSolutionGap: number;
   pageMargin: number;
   bookHeaderTitleFontSizePt?: number | null;
+  pageVariableEditor?: PageVariableEditorState | null;
 }) {
   const showPageNumber = shouldDrawBookPageNumber(
     compiledPage.bookPageIndex,
     compiledPages
   );
+  const compiledPageVariableEditor =
+    pageVariableEditor ??
+    idlePageVariableEditor(
+      pageVariablesFromDocument(documentPages, compiledPage.sourceDocumentId)
+    );
 
   if (compiledPage.kind === 'text') {
     const docPage =
@@ -2012,6 +2318,7 @@ function CompiledBookPageCanvas({
           showSafetyZone={showSafetyZone}
           safetyMarginPx={safetyMarginPx}
           ptToPx={ptToPx}
+          pageVariableEditor={compiledPageVariableEditor}
         />
       );
     }
@@ -2040,6 +2347,7 @@ function CompiledBookPageCanvas({
           showSafetyZone={showSafetyZone}
           safetyMarginPx={safetyMarginPx}
           ptToPx={ptToPx}
+          pageVariableEditor={compiledPageVariableEditor}
         />
       );
     }
@@ -2054,6 +2362,7 @@ function CompiledBookPageCanvas({
         safetyMarginPx={safetyMarginPx}
         ptToPx={ptToPx}
         bookPageIndex={showPageNumber ? compiledPage.bookPageIndex : null}
+        pageVariableEditor={compiledPageVariableEditor}
       />
     );
   }
@@ -2088,6 +2397,7 @@ function CompiledBookPageCanvas({
         }
         bookPageIndex={showPageNumber ? compiledPage.bookPageIndex : undefined}
         canvasEditEnabled={false}
+        pageVariableEditor={compiledPageVariableEditor}
       />
     );
   }
@@ -2123,6 +2433,7 @@ function CompiledBookPageCanvas({
         }
         bookPageIndex={showPageNumber ? compiledPage.bookPageIndex : undefined}
         canvasEditEnabled={false}
+        pageVariableEditor={compiledPageVariableEditor}
       />
     );
   }
@@ -2198,6 +2509,13 @@ function CompiledBookPageCanvas({
             ptToPx={ptToPx}
           />
         )}
+        <TextPageVariableLayer
+          editor={compiledPageVariableEditor}
+          pageWidthPt={pageWidthPt}
+          pageHeightPt={pageHeightPt}
+          ptToPx={ptToPx}
+          bookPageIndex={compiledPage.bookPageIndex}
+        />
       </div>
     );
   }
@@ -2224,6 +2542,7 @@ function CompiledBookPageCanvas({
         bookHeaderTitleFontSizePt={bookHeaderTitleFontSizePt}
         bookPageIndex={showPageNumber ? compiledPage.bookPageIndex : undefined}
         pagePart={compiledPage.pagePart ?? 'clues'}
+        pageVariableEditor={compiledPageVariableEditor}
       />
     );
   }
@@ -2319,6 +2638,7 @@ function SolutionsPageCanvas({
   canvasEditHighlightTarget = null,
   canvasEditHideGuides = false,
   onCanvasEditTargetChange,
+  onSolutionGapChange,
 }: {
   puzzles: WordSearchPuzzle[];
   settings: WordSearchSettings;
@@ -2337,6 +2657,7 @@ function SolutionsPageCanvas({
   canvasEditHighlightTarget?: CanvasEditTarget | null;
   canvasEditHideGuides?: boolean;
   onCanvasEditTargetChange?: (target: CanvasEditTarget | null) => void;
+  onSolutionGapChange?: (gapPx: number) => void;
 }) {
   const editHighlight = canvasEditHighlightTarget ?? canvasEditTarget;
 
@@ -2346,7 +2667,7 @@ function SolutionsPageCanvas({
   const pageHeightPt = dims.height * 72;
   const widthPx = ptToPx(pageWidthPt);
   const heightPx = ptToPx(pageHeightPt);
-  const answersPerPage = settings.bookCanvas.answersPerPage || 1;
+  const answersPerPage = normalizeAnswersPerPage(settings.bookCanvas.answersPerPage);
   const pageFrame = resolvePageFrameSettings(settings);
 
   const toPx = (pt: number) => {
@@ -2651,6 +2972,49 @@ function SolutionsPageCanvas({
         );
       })}
 
+      {onSolutionGapChange && solutionLayout.layout.columns > 1
+        ? Array.from({ length: solutionLayout.layout.columns - 1 }).map((_, gi) => {
+            const leftBlock = blocks.find((b) => b.col === gi);
+            const rightBlock = blocks.find((b) => b.col === gi + 1);
+            if (!leftBlock || !rightBlock) return null;
+            const midPx = toPx((leftBlock.leftPt + leftBlock.widthPt + rightBlock.leftPt) / 2);
+            return (
+              <SolutionGapDragHandle
+                key={`ws-hgap-${gi}`}
+                orientation="horizontal"
+                gapPx={solutionToSolutionGap}
+                onGapChange={onSolutionGapChange}
+                style={{
+                  left: midPx,
+                  top: toPx(solutionLayout.clusterTopPt),
+                  height: toPx(solutionLayout.clusterHeightPt),
+                }}
+              />
+            );
+          })
+        : null}
+      {onSolutionGapChange && solutionLayout.layout.rows > 1
+        ? Array.from({ length: solutionLayout.layout.rows - 1 }).map((_, gi) => {
+            const topBlock = blocks.find((b) => b.row === gi);
+            const bottomBlock = blocks.find((b) => b.row === gi + 1);
+            if (!topBlock || !bottomBlock) return null;
+            const midPx = toPx((topBlock.topPt + topBlock.heightPt + bottomBlock.topPt) / 2);
+            return (
+              <SolutionGapDragHandle
+                key={`ws-vgap-${gi}`}
+                orientation="vertical"
+                gapPx={solutionToSolutionGap}
+                onGapChange={onSolutionGapChange}
+                style={{
+                  top: midPx,
+                  left: toPx(solutionLayout.clusterLeftPt),
+                  width: toPx(solutionLayout.clusterWidthPt),
+                }}
+              />
+            );
+          })
+        : null}
+
       {typeof bookPageIndex === 'number' ? (
       <PageNumberOverlay
         settings={settings}
@@ -2753,8 +3117,16 @@ export function GenericPuzzlePageCanvas({
   canvasEditHideGuides = false,
   onCrosswordEditTargetChange,
   onGenericPuzzleEditTargetChange,
+  canvasFormatTarget = null,
+  onFormatTargetChange,
+  onNativeTextChange,
+  onGridScaleChange,
+  onCanvasLayoutOffsetsChange,
+  onStartEndImageScaleChange,
+  onSolutionGapChange,
   omitBackground = false,
   hidePageNumber = false,
+  pageVariableEditor = null,
 }: {
   puzzleType: string;
   puzzle: any;
@@ -2778,8 +3150,17 @@ export function GenericPuzzlePageCanvas({
   canvasEditHideGuides?: boolean;
   onCrosswordEditTargetChange?: (target: CrosswordEditTarget) => void;
   onGenericPuzzleEditTargetChange?: (target: GenericPuzzleEditTarget) => void;
+  canvasFormatTarget?: CanvasFormatTarget | null;
+  onFormatTargetChange?: (target: CanvasFormatTarget | null) => void;
+  onNativeTextChange?: (target: NativeTextTarget, text: string) => void;
+  onGridScaleChange?: (scale: number) => void;
+  onCanvasLayoutOffsetsChange?: (offsets: CanvasLayoutOffsets) => void;
+  onStartEndImageScaleChange?: (scale: number) => void;
+  /** Drag on canvas to change space between multi-up solutions (px). */
+  onSolutionGapChange?: (gapPx: number) => void;
   /** Export: skip Style background layers (PPT keeps native slide background). */
   omitBackground?: boolean;
+  pageVariableEditor?: PageVariableEditorState | null;
   /** Export: skip page-number overlay (PPT draws it as editable text). */
   hidePageNumber?: boolean;
 }) {
@@ -2803,14 +3184,15 @@ export function GenericPuzzlePageCanvas({
   const pageFrame = resolvePageFrameSettings(settings);
   const contentInsetPt = resolveGenericPageContentInsetPt(settings);
   const marginPx = ptToPx(contentInsetPt);
-  const scaleFactor =
+  const gridScalePercent =
     (cw
       ? (showSolution ? cw.core.solutionGridScale : cw.core.puzzleGridScale) || 100
       : gp
         ? (showSolution ? gp.core.solutionGridScale : gp.core.puzzleGridScale) || 100
-        : puzzleGridScale || 70) / 100;
+        : puzzleGridScale || 70);
+  const scaleFactor = gridScalePercent / 100;
   const answersPerPage = cw
-    ? cw.bookCanvas.answersPerPage || 1
+    ? normalizeAnswersPerPage(cw.bookCanvas.answersPerPage)
     : gp
       ? puzzleType === 'trivia'
         ? computeTriviaSolutionsPerPage({
@@ -2852,11 +3234,10 @@ export function GenericPuzzlePageCanvas({
   );
   const solutionGapPx =
     cw?.typography.solutionToSolutionGapPx ??
+    gp?.typography.solutionToSolutionGapPx ??
     (puzzleType === 'word-scramble' && multiSolution
       ? ptToPx(gp?.typography.scrambleSpaceBetweenPuzzles ?? 18)
-      : isTextPuzzleType && multiSolution
-        ? ptToPx(12)
-        : ptToPx(12));
+      : 14);
   const headerAssemblyEnabled =
     !showSolution && isGlobalHeaderAssemblyEnabled(settings);
   const solutionTitleReservePx = multiSolution
@@ -3021,7 +3402,7 @@ export function GenericPuzzlePageCanvas({
   const genericCellSize = React.useMemo(() => {
     if (!gp || (puzzleType !== 'sudoku' && puzzleType !== 'maze')) return 0;
     if (puzzleType === 'maze' && multiSolutionFramePx) {
-      // Cell size is derived per-puzzle inside MazeDisplay via frameSize.
+      // Cell size comes from the shared maze layout, not a second canvas formula.
       return multiSolutionFramePx;
     }
     const sudokuSize =
@@ -3061,162 +3442,277 @@ export function GenericPuzzlePageCanvas({
   const renderSingleGrid = (p: any, opts?: { hideClues?: boolean; cellSizeOverride?: number }) => {
     switch (puzzleType) {
       case 'sudoku':
-        return (
-          <div className="mx-auto flex justify-center w-fit max-w-full">
-            <SudokuGrid
-              puzzle={p}
-              showSolution={showSolution}
-              cellSize={
-                gp
-                  ? (() => {
-                      const n = Math.max(
-                        4,
-                        Number(p?.size ?? p?.grid?.length ?? 9) || 9
-                      );
-                      if (multiSolutionFramePx) {
-                        return Math.max(3, Math.floor(multiSolutionFramePx / n));
-                      }
-                      return genericCellSize;
-                    })()
-                  : 40
-              }
-              gridColor={gp?.colors.gridColor ?? '#1f2937'}
-              difficultyPlacement={
-                showSolution
-                  ? 'none'
-                  : (gp?.core.sudokuDifficultyPlacement ??
-                    (gp?.core.showDifficultyLabel === false ? 'none' : 'bottom'))
-              }
-              fontSizePt={
-                gp
-                  ? (showSolution
-                      ? gp.typography.answerFontSize
-                      : gp.typography.puzzleFontSize) ?? 14
-                  : undefined
-              }
-              lineThicknessPercent={
-                showSolution
-                  ? (gp?.core.sudokuSolutionLineThickness ?? 100)
-                  : (gp?.core.sudokuPuzzleLineThickness ?? 100)
-              }
-            />
-          </div>
-        );
-      case 'crossword':
-        return (
-          <CrosswordGrid
+        return gp ? (
+          <SelectableSudokuView
             puzzle={p}
+            puzzles={solutionPuzzles.length > 0 ? solutionPuzzles : [p]}
+            settings={settings}
+            titleWords={titleWords}
             showSolution={showSolution}
-            cellSize={opts?.cellSizeOverride ?? cellSize}
-            crosswordSettings={cw}
-            puzzleToCluesGapPx={puzzleToCluesGapPx}
-            hideClues={opts?.hideClues || showSolution}
+            gp={gp}
+            puzzleIndex={puzzleIndex}
+            selectedTarget={canvasFormatTarget}
+            onSelectTarget={onFormatTargetChange ?? undefined}
+            gridScalePercent={onGridScaleChange ? gridScalePercent : undefined}
+            onGridScaleChange={onGridScaleChange}
           />
-        );
+        ) : null;
+      case 'codewords':
+        return gp ? (
+          <SelectableCodewordsView
+            puzzle={p}
+            puzzles={solutionPuzzles.length > 0 ? solutionPuzzles : [p]}
+            settings={settings}
+            titleWords={titleWords}
+            showSolution={showSolution}
+            gp={gp}
+            puzzleIndex={puzzleIndex}
+            selectedTarget={canvasFormatTarget}
+            onSelectTarget={onFormatTargetChange ?? undefined}
+            gridScalePercent={onGridScaleChange ? gridScalePercent : undefined}
+            onGridScaleChange={onGridScaleChange}
+          />
+        ) : null;
+      case 'binairo':
+        return gp ? (
+          <SelectableBinairoView
+            puzzle={p}
+            puzzles={solutionPuzzles.length > 0 ? solutionPuzzles : [p]}
+            settings={settings}
+            titleWords={titleWords}
+            showSolution={showSolution}
+            gp={gp}
+            puzzleIndex={puzzleIndex}
+            selectedTarget={canvasFormatTarget}
+            onSelectTarget={onFormatTargetChange ?? undefined}
+            gridScalePercent={onGridScaleChange ? gridScalePercent : undefined}
+            onGridScaleChange={onGridScaleChange}
+          />
+        ) : null;
+      case 'kakuro':
+        return gp ? (
+          <SelectableKakuroView
+            puzzle={p}
+            puzzles={solutionPuzzles.length > 0 ? solutionPuzzles : [p]}
+            settings={settings}
+            titleWords={titleWords}
+            showSolution={showSolution}
+            gp={gp}
+            puzzleIndex={puzzleIndex}
+            selectedTarget={canvasFormatTarget}
+            onSelectTarget={onFormatTargetChange ?? undefined}
+            gridScalePercent={onGridScaleChange ? gridScalePercent : undefined}
+            onGridScaleChange={onGridScaleChange}
+          />
+        ) : null;
+      case 'math-maze':
+        return gp ? (
+          <SelectableMathMazeView
+            puzzle={p}
+            puzzles={solutionPuzzles.length > 0 ? solutionPuzzles : [p]}
+            settings={settings}
+            titleWords={titleWords}
+            showSolution={showSolution}
+            gp={gp}
+            puzzleIndex={puzzleIndex}
+            selectedTarget={canvasFormatTarget}
+            onSelectTarget={onFormatTargetChange ?? undefined}
+            gridScalePercent={onGridScaleChange ? gridScalePercent : undefined}
+            onGridScaleChange={onGridScaleChange}
+          />
+        ) : null;
+      case 'word-fill':
+      case 'number-fill':
+        return gp ? (
+          <SelectableFillView
+            puzzle={p}
+            puzzles={solutionPuzzles.length > 0 ? solutionPuzzles : [p]}
+            settings={settings}
+            titleWords={titleWords}
+            showSolution={showSolution}
+            gp={gp}
+            puzzleIndex={puzzleIndex}
+            selectedTarget={canvasFormatTarget}
+            onSelectTarget={onFormatTargetChange ?? undefined}
+            gridScalePercent={onGridScaleChange ? gridScalePercent : undefined}
+            onGridScaleChange={onGridScaleChange}
+          />
+        ) : null;
+      case 'snake':
+        return gp ? (
+          <SelectableSnakeView
+            puzzle={p}
+            puzzles={solutionPuzzles.length > 0 ? solutionPuzzles : [p]}
+            settings={settings}
+            titleWords={titleWords}
+            showSolution={showSolution}
+            gp={gp}
+            puzzleIndex={puzzleIndex}
+            selectedTarget={canvasFormatTarget}
+            onSelectTarget={onFormatTargetChange ?? undefined}
+            gridScalePercent={onGridScaleChange ? gridScalePercent : undefined}
+            onGridScaleChange={onGridScaleChange}
+          />
+        ) : null;
       case 'maze': {
         const isShapeMaze = gp?.core.mazeShape === 'custom_image' || Boolean(gp?.core.shapeMazeEnabled);
         const mazeShapeImageSrc = isShapeMaze && gp ? resolveShapeMaskImageSrc(gp.core, p?.puzzleIndexInDocument ?? puzzleIndex ?? 0) : undefined;
+        return gp ? (
+          <div
+            className="mx-auto flex justify-center w-fit max-w-full"
+            style={{ position: 'relative' }}
+          >
+            {mazeShapeImageSrc && gp.core.shapeMaskShowImage ? (
+              <img
+                alt=""
+                src={mazeShapeImageSrc}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  width: '100%',
+                  height: '100%',
+                  objectFit: gp.core.shapeMaskFit === 'stretch' ? 'fill' : gp.core.shapeMaskFit === 'cover' ? 'cover' : 'contain',
+                  opacity: (gp.core.shapeMaskImageOpacity ?? 35) / 100,
+                  pointerEvents: 'none',
+                  zIndex: 1,
+                }}
+              />
+            ) : null}
+            <SelectableMazeView
+              puzzle={p}
+              puzzles={solutionPuzzles.length > 0 ? solutionPuzzles : [p]}
+              settings={settings}
+              titleWords={titleWords}
+              showSolution={showSolution}
+              gp={gp}
+              puzzleIndex={puzzleIndex}
+              selectedTarget={canvasFormatTarget}
+              onSelectTarget={onFormatTargetChange ?? undefined}
+              gridScalePercent={gridScalePercent}
+              onGridScaleChange={onGridScaleChange}
+              startEndScalePercent={gp.core.mazeStartEndImages.imageScalePercent}
+              onStartEndScaleChange={onStartEndImageScaleChange}
+            />
+          </div>
+        ) : null;
+      }
+      case 'crossword':
+        // Isolation: ?gpIso=cwPlaceholder — keep crossword state/init, skip CrosswordGrid render.
+        if (typeof window !== 'undefined') {
+          try {
+            const iso = new URLSearchParams(window.location.search).get('gpIso') || '';
+            if (/(^|[,+|])cwPlaceholder([,+|]|$)/.test(iso)) {
+              return (
+                <div
+                  data-gp-iso="cw-placeholder"
+                  className="mx-auto flex items-center justify-center w-full min-h-[240px] text-sm text-slate-500 border border-dashed border-slate-300"
+                >
+                  Crossword preview placeholder (isolation test)
+                </div>
+              );
+            }
+          } catch {
+            /* ignore */
+          }
+        }
         return (
           <div className="mx-auto flex justify-center w-fit max-w-full">
-            <MazeDisplay
+            <CrosswordGrid
               puzzle={p}
               showSolution={showSolution}
-              cellSize={gp ? (multiSolutionFramePx ? 8 : genericCellSize) : 16}
-              frameSize={
-                puzzleType === 'maze' && multiSolutionFramePx
-                  ? multiSolutionFramePx
-                  : undefined
-              }
-              wallColor={gp?.colors.gridColor ?? '#1f2937'}
-              solutionPathColor={gp?.colors.solutionPathColor ?? '#e11d48'}
-              solutionPathThickness={gp?.core.mazeSolutionPathThickness ?? 34}
-              solutionPathStyle={gp?.core.mazeSolutionPathStyle ?? 'solid'}
-              wallThickness={gp?.core.mazeWallThickness ?? 45}
-              markerStyle={gp?.core.mazeMarkerStyle ?? 'arrow'}
-              startImage={gp?.core.mazeStartImage}
-              endImage={gp?.core.mazeEndImage}
-              shapeImageSrc={mazeShapeImageSrc}
-              showShapeImage={gp?.core.shapeMaskShowImage}
-              shapeImageFit={gp?.core.shapeMaskFit}
-              shapeImageOpacity={(gp?.core.shapeMaskImageOpacity ?? 35) / 100}
+              cellSize={opts?.cellSizeOverride ?? cellSize}
+              crosswordSettings={cw}
+              puzzleToCluesGapPx={puzzleToCluesGapPx}
+              hideClues={opts?.hideClues}
+              selectedTarget={canvasFormatTarget}
+              onSelectTarget={onFormatTargetChange ?? undefined}
             />
           </div>
         );
-      }
       case 'cryptogram':
-        return (
-          <CryptogramDisplay
+        // Same ResolvedElements as the PDF/PPTX exports (answer key, blanks, hints).
+        return gp ? (
+          <SelectableCryptogramView
             puzzle={p}
+            puzzles={solutionPuzzles.length > 0 ? solutionPuzzles : [p]}
+            settings={settings}
+            titleWords={titleWords}
             showSolution={showSolution}
-            cipherFormat={gp?.core.cryptogramFormat ?? 'lines'}
-            letterCase={gp?.core.letterCase ?? 'upper'}
-            showLetterHints={!showSolution && (gp?.core.showLetterHints ?? true)}
-            answerKeyLines={gp?.core.cryptogramAnswerKeyLines ?? 2}
-            solutionOnlyAnswers={gp?.core.cryptogramSolutionOnlyAnswers ?? false}
-            fontSize={ptToPx(
-              (showSolution
-                ? gp?.typography.answerFontSize
-                : gp?.typography.puzzleFontSize) ?? 14
-            ) * (scaleFactor * multiShrink)}
-            fontFamily={
-              showSolution
-                ? (gp?.typography.answerFontFamily ?? gp?.typography.puzzleFontFamily ?? 'Arial')
-                : (gp?.typography.puzzleFontFamily ?? 'Arial')
-            }
-            answerFontSize={
-              ptToPx(gp?.typography.answerFontSize ?? 16) * (scaleFactor * multiShrink)
-            }
-            answerFontFamily={gp?.typography.answerFontFamily ?? 'Arial'}
-            answerKeyFontSizePx={ptToPx(18) * (scaleFactor * multiShrink)}
-            answerKeyFontFamily={gp?.typography.answerKeyFontFamily ?? 'Arial'}
-            answerKeyGapPx={ptToPx(
-              (gp?.typography.spaceBetweenAnswerKeyAndPuzzle ?? 0.25) * 72
-            )}
-            puzzleLineGapPx={ptToPx(gp?.typography.spaceBetweenPuzzleLines ?? 10)}
-            textColor={gp?.colors.gridColor ?? '#1f2937'}
-            maxWidthPx={contentWidthPx}
+            gp={gp}
+            puzzleIndex={puzzleIndex}
+            selectedTarget={canvasFormatTarget}
+            onSelectTarget={onFormatTargetChange ?? undefined}
           />
+        ) : null;
+      case 'word-scramble': {
+        if (!gp) return null;
+        const scrambleFontPt = Math.max(
+          5.25,
+          cssPxToPoints(
+            scrambleFit?.fontSize ??
+              ptToPx(
+                (showSolution ? gp.typography.answerFontSize : gp.typography.puzzleFontSize) ?? 14
+              ) *
+                (scaleFactor || 1)
+          )
         );
-      case 'word-scramble':
+        const scrambleWordGapPt = Math.max(
+          0,
+          cssPxToPoints(
+            scrambleFit?.spaceBetweenWordsPx ??
+              ptToPx(gp.typography.scrambleSpaceBetweenWords ?? 8)
+          )
+        );
+        const scrambleLetterEm =
+          scrambleFit?.spaceBetweenLettersEm ??
+          gp.typography.scrambleSpaceBetweenLetters ??
+          0.12;
+        const scrambleWidthPt = cssPxToPoints(scrambleFit?.maxWidthPx ?? contentWidthPx);
+        const scrambleHeightPt = cssPxToPoints(
+          Math.max(80, contentHeightPx * (multiSolution ? 0.92 : 1))
+        );
+        const scrambleElements = buildScrambleElements({
+          puzzle: p as import('@/lib/puzzles/types').WordScramblePuzzle,
+          slot: {
+            leftPt: 0,
+            topPt: 0,
+            widthPt: scrambleWidthPt,
+            heightPt: scrambleHeightPt,
+          },
+          gp,
+          showSolution,
+          fontSizePt: scrambleFontPt,
+          wordGapPt: scrambleWordGapPt,
+          letterEm: scrambleLetterEm,
+        });
         return (
-          <WordScrambleDisplay
-            puzzle={p}
-            showSolution={showSolution}
-            letterCase={gp?.core.letterCase ?? 'upper'}
-            afterScrambled={gp?.core.afterScrambled ?? 'equal'}
-            answerBlankStyle={gp?.core.answerBlankStyle ?? 'underline'}
-            includeWordBank={!showSolution && (gp?.core.includeWordBank ?? false)}
-            wordBankTitle={gp?.core.wordBankTitle ?? 'Word Bank'}
-            fontSize={
-              scrambleFit?.fontSize ??
-              Math.max(
-                10,
-                ptToPx(
-                  (showSolution
-                    ? gp?.typography.answerFontSize
-                    : gp?.typography.puzzleFontSize) ?? 14
-                ) * (scaleFactor || 1)
-              )
-            }
-            fontFamily={
-              showSolution
-                ? (gp?.typography.answerFontFamily ?? gp?.typography.puzzleFontFamily ?? 'Arial')
-                : (gp?.typography.puzzleFontFamily ?? 'Arial')
-            }
-            textColor={gp?.colors.gridColor ?? '#1f2937'}
-            maxWidthPx={scrambleFit?.maxWidthPx ?? contentWidthPx}
-            spaceBetweenWordsPx={
-              scrambleFit?.spaceBetweenWordsPx ??
-              ptToPx(gp?.typography.scrambleSpaceBetweenWords ?? 8)
-            }
-            spaceBetweenLettersEm={
-              scrambleFit?.spaceBetweenLettersEm ??
-              gp?.typography.scrambleSpaceBetweenLetters ??
-              0.12
-            }
-            keepRowsOnOneLine={scrambleFit?.keepRowsOnOneLine ?? false}
-          />
+          <CanvasSelectable
+            target="grid"
+            label="Puzzle"
+            active={canvasFormatTarget === 'grid'}
+            onSelect={onFormatTargetChange ?? undefined}
+            scalePercent={onGridScaleChange ? gridScalePercent : undefined}
+            onScaleChange={onGridScaleChange}
+            scaleMin={30}
+            scaleMax={250}
+            style={cssTextEffect(gp.typography.puzzleTextEffect, gp.colors.gridColor ?? '#1f2937')}
+          >
+            <div
+              style={{
+                width: scrambleWidthPt * PT_TO_CSS_PX,
+                height: scrambleHeightPt * PT_TO_CSS_PX,
+                maxWidth: '100%',
+              }}
+            >
+              <ResolvedElementsView
+                elements={scrambleElements}
+                widthPt={scrambleWidthPt}
+                heightPt={scrambleHeightPt}
+              />
+            </div>
+          </CanvasSelectable>
         );
+      }
       case 'trivia': {
         const triviaGames =
           showSolution && solutionPuzzles.length > 0
@@ -3230,6 +3726,7 @@ export function GenericPuzzlePageCanvas({
             }))
           : undefined;
         return (
+          <div style={cssTextEffect(gp?.typography.puzzleTextEffect, gp?.colors.gridColor ?? '#1f2937')}>
           <TriviaDisplay
             puzzle={p}
             showSolution={showSolution}
@@ -3243,8 +3740,7 @@ export function GenericPuzzlePageCanvas({
                   (showSolution
                     ? gp?.typography.answerFontSize
                     : gp?.typography.puzzleFontSize) ?? 14
-                ) *
-                  (scaleFactor || 1)
+                ) * (scaleFactor || 1)
               )
             }
             fontFamily={
@@ -3254,8 +3750,20 @@ export function GenericPuzzlePageCanvas({
                     'Arial')
                 : (gp?.typography.puzzleFontFamily ?? 'Arial')
             }
+            suggestionFontFamily={gp?.typography.suggestionFontFamily}
+            suggestionItalic={gp?.typography.suggestionItalic === true}
+            suggestionFontSize={
+              gp?.typography.suggestionFontSize
+                ? Math.max(
+                    10,
+                    ptToPx(gp.typography.suggestionFontSize) * (scaleFactor || 1)
+                  )
+                : undefined
+            }
             textColor={gp?.colors.gridColor ?? '#1f2937'}
             maxWidthPx={contentWidthPx}
+            selectedTarget={canvasFormatTarget}
+            onSelectTarget={onFormatTargetChange ?? undefined}
             questionGapPx={ptToPx(
               showSolution
                 ? (gp?.typography.triviaSolutionSpaceBetween ?? 12)
@@ -3268,12 +3776,39 @@ export function GenericPuzzlePageCanvas({
             solutionSections={solutionSections}
             puzzlesStartingNumber={startNum}
           />
+          </div>
         );
       }
       case 'word-match':
-        return <WordMatchDisplay puzzle={p} showSolution={showSolution} />;
+        return (
+          <CanvasSelectable
+            target="grid"
+            label="Puzzle"
+            active={canvasFormatTarget === 'grid'}
+            onSelect={onFormatTargetChange ?? undefined}
+            scalePercent={onGridScaleChange ? gridScalePercent : undefined}
+            onScaleChange={onGridScaleChange}
+            scaleMin={30}
+            scaleMax={250}
+          >
+            <WordMatchDisplay puzzle={p} showSolution={showSolution} />
+          </CanvasSelectable>
+        );
       case 'dot-to-dot':
-        return <DotToDotDisplay puzzle={p} showSolution={showSolution} />;
+        return (
+          <CanvasSelectable
+            target="grid"
+            label="Puzzle"
+            active={canvasFormatTarget === 'grid'}
+            onSelect={onFormatTargetChange ?? undefined}
+            scalePercent={onGridScaleChange ? gridScalePercent : undefined}
+            onScaleChange={onGridScaleChange}
+            scaleMin={30}
+            scaleMax={250}
+          >
+            <DotToDotDisplay puzzle={p} showSolution={showSolution} />
+          </CanvasSelectable>
+        );
       default:
         return <div className="text-gray-400">Preview not supported for {puzzleType}</div>;
     }
@@ -3345,7 +3880,25 @@ export function GenericPuzzlePageCanvas({
         : puzzleTitle
     : puzzleTitle;
 
-  const subtitleText = cw && !showSolution ? resolveCrosswordSubtitle(cw.typography, puzzleIndex, settings.typography) : null;
+  const triviaFunFactsRaw =
+    gp?.typography.includeFunFacts && gp.typography.funFactsText
+      ? gp.typography.funFactsText
+      : gp?.typography.includeFunFacts && settings.typography?.funFactsText
+        ? settings.typography.funFactsText
+        : settings.typography?.includeFunFacts && settings.typography?.funFactsText
+          ? settings.typography.funFactsText
+          : '';
+  const triviaFunFacts = triviaFunFactsRaw
+    ? triviaFunFactsRaw
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+    : [];
+  const subtitleText = cw && !showSolution
+    ? resolveCrosswordSubtitle(cw.typography, puzzleIndex, settings.typography)
+    : puzzleType === 'trivia' && !showSolution
+      ? triviaFunFacts[puzzleIndex] ?? null
+      : null;
 
   // Crossword / generic solutions use Layout → Answer Page title styling (same as
   // Word Search solution titles) — never Header Assembly colors (often white).
@@ -3353,6 +3906,7 @@ export function GenericPuzzlePageCanvas({
   const isGpSolution = !!gp && showSolution;
   const isSolutionPage = isCwSolution || isGpSolution;
   const rawSolutionTitleColor =
+    (gp ? gp.colors.answerTitleColor : undefined) ||
     colors.answerPage.titleColor ||
     gp?.colors.titleColor ||
     cw?.colors.titleColor ||
@@ -3368,6 +3922,14 @@ export function GenericPuzzlePageCanvas({
       ? '#1f2937'
       : rawSolutionTitleColor
     : cw?.colors.titleColor ?? gp?.colors.titleColor ?? colors.puzzlePage.titleColor ?? '#333333';
+  const titleTextEffect =
+    cw?.typography.titleTextEffect ?? gp?.typography.titleTextEffect ?? settings.typography.titleTextEffect;
+  const titleItalic =
+    !!(cw?.typography.puzzleTitleItalic ?? gp?.typography.puzzleTitleItalic ?? settings.typography.puzzleTitleItalic);
+  const titleBold =
+    cw != null ? true : gp?.typography.puzzleTitleBold !== false;
+  const subtitleTextEffect =
+    cw?.typography.subtitleTextEffect ?? settings.typography.subtitleTextEffect;
   const subtitleColor =
     colors.puzzlePage.subtitleColor ||
     cw?.colors.subtitleColor ||
@@ -3405,8 +3967,10 @@ export function GenericPuzzlePageCanvas({
     cw?.typography.subtitleMaxWidthPercent ??
     100;
   const titleFont = isSolutionPage
-    ? colors.answerPage.answerTitleFontFamily ||
-      gp?.typography.puzzleTitleFontFamily ||
+    ? (gp
+        ? gp.typography.answerTitleFontFamily || gp.typography.puzzleTitleFontFamily
+        : null) ||
+      colors.answerPage.answerTitleFontFamily ||
       cw?.typography.puzzleTitleFontFamily ||
       typography.puzzleTitleFontFamily ||
       'Arial'
@@ -3414,7 +3978,7 @@ export function GenericPuzzlePageCanvas({
       gp?.typography.puzzleTitleFontFamily ??
       typography.puzzleTitleFontFamily ??
       'Roboto';
-  const titleSize = isCwSolution
+  const baseTitleSize = isCwSolution
     ? Math.max(
         10,
         colors.answerPage.answerTitleFontSize ||
@@ -3427,6 +3991,15 @@ export function GenericPuzzlePageCanvas({
           gp?.typography.puzzleTitleFontSize ??
           typography.puzzleTitleFontSize ??
           24);
+  const titleSize =
+    (cw || gp) && titleText && !multiSolution && !isTriviaSolution
+      ? resolveFittedHeaderTitleFontSizePt(
+          titleText,
+          baseTitleSize,
+          Math.max(80, pageWidthPt - contentInsetPt * 2 - 24),
+          titleFont
+        )
+      : baseTitleSize;
   const pageBg = resolveGenericPageSurfaceColors(
     settings,
     showSolution,
@@ -3456,21 +4029,16 @@ export function GenericPuzzlePageCanvas({
       ? ptToPx(subtitleToPuzzleGapPt)
       : undefined;
 
-  // Match Word Search: no persistent blue “active” overlay — hover outline only.
-  const showCrosswordHits =
-    puzzleType === 'crossword' &&
-    canvasEditEnabled &&
-    !!onCrosswordEditTargetChange;
-  const showGenericHits =
-    puzzleType !== 'crossword' &&
-    canvasEditEnabled &&
-    !!onGenericPuzzleEditTargetChange;
-
   const titleAlign: 'left' | 'center' | 'right' = isSolutionPage
-    ? colors.answerPage.answerTitleAlignment || 'center'
+    ? (gp?.typography.answerTitleAlign === 'left' ||
+      gp?.typography.answerTitleAlign === 'right'
+        ? gp.typography.answerTitleAlign
+        : colors.answerPage.answerTitleAlignment || 'center')
     : gp?.typography.puzzleTitleAlign === 'left'
       ? 'left'
-      : 'center';
+      : gp?.typography.puzzleTitleAlign === 'right'
+        ? 'right'
+        : 'center';
 
   // Full-page header only for single-puzzle pages; multi-per-page uses
   // Header Assembly on each puzzle title block instead.
@@ -3580,7 +4148,16 @@ export function GenericPuzzlePageCanvas({
     puzzleType === 'trivia';
 
   // Maze / sudoku: always centre grids horizontally (1-up and multi-up).
-  const isSudokuOrMaze = puzzleType === 'sudoku' || puzzleType === 'maze';
+  const isSudokuOrMaze =
+    puzzleType === 'sudoku' ||
+    puzzleType === 'maze' ||
+    puzzleType === 'codewords' ||
+    puzzleType === 'binairo' ||
+    puzzleType === 'kakuro' ||
+    puzzleType === 'math-maze' ||
+    puzzleType === 'word-fill' ||
+    puzzleType === 'number-fill' ||
+    puzzleType === 'snake';
   // Maze / sudoku 1-up: title→grid gap packs under the title (0 = flush).
   const centerSingleGrid = !multiSolution && isSudokuOrMaze;
   const contentAreaHeightPx = Math.max(0, heightPx - contentTopPx - marginPx);
@@ -3617,6 +4194,17 @@ export function GenericPuzzlePageCanvas({
   const crosswordGridHeightPx = crosswordPuzzlePage ? crosswordGridRows * crosswordCellPx : 0;
 
   return (
+    <CanvasNativePositionProvider
+      offsets={
+        (cw?.typography.canvasLayoutOffsets ??
+          gp?.typography.canvasLayoutOffsets ??
+          {}) as CanvasLayoutOffsets
+      }
+      pageHeightPt={pageHeightPt}
+      marginPt={contentInsetPt}
+      ptToCssPx={ptToPx}
+      onOffsetsChange={(next) => onCanvasLayoutOffsetsChange?.(next)}
+    >
     <div
       className="relative shadow-2xl border border-gray-300 select-none transition-shadow duration-300 hover:shadow-3xl"
       style={{
@@ -3672,8 +4260,8 @@ export function GenericPuzzlePageCanvas({
             left: ptToPx(headerAssembly.leftPt),
             width: ptToPx(headerAssembly.widthPt),
             maxWidth: ptToPx(headerAssembly.widthPt),
-            overflow: 'hidden',
-            zIndex: 2,
+            overflow: 'visible',
+            zIndex: 28,
           }}
         >
           <HeaderAssemblyBar
@@ -3689,6 +4277,14 @@ export function GenericPuzzlePageCanvas({
             subtitleFontFamily={headerAssembly.subtitleFontFamily}
             subtitleTextWidthPt={headerAssembly.subtitleTextWidthPt}
             ptToPx={ptToPx}
+            selectedTarget={canvasFormatTarget}
+            onSelectTarget={onFormatTargetChange ?? undefined}
+            onTitleTextChange={
+              onNativeTextChange ? (text) => onNativeTextChange('title', text) : undefined
+            }
+            onSubtitleTextChange={
+              onNativeTextChange ? (text) => onNativeTextChange('subtitle', text) : undefined
+            }
           />
         </div>
       ) : null}
@@ -3721,22 +4317,49 @@ export function GenericPuzzlePageCanvas({
             style={{ maxHeight: '100%' }}
           >
             {!headerAssembly && titleText ? (
-              <h2
-                className="font-bold relative w-full shrink-0"
+              <CanvasSelectable
+                target="title"
+                label="Title"
+                active={canvasFormatTarget === 'title'}
+                onSelect={onFormatTargetChange ?? undefined}
+                editable={!!onNativeTextChange}
+                value={titleText}
+                onTextChange={
+                  onNativeTextChange ? (text) => onNativeTextChange('title', text) : undefined
+                }
+                positionMetrics={{
+                  topPt: contentInsetPt,
+                  leftPt: contentInsetPt,
+                  widthPt: pageWidthPt - contentInsetPt * 2,
+                  heightPt: titleSize * 1.2,
+                }}
+                className="relative w-full shrink-0"
                 style={{
                   fontSize: ptToPx(titleSize),
                   color: titleColor,
                   fontFamily: titleFont,
+                  fontWeight: titleBold ? 700 : 400,
+                  fontStyle: titleItalic ? 'italic' : undefined,
                   marginBottom: titleGapPx ?? 0,
                   textAlign: titleAlign,
                   lineHeight: 1.2,
+                  ...cssTextEffect(titleTextEffect, titleColor),
                 }}
               >
                 {titleText}
-              </h2>
+              </CanvasSelectable>
             ) : null}
             {!headerAssembly && subtitleText ? (
-              <p
+              <CanvasSelectable
+                target="subtitle"
+                label="Subtitle"
+                active={canvasFormatTarget === 'subtitle'}
+                onSelect={onFormatTargetChange ?? undefined}
+                editable={!!onNativeTextChange}
+                value={subtitleText}
+                onTextChange={
+                  onNativeTextChange ? (text) => onNativeTextChange('subtitle', text) : undefined
+                }
                 className="text-center shrink-0"
                 style={{
                   fontSize: ptToPx(subtitleFontSizePt),
@@ -3749,10 +4372,11 @@ export function GenericPuzzlePageCanvas({
                   maxWidth: `${subtitleMaxWidthPercent}%`,
                   lineHeight: 1.25,
                   whiteSpace: 'pre-wrap',
+                  ...cssTextEffect(subtitleTextEffect, subtitleColor),
                 }}
               >
                 {subtitleText}
-              </p>
+              </CanvasSelectable>
             ) : null}
             <div
               className="w-full min-w-0 overflow-hidden"
@@ -3773,8 +4397,17 @@ export function GenericPuzzlePageCanvas({
         ) : (
           <>
         {!headerAssembly && titleText ? (
-        <h2
-            className="font-bold relative w-full"
+        <CanvasSelectable
+            target="title"
+            label="Title"
+            active={canvasFormatTarget === 'title'}
+            onSelect={onFormatTargetChange ?? undefined}
+            editable={!!onNativeTextChange}
+            value={titleText}
+            onTextChange={
+              onNativeTextChange ? (text) => onNativeTextChange('title', text) : undefined
+            }
+            className="relative w-full"
           style={{
               flexShrink: 0,
               minHeight: ptToPx(titleSize) * 1.2,
@@ -3783,15 +4416,26 @@ export function GenericPuzzlePageCanvas({
               fontFamily: titleFont,
               marginBottom: titleGapPx ?? undefined,
               textAlign: titleAlign,
-              fontWeight: 700,
-              zIndex: 2,
+              fontWeight: titleBold ? 700 : 400,
+              fontStyle: titleItalic ? 'italic' : undefined,
+              zIndex: 28,
+              ...cssTextEffect(titleTextEffect, titleColor),
           }}
         >
           {titleText}
-        </h2>
+        </CanvasSelectable>
         ) : null}
         {!headerAssembly && subtitleText ? (
-          <p
+          <CanvasSelectable
+            target="subtitle"
+            label="Subtitle"
+            active={canvasFormatTarget === 'subtitle'}
+            onSelect={onFormatTargetChange ?? undefined}
+            editable={!!onNativeTextChange}
+            value={subtitleText}
+            onTextChange={
+              onNativeTextChange ? (text) => onNativeTextChange('subtitle', text) : undefined
+            }
             className="text-center shrink-0"
             style={{
               fontSize: ptToPx(subtitleFontSizePt),
@@ -3804,15 +4448,16 @@ export function GenericPuzzlePageCanvas({
               maxWidth: `${subtitleMaxWidthPercent}%`,
               lineHeight: 1.25,
               whiteSpace: 'pre-wrap',
+              ...cssTextEffect(subtitleTextEffect, subtitleColor),
             }}
           >
             {subtitleText}
-          </p>
+          </CanvasSelectable>
         ) : null}
 
         {multiSolution ? (
           <div
-            className="flex-1 w-full max-h-full overflow-hidden"
+            className="flex-1 w-full max-h-full overflow-hidden relative"
             style={{
               display: 'grid',
               gridTemplateColumns: `repeat(${solutionLayout.columns}, minmax(0, 1fr))`,
@@ -3824,9 +4469,36 @@ export function GenericPuzzlePageCanvas({
               ),
               alignItems: isTextPuzzle ? 'stretch' : 'center',
               justifyItems: isTextPuzzle ? 'stretch' : 'center',
+              justifyContent: 'center',
               boxSizing: 'border-box',
             }}
           >
+            {onSolutionGapChange && solutionLayout.columns > 1
+              ? Array.from({ length: solutionLayout.columns - 1 }).map((_, gi) => (
+                  <SolutionGapDragHandle
+                    key={`hgap-${gi}`}
+                    orientation="horizontal"
+                    gapPx={solutionGapPx}
+                    onGapChange={onSolutionGapChange}
+                    style={{
+                      left: `${((gi + 1) / solutionLayout.columns) * 100}%`,
+                    }}
+                  />
+                ))
+              : null}
+            {onSolutionGapChange && solutionLayout.rows > 1
+              ? Array.from({ length: solutionLayout.rows - 1 }).map((_, gi) => (
+                  <SolutionGapDragHandle
+                    key={`vgap-${gi}`}
+                    orientation="vertical"
+                    gapPx={solutionGapPx}
+                    onGapChange={onSolutionGapChange}
+                    style={{
+                      top: `${((gi + 1) / solutionLayout.rows) * 100}%`,
+                    }}
+                  />
+                ))
+              : null}
             {solutionPuzzles.map((sp, i) => {
               const idx = sp.puzzleIndexInDocument ?? puzzleIndex + i;
               const blockTitle = resolveTitleForIndex(idx, showSolution);
@@ -3921,6 +4593,13 @@ export function GenericPuzzlePageCanvas({
                         subtitleFontFamily={titleFont}
                         subtitleTextWidthPt={multiHeaderWidthPt}
                         ptToPx={ptToPx}
+                        selectedTarget={canvasFormatTarget}
+                        onSelectTarget={onFormatTargetChange ?? undefined}
+                        onTitleTextChange={
+                          onNativeTextChange
+                            ? (text) => onNativeTextChange('title', text)
+                            : undefined
+                        }
                       />
                     </div>
                   ) : blockTitle ? (
@@ -3935,8 +4614,10 @@ export function GenericPuzzlePageCanvas({
                         lineHeight: 1.2,
                         textAlign: titleAlign,
                         fontWeight: 700,
+                        fontStyle: titleItalic ? 'italic' : undefined,
                         position: 'relative',
                         zIndex: 2,
+                        ...cssTextEffect(titleTextEffect, titleColor),
                       }}
                     >
                       {blockTitle}
@@ -3960,30 +4641,6 @@ export function GenericPuzzlePageCanvas({
     </div>
   );
             })}
-          </div>
-        ) : puzzleType === 'crossword' && !showSolution && puzzle ? (
-          <div
-            className="flex flex-col w-full min-w-0 min-h-0 flex-1 overflow-hidden pt-1"
-            style={{ width: '100%', alignSelf: 'stretch' }}
-          >
-            <div
-              className="shrink-0 w-full flex justify-center overflow-hidden"
-              style={{ height: crosswordGridHeightPx }}
-            >
-              {renderSingleGrid(puzzle, { hideClues: true, cellSizeOverride: crosswordCellPx })}
-            </div>
-            <div
-              className="w-full min-w-0 min-h-0 flex-1 overflow-hidden"
-              style={{
-                marginTop: puzzleToCluesGapPx ?? 0,
-              }}
-            >
-              <CrosswordClueLists
-                puzzle={puzzle}
-                crosswordSettings={cw}
-                fillHeight
-              />
-            </div>
           </div>
         ) : (
           <div
@@ -4016,110 +4673,33 @@ export function GenericPuzzlePageCanvas({
         )}
       </div>
 
-      {showCrosswordHits ? (
-        <>
-          <CanvasHitZone
-            active={false}
-            hideGuides={canvasEditHideGuides}
-            label="Background"
-            onSelect={() => onCrosswordEditTargetChange?.('page-frame')}
-            style={{ position: 'absolute', inset: 0, zIndex: 15 }}
-          />
-          <CanvasHitZone
-            active={false}
-            hideGuides={canvasEditHideGuides}
-            label={showSolution ? 'Solutions' : 'Title'}
-            onSelect={() =>
-              onCrosswordEditTargetChange?.(showSolution ? 'solutions' : 'title')
-            }
-            style={{
-              position: 'absolute',
-              top: titleStartAtPx,
-              left: marginPx,
-              right: marginPx,
-              height: ptToPx(titleSize) + 16,
-              zIndex: 25,
-            }}
-          />
-          <CanvasHitZone
-            active={false}
-            hideGuides={canvasEditHideGuides}
-            label={showSolution ? 'Solution Grid' : 'Grid'}
-            onSelect={() =>
-              onCrosswordEditTargetChange?.(showSolution ? 'solutions' : 'numbering')
-            }
-            style={{
-              position: 'absolute',
-              top: titleStartAtPx + ptToPx(titleSize) + (titleGapPx ?? 12) + 24,
-              left: marginPx,
-              right: marginPx,
-              height: crosswordPuzzlePage
-                ? crosswordGridHeightPx
-                : undefined,
-              bottom: crosswordPuzzlePage
-                ? undefined
-                : showSolution
-                  ? marginPx
-                  : heightPx * 0.42,
-              zIndex: 25,
-            }}
-          />
-          {!showSolution ? (
-            <CanvasHitZone
-              active={false}
-              hideGuides={canvasEditHideGuides}
-              label="Clues"
-              onSelect={() => onCrosswordEditTargetChange?.('clues')}
-              style={{
-                position: 'absolute',
-                left: marginPx,
-                right: marginPx,
-                top: crosswordPuzzlePage
-                  ? titleStartAtPx +
-                    ptToPx(titleSize) +
-                    (titleGapPx ?? 12) +
-                    24 +
-                    crosswordGridHeightPx +
-                    (puzzleToCluesGapPx ?? 0)
-                  : undefined,
-                bottom:
-                  crosswordPageNumberZoneTopPx != null
-                    ? Math.max(0, heightPx - crosswordPageNumberZoneTopPx)
-                    : marginPx,
-                height: crosswordPuzzlePage ? undefined : heightPx * 0.38,
-                zIndex: 25,
-              }}
-            />
-          ) : null}
-        </>
+      {onFormatTargetChange ? (
+        <div
+          className="absolute inset-0 z-[12]"
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            onFormatTargetChange(null);
+            pageVariableEditor?.onSelect(null);
+          }}
+        />
       ) : null}
 
-      {showGenericHits ? (
-        <>
-          <CanvasHitZone
-            active={false}
-            hideGuides={canvasEditHideGuides}
-            label="Background"
-            onSelect={() => onGenericPuzzleEditTargetChange?.('page-frame')}
-            style={{ position: 'absolute', inset: 0, zIndex: 15 }}
-          />
-          <CanvasHitZone
-            active={false}
-            hideGuides={canvasEditHideGuides}
-            label="Title"
-            onSelect={() => onGenericPuzzleEditTargetChange?.('title')}
-            style={{
-              position: 'absolute',
-              top: headerAssembly ? ptToPx(headerAssembly.topPt) : titleStartAtPx,
-              left: marginPx,
-              right: marginPx,
-              height: headerAssembly
-                ? ptToPx(headerAssembly.heightPt)
-                : ptToPx(titleSize) + 16,
-              zIndex: 25,
-            }}
-          />
-        </>
+      {canvasEditEnabled && puzzleType === 'crossword' ? (
+        <CanvasHitZone
+          active={false}
+          hideGuides={canvasEditHideGuides}
+          label="Background"
+          onSelect={() => onCrosswordEditTargetChange?.('page-frame')}
+          style={{ position: 'absolute', inset: 0, zIndex: 15 }}
+        />
+      ) : canvasEditEnabled && puzzleType !== 'crossword' ? (
+        <CanvasHitZone
+          active={false}
+          hideGuides={canvasEditHideGuides}
+          label="Background"
+          onSelect={() => onGenericPuzzleEditTargetChange?.('page-frame')}
+          style={{ position: 'absolute', inset: 0, zIndex: 15 }}
+        />
       ) : null}
 
       {typeof bookPageIndex === 'number' && !hidePageNumber ? (
@@ -4129,9 +4709,58 @@ export function GenericPuzzlePageCanvas({
           pageWidthPt={pageWidthPt}
           pageHeightPt={pageHeightPt}
           ptToPx={ptToPx}
+          selected={canvasFormatTarget === 'page-number'}
+          onSelect={onFormatTargetChange ?? undefined}
+        />
+      ) : null}
+
+      {pageVariableEditor ? (
+        <PageVariableOverlay
+          editor={pageVariableEditor}
+          context={{
+            contentIndex: pageVariableContentIndex(
+              puzzleIndex,
+              genericSettings?.core.puzzlesPerPage ?? 1
+            ),
+            bookPageNumber: (bookPageIndex ?? 0) + 1,
+            puzzleNumber:
+              (genericSettings?.core.puzzlesStartingNumber ??
+                crosswordSettings?.core.puzzlesStartingNumber ??
+                1) + puzzleIndex,
+            pageWidthPt,
+            pageHeightPt,
+            ptToPx,
+            resolveContext: {
+              contentIndex: pageVariableContentIndex(
+                puzzleIndex,
+                genericSettings?.core.puzzlesPerPage ?? 1
+              ),
+              funFactsByIndex: (
+                genericSettings?.typography.funFactsText ||
+                crosswordSettings?.typography.funFactsText ||
+                ''
+              )
+                .split(/\r?\n/)
+                .map((line) => line.normalize('NFC')),
+              titlesByIndex: (
+                genericSettings?.typography.differentTitles ||
+                crosswordSettings?.typography.differentTitles ||
+                genericSettings?.typography.titleText ||
+                ''
+              )
+                .split(/\r?\n/)
+                .map((line) => line.normalize('NFC')),
+              puzzleNumber:
+                (genericSettings?.core.puzzlesStartingNumber ??
+                  crosswordSettings?.core.puzzlesStartingNumber ??
+                  1) + puzzleIndex,
+              pageNumber: (bookPageIndex ?? 0) + 1,
+            },
+          }}
         />
       ) : null}
     </div>
+    </CanvasNativePositionProvider>
   );
 }
 
@@ -4192,6 +4821,7 @@ export function PreviewCanvas() {
     setPageGenericOverrides,
     titleToAnswerGap,
     solutionToSolutionGap,
+    setSolutionToSolutionGap,
     pageMargin,
     validationError,
     clearValidationError,
@@ -4267,6 +4897,16 @@ export function PreviewCanvas() {
   const pendingCanvasEditTabCloseIdRef = useRef<string | null>(null);
   const initializedTitlePageDocIdRef = useRef<string | null>(null);
   const applyToAllPendingLeaveRef = useRef(false);
+  const [selectedVariableId, setSelectedVariableId] = useState<string | null>(null);
+  const [placingVariableKind, setPlacingVariableKind] = useState<PageVariableKind | null>(null);
+  const [placingShapeType, setPlacingShapeType] = useState<CanvasShapeType | null>(null);
+  const [placingScope, setPlacingScope] = useState<PageVariableScope>('document');
+  const [shapeTextActiveId, setShapeTextActiveId] = useState<string | null>(null);
+  const [nativeFormatTarget, setNativeFormatTarget] = useState<CanvasFormatTarget | null>(null);
+  const [frontMatterTarget, setFrontMatterTarget] = useState<FrontMatterFormatTarget | null>(null);
+  const aiCopilotUi = useOptionalAiCopilotUi();
+  const [textVariableDialogId, setTextVariableDialogId] = useState<string | null>(null);
+  const [imageVariableDialogId, setImageVariableDialogId] = useState<string | null>(null);
 
   const isFlipbookPreview = previewRangeMode === 'flipbook';
   const isAllPagesPreview = previewRangeMode === 'all';
@@ -4330,6 +4970,223 @@ export function PreviewCanvas() {
     () => documentPages.find((page) => page.id === activeDocumentPageId) ?? documentPages[0],
     [documentPages, activeDocumentPageId]
   );
+  const activePageVariables = useMemo(
+    () =>
+      activeDocumentPage &&
+      (isPuzzleModuleSettings(activeDocumentPage.settings) ||
+        isTextModuleSettings(activeDocumentPage.settings))
+        ? normalizePageVariables(activeDocumentPage.settings.pageVariables)
+        : [],
+    [activeDocumentPage]
+  );
+  const selectedPageVariable =
+    activePageVariables.find((field) => field.id === selectedVariableId) ?? null;
+
+  const setAiSelectedElements = aiCopilotUi?.setSelectedElements;
+  useEffect(() => {
+    if (!setAiSelectedElements) return;
+    setAiSelectedElements(
+      selectedPageVariablesAsAgentElements(
+        activePageVariables,
+        selectedVariableId ? [selectedVariableId] : []
+      )
+    );
+  }, [setAiSelectedElements, activePageVariables, selectedVariableId]);
+
+  const commitPageVariables = useCallback(
+    (next: PageVariableField[]) => {
+      if (
+        !activeDocumentPage ||
+        !(
+          isPuzzleModuleSettings(activeDocumentPage.settings) ||
+          isTextModuleSettings(activeDocumentPage.settings)
+        )
+      )
+        return;
+      updateDocumentPage(activeDocumentPage.id, {
+        settings: {
+          ...activeDocumentPage.settings,
+          pageVariables: next,
+        },
+      });
+    },
+    [activeDocumentPage, updateDocumentPage]
+  );
+
+  const patchPageVariable = useCallback(
+    (id: string, patch: Partial<PageVariableField>) => {
+      commitPageVariables(
+        activePageVariables.map((field) =>
+          field.id === id
+            ? {
+                ...field,
+                ...patch,
+                xPercent: patch.xPercent ?? field.xPercent,
+                yPercent: patch.yPercent ?? field.yPercent,
+                widthPercent: patch.widthPercent ?? field.widthPercent,
+                heightPercent: patch.heightPercent ?? field.heightPercent,
+                rotationDeg: patch.rotationDeg ?? field.rotationDeg,
+              }
+            : field
+        )
+      );
+    },
+    [activePageVariables, commitPageVariables]
+  );
+
+  const openVariableContentDialog = useCallback(
+    (id: string) => {
+      const field = activePageVariables.find((item) => item.id === id);
+      if (!field) return;
+      if (isImagePageVariable(field.kind)) {
+        setImageVariableDialogId(id);
+        return;
+      }
+      if (isShapePageVariable(field.kind)) {
+        setShapeTextActiveId(id);
+        if (!isSinglePageVariable(field)) setTextVariableDialogId(id);
+        return;
+      }
+      if (isTextPageVariable(field.kind)) setTextVariableDialogId(id);
+    },
+    [activePageVariables]
+  );
+
+  const attachTextToShape = useCallback(
+    (shape: PageVariableField, scope: PageVariableScope, contentIndex: number) => {
+      const displayIndex = pageVariableDisplayIndex(
+        { scope },
+        contentIndex
+      );
+      const nextLines = setPageVariableTextAt(
+        { ...shape, scope, pageIndex: contentIndex },
+        displayIndex,
+        shape.textLines?.[displayIndex] ?? ''
+      );
+      patchPageVariable(shape.id, {
+        scope,
+        pageIndex: scope === 'single' ? contentIndex : shape.pageIndex,
+        textLines: nextLines,
+      });
+      setSelectedVariableId(shape.id);
+      setShapeTextActiveId(shape.id);
+      setPlacingVariableKind(null);
+      setPlacingShapeType(null);
+      setNativeFormatTarget(null);
+      setFrontMatterTarget(null);
+      if (scope === 'document') {
+        window.setTimeout(() => setTextVariableDialogId(shape.id), 50);
+      }
+    },
+    [patchPageVariable]
+  );
+
+  const pageVariableEditor = useMemo<PageVariableEditorState>(
+    () => ({
+      fields: activePageVariables,
+      selectedId: selectedVariableId,
+      placingKind: placingVariableKind,
+      placingScope,
+      shapeTextActiveId,
+      interactive:
+        !isLockedPreview &&
+        !!activeDocumentPage &&
+        (isPuzzleModuleType(activeDocumentPage.moduleType) ||
+          isTextModuleType(activeDocumentPage.moduleType)),
+      onSelect: (id) => {
+        setSelectedVariableId(id);
+        if (id) {
+          setNativeFormatTarget(null);
+          setFrontMatterTarget(null);
+          setPlacingVariableKind(null);
+          setPlacingShapeType(null);
+        }
+        setShapeTextActiveId((current) => (current && current === id ? current : null));
+      },
+      onMove: (id, xPercent, yPercent) => {
+        const field = activePageVariables.find((item) => item.id === id);
+        if (!field) return;
+        const moved = movePageVariable(field, xPercent, yPercent);
+        patchPageVariable(id, { xPercent: moved.xPercent, yPercent: moved.yPercent });
+      },
+      onResize: (id, box) => {
+        patchPageVariable(id, box);
+      },
+      onPlace: (xPercent, yPercent, contentIndex) => {
+        if (!placingVariableKind) return;
+        if (placingVariableKind === 'text') {
+          const hitShape = findPageVariableAtPercent(
+            activePageVariables,
+            xPercent,
+            yPercent,
+            contentIndex,
+            'shape'
+          );
+          if (hitShape) {
+            attachTextToShape(hitShape, placingScope, contentIndex);
+            return;
+          }
+        }
+        const field = createPageVariableField(placingVariableKind, xPercent, yPercent, {
+          shapeType: placingShapeType ?? undefined,
+          scope: placingVariableKind === 'shape' ? 'single' : placingScope,
+          pageIndex: contentIndex,
+          bold: placingVariableKind === 'text' && placingScope === 'single' ? false : undefined,
+          textLines:
+            placingVariableKind === 'text' && placingScope === 'single' ? [''] : undefined,
+        });
+        commitPageVariables([...activePageVariables, field]);
+        setSelectedVariableId(field.id);
+        setPlacingVariableKind(null);
+        setPlacingShapeType(null);
+        setNativeFormatTarget(null);
+        setShapeTextActiveId(null);
+        // Shapes: no text dialog and no default "Text". Single text: type on canvas.
+        const skipDialog =
+          field.kind === 'shape' || (field.kind === 'text' && field.scope === 'single');
+        window.setTimeout(() => {
+          if (skipDialog) return;
+          if (isTextPageVariable(field.kind)) setTextVariableDialogId(field.id);
+          if (field.kind === 'image') setImageVariableDialogId(field.id);
+        }, 50);
+      },
+      onEditContent: openVariableContentDialog,
+      onPatchField: (id, patch) => {
+        patchPageVariable(id, patch);
+      },
+      onDelete: (id) => {
+        commitPageVariables(activePageVariables.filter((item) => item.id !== id));
+        setSelectedVariableId((current) => (current === id ? null : current));
+        setShapeTextActiveId((current) => (current === id ? null : current));
+      },
+      onReorder: (id, delta) => {
+        const index = activePageVariables.findIndex((item) => item.id === id);
+        if (index < 0) return;
+        const nextIndex = index + delta;
+        if (nextIndex < 0 || nextIndex >= activePageVariables.length) return;
+        const reordered = [...activePageVariables];
+        const [moved] = reordered.splice(index, 1);
+        reordered.splice(nextIndex, 0, moved);
+        commitPageVariables(reordered);
+      },
+    }),
+    [
+      activeDocumentPage?.moduleType,
+      activePageVariables,
+      attachTextToShape,
+      commitPageVariables,
+      isLockedPreview,
+      openVariableContentDialog,
+      patchPageVariable,
+      placingScope,
+      placingShapeType,
+      placingVariableKind,
+      selectedVariableId,
+      shapeTextActiveId,
+    ]
+  );
+
+  const deferredCrosswordSettings = React.useDeferredValue(crosswordSettings);
 
   const documentPagesForBook = useMemo(() => {
     const isSampleMode = previewRangeMode === 'sample' && !previewShowBothPages;
@@ -4352,7 +5209,7 @@ export function PreviewCanvas() {
           settings: {
             ...(activeDocumentPage.settings as PuzzleModuleSettings),
             titleWords,
-            crosswordSettings,
+            crosswordSettings: deferredCrosswordSettings,
           },
         };
       } else if (isGenericPuzzleModuleType(activeDocumentPage.moduleType)) {
@@ -4396,7 +5253,7 @@ export function PreviewCanvas() {
           settings: {
             ...settings,
             titleWords,
-            crosswordSettings,
+            crosswordSettings: deferredCrosswordSettings,
           },
         };
       }
@@ -4436,7 +5293,7 @@ export function PreviewCanvas() {
     previewShowBothPages,
     titleWords,
     wordSearchSettings,
-    crosswordSettings,
+    deferredCrosswordSettings,
     genericPuzzleSettings,
     murdokuSettings,
     canvasEditSession?.draft,
@@ -4448,12 +5305,14 @@ export function PreviewCanvas() {
     [documentPagesForBook, wordSearchSettings]
   );
 
+  const deferredDocumentPagesForBook = React.useDeferredValue(documentPagesForBook);
+
   const compiledBook = useMemo(() => {
     if (documentPages.length === 0) return null;
     const isSampleMode = previewRangeMode === 'sample' && !previewShowBothPages;
-    const docsToCompile = isSampleMode && activeDocumentPage
-      ? [activeDocumentPage]
-      : documentPagesForBook;
+    if (isSampleMode) return null;
+    const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const docsToCompile = deferredDocumentPagesForBook;
     const puzzleMap = groupPuzzlesByDocument(batchPuzzles, docsToCompile);
     const crosswordMap = groupCrosswordPuzzlesByDocument(
       crosswordBatchPuzzles,
@@ -4467,7 +5326,7 @@ export function PreviewCanvas() {
       murdokuBatchPuzzles,
       docsToCompile
     );
-    return compileBook(docsToCompile, puzzleMap, {
+    const book = compileBook(docsToCompile, puzzleMap, {
       includeSolutions: true,
       pageNumberSettings: pageNumberSettingsForBook,
       crosswordPuzzlesByDocumentId: crosswordMap,
@@ -4478,12 +5337,20 @@ export function PreviewCanvas() {
       mixPuzzles: isSampleMode ? false : Boolean(bookSettings.mixPuzzles),
       chapterTopics: bookSettings.chapterTopics,
     });
+    if (typeof window !== 'undefined' && (window as { __GP_DIAG__?: { mark: Function } }).__GP_DIAG__) {
+      (window as { __GP_DIAG__: { mark: (a: string, b: number, c?: string) => void } }).__GP_DIAG__.mark(
+        'PreviewCanvas.compiledBook',
+        (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0,
+        `docs=${docsToCompile.length} pages=${book.pages.length}`
+      );
+    }
+    return book;
   }, [
     documentPages.length,
     documentPagesForBook,
+    deferredDocumentPagesForBook,
     previewRangeMode,
     previewShowBothPages,
-    activeDocumentPage,
     batchPuzzles,
     crosswordBatchPuzzles,
     genericBatchPuzzles,
@@ -4628,8 +5495,9 @@ export function PreviewCanvas() {
       }
       return entries.map((page) => page.puzzles);
     }
-    const answersPerPage =
-      (canvasEditSession?.draft ?? wordSearchSettings).bookCanvas.answersPerPage || 1;
+    const answersPerPage = normalizeAnswersPerPage(
+      (canvasEditSession?.draft ?? wordSearchSettings).bookCanvas.answersPerPage
+    );
     const pages: WordSearchPuzzle[][] = [];
     for (let i = 0; i < batchPuzzles.length; i += answersPerPage) {
       pages.push(batchPuzzles.slice(i, i + answersPerPage));
@@ -4738,7 +5606,7 @@ export function PreviewCanvas() {
       ? genericPuzzleSettings?.core?.solutionsPerPage || 1
       : activeDocIsMurdokuModule
         ? murdokuSettings?.bookCanvas?.answersPerPage || 1
-        : crosswordSettings?.bookCanvas?.answersPerPage || 1;
+        : normalizeAnswersPerPage(crosswordSettings?.bookCanvas?.answersPerPage);
     const count = activeDocIsMurdokuModule
       ? activeMurdokuPuzzleCount
       : activeDocIsBatchModule
@@ -4789,9 +5657,8 @@ export function PreviewCanvas() {
 
   const solutionsPerPreviewPage = useMemo(() => {
     if (activeDocumentPage?.moduleType === 'word-search') {
-      return Math.max(
-        1,
-        (canvasEditSession?.draft ?? wordSearchSettings).bookCanvas.answersPerPage || 1
+      return normalizeAnswersPerPage(
+        (canvasEditSession?.draft ?? wordSearchSettings).bookCanvas.answersPerPage
       );
     }
     if (activeDocumentPage?.moduleType === 'trivia') {
@@ -4810,7 +5677,7 @@ export function PreviewCanvas() {
       return Math.max(1, murdokuSettings?.bookCanvas?.answersPerPage || 1);
     }
     if (activeDocIsCrosswordModule) {
-      return Math.max(1, crosswordSettings?.bookCanvas?.answersPerPage || 1);
+      return normalizeAnswersPerPage(crosswordSettings?.bookCanvas?.answersPerPage);
     }
     return 1;
   }, [
@@ -5106,7 +5973,10 @@ export function PreviewCanvas() {
         (activeDocIsBatchModule && activeCrosswordPuzzleCount > 0)
       : hasPuzzles);
   const showDocumentPagination =
-    hasPreviewPages && previewUsesPuzzlePagination && !showPuzzleBatchPagination;
+    hasPreviewPages &&
+    previewUsesPuzzlePagination &&
+    !showPuzzleBatchPagination &&
+    !(activeDocIsBatchModule && activeCrosswordPuzzleCount === 0);
   const canGoPrevDocument = activeDocumentIndex > 0;
   const canGoNextDocument = activeDocumentIndex >= 0 && activeDocumentIndex < documentPages.length - 1;
   const goToPrevDocument = () => {
@@ -5190,6 +6060,9 @@ export function PreviewCanvas() {
     (blockId: string, options?: { showChrome?: boolean }) => {
       selectTextBlock(blockId, options);
       setTextPageEditPanelOpen(true);
+      setSelectedVariableId(null);
+      setNativeFormatTarget(null);
+      setFrontMatterTarget(null);
     },
     [selectTextBlock]
   );
@@ -6302,6 +7175,8 @@ export function PreviewCanvas() {
         if (targetPage && targetPage.moduleType !== 'word-search') {
           closeCanvasEditPanel();
         }
+        // Sync activation. startTransition deferred Crossword behind 150–260ms
+        // sidebar/preview commits so the UI stayed on Word Search and felt frozen.
         setActiveDocumentPageId(id);
       });
     },
@@ -6660,6 +7535,718 @@ export function PreviewCanvas() {
     };
   }, [genericPuzzleSettings, pageGenericOverrides, currentBatchIndex]);
 
+  const handleFormatTargetChange = useCallback((target: CanvasFormatTarget | null) => {
+    setNativeFormatTarget(target);
+    setFrontMatterTarget(null);
+    if (target) {
+      setSelectedVariableId(null);
+      setPlacingVariableKind(null);
+      setPlacingShapeType(null);
+    }
+  }, []);
+
+  const handleFrontMatterTargetChange = useCallback((target: FrontMatterFormatTarget) => {
+    setFrontMatterTarget(target);
+    setNativeFormatTarget(null);
+    setSelectedVariableId(null);
+    setPlacingVariableKind(null);
+    setPlacingShapeType(null);
+    hideTextBlockChrome();
+    setTextPageEditPanelOpen(true);
+    if (target === 'title' || target === 'body') {
+      changeTextPageEditTarget('page-elements');
+    }
+  }, [changeTextPageEditTarget, hideTextBlockChrome]);
+
+  const handleNativeTextChange = useCallback(
+    (target: NativeTextTarget, text: string) => {
+      if (target === 'title') {
+        setTitleWords({ ...titleWords, title: text });
+        return;
+      }
+      const lineIndex = Math.max(0, currentBatchIndex);
+      const replaceLine = (source: string) => {
+        const lines = (source || '').split('\n');
+        while (lines.length <= lineIndex) lines.push('');
+        lines[lineIndex] = text;
+        return lines.join('\n');
+      };
+      const moduleType = activeDocumentPage?.moduleType;
+      if (moduleType === 'word-search') {
+        const current = canvasEditSession?.draft ?? previewWordSearchSettings;
+        const next = {
+          ...current,
+          typography: {
+            ...current.typography,
+            funFactsText: replaceLine(current.typography.funFactsText || ''),
+          },
+        };
+        if (canvasEditSession) {
+          handleCanvasEditDraftSettingsChange(() => next);
+        } else {
+          updateWordSearchSettings(next);
+        }
+        return;
+      }
+      if (moduleType === 'crossword') {
+        const current = previewCrosswordSettings;
+        updateCrosswordSettings({
+          ...current,
+          typography: {
+            ...current.typography,
+            funFactsText: replaceLine(current.typography.funFactsText || ''),
+          },
+        });
+        return;
+      }
+      if (moduleType && isGenericPuzzleModuleType(moduleType)) {
+        const current = previewGenericSettings;
+        updateGenericPuzzleSettings({
+          ...current,
+          typography: {
+            ...current.typography,
+            funFactsText: replaceLine(current.typography.funFactsText || ''),
+          },
+        });
+      }
+    },
+    [
+      activeDocumentPage?.moduleType,
+      canvasEditSession,
+      currentBatchIndex,
+      handleCanvasEditDraftSettingsChange,
+      previewCrosswordSettings,
+      previewGenericSettings,
+      previewWordSearchSettings,
+      setTitleWords,
+      titleWords,
+      updateCrosswordSettings,
+      updateGenericPuzzleSettings,
+      updateWordSearchSettings,
+    ]
+  );
+
+  const applyFrontMatterFontPatch = useCallback(
+    (patch: NativeCanvasPatch) => {
+      if (!activeDocumentPage || !activeTextSettings) return;
+      if (selectedTextBlockId) {
+        const blockPatch: Partial<TextPageBlock> = {};
+        if (patch.fontFamily) blockPatch.fontFamily = patch.fontFamily;
+        if (patch.fontSize) blockPatch.fontSize = patch.fontSize;
+        if (patch.color) blockPatch.textColor = patch.color;
+        if (patch.bold != null) blockPatch.bold = patch.bold;
+        if (patch.italic != null) blockPatch.italic = patch.italic;
+        if (patch.align) blockPatch.alignment = patch.align;
+        updateActiveTextModuleSettings(
+          updateTextPageBlock(
+            activeTextSettings,
+            selectedTextBlockId,
+            blockPatch,
+            activeDocumentPage.name,
+            wordSearchSettings
+          )
+        );
+        return;
+      }
+      if (frontMatterTarget === 'title' || frontMatterTarget === 'body') {
+        const next: Partial<TextModuleSettings> = {};
+        if (patch.fontFamily) next.fontFamily = patch.fontFamily;
+        if (patch.color) next.textColor = patch.color;
+        if (frontMatterTarget === 'title' && patch.fontSize) next.titleFontSize = patch.fontSize;
+        if (frontMatterTarget === 'body') {
+          if (patch.fontSize) next.fontSize = patch.fontSize;
+          if (patch.align) next.alignment = patch.align;
+        }
+        updateActiveTextModuleSettings(next);
+        return;
+      }
+      if (frontMatterTarget === 'toc-title' || frontMatterTarget === 'toc-entries') {
+        const toc = { ...normalizeTocSettings(activeTextSettings.tocSettings) };
+        if (frontMatterTarget === 'toc-title') {
+          if (patch.fontFamily) toc.titleFontFamily = patch.fontFamily;
+          if (patch.fontSize) toc.titleFontSize = patch.fontSize;
+          if (patch.color) toc.titleTextColor = patch.color;
+          if (patch.bold != null) toc.titleFontWeight = patch.bold;
+        } else {
+          if (patch.fontFamily) toc.entryFontFamily = patch.fontFamily;
+          if (patch.fontSize) toc.entryFontSize = patch.fontSize;
+          if (patch.color) toc.entryTextColor = patch.color;
+          if (patch.bold != null) toc.entryFontWeight = patch.bold;
+        }
+        updateActiveTextModuleSettings({ tocSettings: toc });
+      }
+    },
+    [
+      activeDocumentPage,
+      activeTextSettings,
+      frontMatterTarget,
+      selectedTextBlockId,
+      updateActiveTextModuleSettings,
+      wordSearchSettings,
+    ]
+  );
+
+  const applyNativeFontPatch = useCallback(
+    (patch: NativeCanvasPatch) => {
+      if (!nativeFormatTarget || !activeDocumentPage) return;
+      const moduleType = activeDocumentPage.moduleType;
+      const patchHeaderOrSharedSubtitle =
+        nativeFormatTarget === 'header-number' ||
+        (nativeFormatTarget === 'subtitle' && isGenericPuzzleModuleType(moduleType));
+      if (patchHeaderOrSharedSubtitle) {
+        const current = canvasEditSession?.draft ?? previewWordSearchSettings;
+        const next = patchedWordSearchSettings(current, nativeFormatTarget, patch);
+        if (moduleType === 'word-search' && canvasEditSession) {
+          handleCanvasEditDraftSettingsChange(() => next);
+        } else {
+          updateWordSearchSettings(next);
+          if (moduleType === 'word-search') {
+            persistPagePuzzleSettings(activeDocumentPage.id, previewTitleWords, next);
+          }
+        }
+        if (nativeFormatTarget === 'header-number') return;
+      }
+      if (moduleType === 'word-search') {
+        const current = canvasEditSession?.draft ?? previewWordSearchSettings;
+        const next = patchedWordSearchSettings(current, nativeFormatTarget, patch);
+        if (canvasEditSession) {
+          handleCanvasEditDraftSettingsChange(() => next);
+        } else {
+          updateWordSearchSettings(next);
+          persistPagePuzzleSettings(activeDocumentPage.id, previewTitleWords, next);
+        }
+        return;
+      }
+      if (moduleType === 'crossword') {
+        if (nativeFormatTarget === 'header-number') return;
+        const current = previewCrosswordSettings;
+        const next = patchedCrosswordSettings(current, nativeFormatTarget, patch);
+        if (crosswordEditPanelOpen) {
+          handleCrosswordDraftSettingsChange(next);
+        } else {
+          updateCrosswordSettings(next);
+        }
+        return;
+      }
+      if (isGenericPuzzleModuleType(moduleType)) {
+        if (
+          nativeFormatTarget === 'header-number' ||
+          nativeFormatTarget === 'subtitle' ||
+          nativeFormatTarget === 'maze-start' ||
+          nativeFormatTarget === 'maze-end'
+        ) {
+          return;
+        }
+        const current = previewGenericSettings;
+        const next = patchedGenericSettings(current, nativeFormatTarget, patch, {
+          solutionPage: activePreviewTab === 'solutions',
+          moduleType,
+        });
+        if (
+          (nativeFormatTarget === 'code-numbers' || nativeFormatTarget === 'code-letters') &&
+          patch.color
+        ) {
+          updateGenericPuzzleSettings({
+            ...next,
+            core: {
+              ...current.core,
+              ...(nativeFormatTarget === 'code-numbers'
+                ? { codewordsNumberColor: patch.color }
+                : { codewordsLetterColor: patch.color }),
+            },
+          });
+          return;
+        }
+        if (moduleType === 'binairo' && nativeFormatTarget === 'grid' && patch.color) {
+          updateGenericPuzzleSettings({
+            ...next,
+            core: {
+              ...current.core,
+              binairoSymbolColor: patch.color,
+            },
+          });
+          return;
+        }
+        if (moduleType === 'kakuro' && nativeFormatTarget === 'grid' && patch.color) {
+          updateGenericPuzzleSettings({
+            ...next,
+            core: {
+              ...current.core,
+              kakuroDigitColor: patch.color,
+            },
+          });
+          return;
+        }
+        if (moduleType === 'kakuro' && nativeFormatTarget === 'clues' && patch.color) {
+          updateGenericPuzzleSettings({
+            ...next,
+            core: {
+              ...current.core,
+              kakuroClueTextColor: patch.color,
+            },
+          });
+          return;
+        }
+        if (
+          moduleType === 'snake' &&
+          nativeFormatTarget === 'grid' &&
+          activePreviewTab === 'solutions' &&
+          patch.color
+        ) {
+          updateGenericPuzzleSettings({
+            ...next,
+            core: {
+              ...current.core,
+              snakeSolutionPathColor: patch.color,
+            },
+          });
+          return;
+        }
+        updateGenericPuzzleSettings(next);
+      }
+    },
+    [
+      activeDocumentPage,
+      activePreviewTab,
+      canvasEditSession,
+      crosswordEditPanelOpen,
+      handleCanvasEditDraftSettingsChange,
+      handleCrosswordDraftSettingsChange,
+      nativeFormatTarget,
+      persistPagePuzzleSettings,
+      previewCrosswordSettings,
+      previewGenericSettings,
+      previewTitleWords,
+      previewWordSearchSettings,
+      updateCrosswordSettings,
+      updateGenericPuzzleSettings,
+      updateWordSearchSettings,
+    ]
+  );
+
+  const formatBarSelection = useMemo<CanvasBarSelection | null>(() => {
+    if (selectedPageVariable) return { source: 'variable', field: selectedPageVariable };
+    if (activeDocumentPage && isTextModuleType(activeDocumentPage.moduleType) && activeTextSettings) {
+      if (selectedTextBlockId) {
+        const block = resolveTextPageBlocks(
+          activeTextSettings,
+          activeDocumentPage.name,
+          wordSearchSettings
+        ).find((entry) => entry.id === selectedTextBlockId);
+        if (block && block.kind !== 'image') {
+          return {
+            source: 'front-matter',
+            label: block.kind.replace('-', ' '),
+            font: {
+              fontFamily: block.fontFamily || 'Arial',
+              fontSize: block.fontSize || 18,
+              color:
+                block.textColor ||
+                resolveTextPageTextColor(activeTextSettings, wordSearchSettings),
+              bold: !!block.bold,
+              italic: !!block.italic,
+              align: block.alignment || 'center',
+              textEffect: 'none',
+            },
+          };
+        }
+      }
+      if (frontMatterTarget === 'title' || frontMatterTarget === 'body') {
+        const isTitle = frontMatterTarget === 'title';
+        return {
+          source: 'front-matter',
+          label: isTitle ? 'Title' : 'Body',
+          font: {
+            fontFamily: activeTextSettings.fontFamily || 'Arial',
+            fontSize: isTitle
+              ? resolveTextPageTitleFontSize(activeTextSettings)
+              : activeTextSettings.fontSize || 18,
+            color: resolveTextPageTextColor(activeTextSettings, wordSearchSettings),
+            bold: isTitle,
+            italic: false,
+            align: activeTextSettings.alignment || 'center',
+            textEffect: 'none',
+          },
+        };
+      }
+      if (frontMatterTarget === 'toc-title' || frontMatterTarget === 'toc-entries') {
+        const toc = normalizeTocSettings(activeTextSettings.tocSettings);
+        const isTitle = frontMatterTarget === 'toc-title';
+        return {
+          source: 'front-matter',
+          label: isTitle ? 'TOC title' : 'TOC entries',
+          font: {
+            fontFamily:
+              (isTitle ? toc.titleFontFamily : toc.entryFontFamily) ||
+              activeTextSettings.fontFamily ||
+              'Arial',
+            fontSize:
+              (isTitle ? toc.titleFontSize : toc.entryFontSize) || (isTitle ? 24 : 14),
+            color:
+              (isTitle ? toc.titleTextColor : toc.entryTextColor) ||
+              resolveTextPageTextColor(activeTextSettings, wordSearchSettings),
+            bold: isTitle ? toc.titleFontWeight !== false : !!toc.entryFontWeight,
+            italic: false,
+            align: activeTextSettings.alignment || 'left',
+            textEffect: 'none',
+          },
+        };
+      }
+    }
+    if (!nativeFormatTarget || !activeDocumentPage) return null;
+    const assembly = getHeaderAssemblySettings(previewWordSearchSettings);
+    let headerShape: HeaderCanvasShapeSelection | null = null;
+    if (
+      assembly.enabled &&
+      (nativeFormatTarget === 'title' ||
+        nativeFormatTarget === 'subtitle' ||
+        nativeFormatTarget === 'header-number')
+    ) {
+      if (nativeFormatTarget === 'header-number') {
+        headerShape = {
+          variant: 'number',
+          shapeId: assembly.number.shapeId,
+          fillColor: assembly.number.fillColor,
+          borderColor: assembly.number.borderColor,
+          borderThicknessPx: assembly.number.borderThicknessPx,
+          polygonSides: assembly.number.polygonSides,
+        };
+      } else if (nativeFormatTarget === 'title') {
+        headerShape = {
+          variant: 'title-subtitle',
+          shapeId: assembly.title.shapeId,
+          fillColor: assembly.title.fillColor,
+          borderColor: assembly.title.borderColor,
+          borderThicknessPx: assembly.title.borderThicknessPx,
+          borderRadiusPx: assembly.title.borderRadiusPx,
+        };
+      } else {
+        headerShape = {
+          variant: 'title-subtitle',
+          shapeId: assembly.subtitle.shapeId,
+          fillColor: assembly.subtitle.fillColor,
+          borderColor: assembly.subtitle.borderColor,
+          borderThicknessPx: assembly.subtitle.borderThicknessPx,
+          borderRadiusPx: assembly.subtitle.borderRadiusPx,
+        };
+      }
+    }
+    return {
+      source: 'native',
+      target: nativeFormatTarget,
+      font: nativeCanvasFont(
+        nativeFormatTarget,
+        activeDocumentPage.moduleType,
+        previewWordSearchSettings,
+        previewCrosswordSettings,
+        previewGenericSettings,
+        { solutionPage: activePreviewTab === 'solutions' }
+      ),
+      headerShape,
+    };
+  }, [
+    activeDocumentPage,
+    activePreviewTab,
+    activeTextSettings,
+    frontMatterTarget,
+    nativeFormatTarget,
+    previewCrosswordSettings,
+    previewGenericSettings,
+    previewWordSearchSettings,
+    selectedPageVariable,
+    selectedTextBlockId,
+    wordSearchSettings,
+  ]);
+
+  const applyHeaderShapePatch = useCallback(
+    (patch: HeaderCanvasShapePatch) => {
+      if (
+        !nativeFormatTarget ||
+        (nativeFormatTarget !== 'title' &&
+          nativeFormatTarget !== 'subtitle' &&
+          nativeFormatTarget !== 'header-number')
+      ) {
+        return;
+      }
+      const current = canvasEditSession?.draft ?? previewWordSearchSettings;
+      const assembly = getHeaderAssemblySettings(current);
+      let nextAssembly = assembly;
+      if (nativeFormatTarget === 'header-number') {
+        nextAssembly = {
+          ...assembly,
+          number: {
+            ...assembly.number,
+            ...(patch.shapeId ? { shapeId: patch.shapeId } : {}),
+            ...(patch.fillColor ? { fillColor: patch.fillColor } : {}),
+            ...(patch.borderColor ? { borderColor: patch.borderColor } : {}),
+            ...(patch.borderThicknessPx != null
+              ? { borderThicknessPx: patch.borderThicknessPx }
+              : {}),
+            ...(patch.polygonSides != null ? { polygonSides: patch.polygonSides } : {}),
+          },
+        };
+      } else if (nativeFormatTarget === 'title') {
+        nextAssembly = {
+          ...assembly,
+          title: {
+            ...assembly.title,
+            ...(patch.shapeId ? { shapeId: patch.shapeId } : {}),
+            ...(patch.fillColor ? { fillColor: patch.fillColor } : {}),
+            ...(patch.borderColor ? { borderColor: patch.borderColor } : {}),
+            ...(patch.borderThicknessPx != null
+              ? { borderThicknessPx: patch.borderThicknessPx }
+              : {}),
+            ...(patch.borderRadiusPx != null
+              ? { borderRadiusPx: patch.borderRadiusPx }
+              : {}),
+          },
+        };
+      } else {
+        nextAssembly = {
+          ...assembly,
+          subtitle: {
+            ...assembly.subtitle,
+            ...(patch.shapeId ? { shapeId: patch.shapeId } : {}),
+            ...(patch.fillColor ? { fillColor: patch.fillColor } : {}),
+            ...(patch.borderColor ? { borderColor: patch.borderColor } : {}),
+            ...(patch.borderThicknessPx != null
+              ? { borderThicknessPx: patch.borderThicknessPx }
+              : {}),
+            ...(patch.borderRadiusPx != null
+              ? { borderRadiusPx: patch.borderRadiusPx }
+              : {}),
+          },
+        };
+      }
+      const next = {
+        ...current,
+        colors: {
+          ...current.colors,
+          puzzlePage: {
+            ...current.colors.puzzlePage,
+            headerAssembly: nextAssembly,
+          },
+        },
+      };
+      if (activeDocumentPage?.moduleType === 'word-search' && canvasEditSession) {
+        handleCanvasEditDraftSettingsChange(() => next);
+      } else {
+        updateWordSearchSettings(next);
+        if (activeDocumentPage?.moduleType === 'word-search') {
+          persistPagePuzzleSettings(activeDocumentPage.id, previewTitleWords, next);
+        }
+      }
+    },
+    [
+      activeDocumentPage,
+      canvasEditSession,
+      handleCanvasEditDraftSettingsChange,
+      nativeFormatTarget,
+      persistPagePuzzleSettings,
+      previewTitleWords,
+      previewWordSearchSettings,
+      updateWordSearchSettings,
+    ]
+  );
+
+  const handleStartEndImageScaleChange = useCallback(
+    (scale: number) => {
+      const clamped = Math.max(40, Math.min(200, Math.round(scale)));
+      const moduleType = activeDocumentPage?.moduleType;
+      if (!moduleType || !isGenericPuzzleModuleType(moduleType)) return;
+      const current = previewGenericSettings;
+      const next = normalizeGenericPuzzleSettings(
+        {
+          ...current,
+          core: {
+            ...current.core,
+            mazeStartEndImages: {
+              ...current.core.mazeStartEndImages,
+              imageScalePercent: clamped,
+            },
+          },
+        },
+        moduleType
+      );
+      updateGenericPuzzleSettings(next);
+    },
+    [activeDocumentPage?.moduleType, previewGenericSettings, updateGenericPuzzleSettings]
+  );
+
+  const handleSolutionGapChange = useCallback(
+    (gapPx: number) => {
+      const clamped = Math.max(0, Math.min(120, Math.round(gapPx)));
+      const moduleType = activeDocumentPage?.moduleType;
+      if (moduleType === 'word-search') {
+        setSolutionToSolutionGap(clamped);
+        return;
+      }
+      if (moduleType === 'crossword') {
+        const current = previewCrosswordSettings;
+        const next = {
+          ...current,
+          typography: { ...current.typography, solutionToSolutionGapPx: clamped },
+        };
+        if (crosswordEditPanelOpen) {
+          handleCrosswordDraftSettingsChange(next);
+        } else {
+          updateCrosswordSettings(next);
+        }
+        return;
+      }
+      if (moduleType && isGenericPuzzleModuleType(moduleType)) {
+        const current = previewGenericSettings;
+        updateGenericPuzzleSettings(
+          normalizeGenericPuzzleSettings(
+            {
+              ...current,
+              typography: {
+                ...current.typography,
+                solutionToSolutionGapPx: clamped,
+              },
+            },
+            moduleType
+          )
+        );
+      }
+    },
+    [
+      activeDocumentPage?.moduleType,
+      crosswordEditPanelOpen,
+      handleCrosswordDraftSettingsChange,
+      previewCrosswordSettings,
+      previewGenericSettings,
+      setSolutionToSolutionGap,
+      updateCrosswordSettings,
+      updateGenericPuzzleSettings,
+    ]
+  );
+
+  const handleGridScaleChange = useCallback(
+    (scale: number) => {
+      const clamped = Math.max(30, Math.min(250, Math.round(scale)));
+      const moduleType = activeDocumentPage?.moduleType;
+      if (moduleType === 'word-search') {
+        if (canvasEditSession) {
+          handleCanvasEditDraftGridScaleChange(clamped);
+        } else {
+          setPagePuzzleGridScale(currentBatchIndex, clamped);
+          setPuzzleGridScale(clamped);
+        }
+        return;
+      }
+      if (moduleType === 'crossword') {
+        const current = previewCrosswordSettings;
+        const nextCore = { ...current.core, puzzleGridScale: clamped };
+        if (activePreviewTab === 'solutions') {
+          nextCore.solutionGridScale = clamped;
+        }
+        const next = { ...current, core: nextCore };
+        if (crosswordEditPanelOpen) {
+          handleCrosswordDraftSettingsChange(next);
+        } else {
+          updateCrosswordSettings(next);
+        }
+        return;
+      }
+      if (moduleType && isGenericPuzzleModuleType(moduleType)) {
+        const current = previewGenericSettings;
+        const next = normalizeGenericPuzzleSettings(
+          {
+            ...current,
+            core: {
+              ...current.core,
+              puzzleGridScale: clamped,
+              ...(activePreviewTab === 'solutions'
+                ? { solutionGridScale: clamped }
+                : {}),
+            },
+          },
+          moduleType
+        );
+        updateGenericPuzzleSettings(next);
+      }
+    },
+    [
+      activeDocumentPage?.moduleType,
+      activePreviewTab,
+      canvasEditSession,
+      crosswordEditPanelOpen,
+      currentBatchIndex,
+      handleCanvasEditDraftGridScaleChange,
+      handleCrosswordDraftSettingsChange,
+      previewCrosswordSettings,
+      previewGenericSettings,
+      setPagePuzzleGridScale,
+      setPuzzleGridScale,
+      updateCrosswordSettings,
+      updateGenericPuzzleSettings,
+    ]
+  );
+
+  const handleCanvasLayoutOffsetsChange = useCallback(
+    (offsets: CanvasLayoutOffsets) => {
+      const moduleType = activeDocumentPage?.moduleType;
+      if (moduleType === 'word-search') {
+        const current = canvasEditSession?.draft ?? previewWordSearchSettings;
+        const next = {
+          ...current,
+          typography: { ...current.typography, canvasLayoutOffsets: offsets },
+        };
+        if (canvasEditSession) {
+          handleCanvasEditDraftSettingsChange(() => next);
+        } else {
+          updateWordSearchSettings({ typography: { canvasLayoutOffsets: offsets } });
+          if (activeDocumentPageId) {
+            persistPagePuzzleSettings(activeDocumentPageId, previewTitleWords, next);
+          }
+        }
+        return;
+      }
+      if (moduleType === 'crossword') {
+        const current = previewCrosswordSettings;
+        const next = {
+          ...current,
+          typography: { ...current.typography, canvasLayoutOffsets: offsets },
+        };
+        if (crosswordEditPanelOpen) {
+          handleCrosswordDraftSettingsChange(next);
+        } else {
+          updateCrosswordSettings(next);
+        }
+        return;
+      }
+      if (moduleType && isGenericPuzzleModuleType(moduleType)) {
+        const current = previewGenericSettings;
+        updateGenericPuzzleSettings(
+          normalizeGenericPuzzleSettings(
+            {
+              ...current,
+              typography: { ...current.typography, canvasLayoutOffsets: offsets },
+            },
+            moduleType
+          )
+        );
+      }
+    },
+    [
+      activeDocumentPage?.moduleType,
+      activeDocumentPageId,
+      canvasEditSession,
+      crosswordEditPanelOpen,
+      handleCanvasEditDraftSettingsChange,
+      handleCrosswordDraftSettingsChange,
+      persistPagePuzzleSettings,
+      previewCrosswordSettings,
+      previewGenericSettings,
+      previewTitleWords,
+      previewWordSearchSettings,
+      updateCrosswordSettings,
+      updateGenericPuzzleSettings,
+      updateWordSearchSettings,
+    ]
+  );
+
   useEffect(() => {
     if (
       crosswordCanvasEditEnabled &&
@@ -6895,6 +8482,7 @@ export function PreviewCanvas() {
           solutionToSolutionGap={solutionToSolutionGap}
           pageMargin={pageMargin}
           bookHeaderTitleFontSizePt={compiledHeaderTitleFontSizePt}
+          pageVariableEditor={pageVariableEditor}
         />
       );
     },
@@ -6915,6 +8503,7 @@ export function PreviewCanvas() {
           titleToAnswerGap,
           solutionToSolutionGap,
       pageMargin,
+      pageVariableEditor,
     ]
   );
 
@@ -7080,6 +8669,7 @@ export function PreviewCanvas() {
         genericBatchPuzzles={genericBatchPuzzles}
         murdokuSettings={murdokuSettings}
         murdokuBatchPuzzles={murdokuBatchPuzzles}
+        pageVariableEditor={pageVariableEditor}
         crosswordCanvasEditEnabled={crosswordCanvasEditEnabled}
         crosswordEditTarget={crosswordEditTarget}
         crosswordEditHideGuides={crosswordEditHideGuides}
@@ -7087,6 +8677,15 @@ export function PreviewCanvas() {
         genericPuzzleCanvasEditEnabled={genericPuzzleEditEnabled}
         genericPuzzleEditHideGuides={genericPuzzleEditOpen}
         onGenericPuzzleEditTargetChange={handleGenericPuzzleEditTargetChange}
+        onFormatTargetChange={handleFormatTargetChange}
+        canvasFormatTarget={nativeFormatTarget}
+        onNativeTextChange={handleNativeTextChange}
+        onGridScaleChange={handleGridScaleChange}
+        onCanvasLayoutOffsetsChange={handleCanvasLayoutOffsetsChange}
+        onStartEndImageScaleChange={handleStartEndImageScaleChange}
+        onSolutionGapChange={handleSolutionGapChange}
+        frontMatterTarget={frontMatterTarget}
+        onFrontMatterTargetChange={handleFrontMatterTargetChange}
       />
     ) : null;
 
@@ -7108,6 +8707,53 @@ export function PreviewCanvas() {
         }}
         pageName={pagePendingRemove ? getCompiledPageLabel(pagePendingRemove) : ''}
         onConfirm={handleConfirmRemoveCompiledPage}
+      />
+      <PageVariableTextDialog
+        key={`text-${textVariableDialogId ?? 'closed'}`}
+        open={!!textVariableDialogId}
+        singlePage={
+          !!activePageVariables.find((field) => field.id === textVariableDialogId) &&
+          isSinglePageVariable(
+            activePageVariables.find((field) => field.id === textVariableDialogId)!
+          )
+        }
+        initialLines={
+          activePageVariables.find((field) => field.id === textVariableDialogId)?.textLines ??
+          EMPTY_PAGE_VARIABLE_LINES
+        }
+        initialForm={
+          activePageVariables.find((field) => field.id === textVariableDialogId)?.textForm
+        }
+        initialStartNumber={
+          activePageVariables.find((field) => field.id === textVariableDialogId)?.startNumber
+        }
+        initialVariableKey={
+          activePageVariables.find((field) => field.id === textVariableDialogId)?.variableKey
+        }
+        onClose={() => setTextVariableDialogId(null)}
+        onSave={(next) => {
+          if (textVariableDialogId) patchPageVariable(textVariableDialogId, next);
+          setTextVariableDialogId(null);
+        }}
+      />
+      <PageVariableImageDialog
+        key={`image-${imageVariableDialogId ?? 'closed'}`}
+        open={!!imageVariableDialogId}
+        singlePage={
+          !!activePageVariables.find((field) => field.id === imageVariableDialogId) &&
+          isSinglePageVariable(
+            activePageVariables.find((field) => field.id === imageVariableDialogId)!
+          )
+        }
+        initialHrefs={
+          activePageVariables.find((field) => field.id === imageVariableDialogId)?.imageHrefs ??
+          EMPTY_PAGE_VARIABLE_HREFS
+        }
+        onClose={() => setImageVariableDialogId(null)}
+        onSave={(hrefs) => {
+          if (imageVariableDialogId) patchPageVariable(imageVariableDialogId, { imageHrefs: hrefs });
+          setImageVariableDialogId(null);
+        }}
       />
 
       {/* Validation Error Display */}
@@ -7223,6 +8869,18 @@ export function PreviewCanvas() {
             </div>
 
             <div className="preview-top-toolbar__controls">
+              {!isAllPagesPreview && !isLockedPreview ? (
+                <button
+                  type="button"
+                  className="preview-segmented__btn preview-segmented__btn--inactive inline-flex items-center gap-1.5 px-2.5"
+                  title="Let AI edit / help"
+                  aria-label="Let AI edit or help with this project"
+                  onClick={() => aiCopilotUi?.openCopilot()}
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-violet-600" />
+                  <span className="text-xs font-semibold whitespace-nowrap">Let AI edit / help</span>
+                </button>
+              ) : null}
               {showPuzzleSolutionTabs && (
               <div className="preview-puzzle-solution-controls">
               <div className="preview-segmented">
@@ -7306,6 +8964,69 @@ export function PreviewCanvas() {
             </div>
           </div>
           )}
+
+          {!isLockedPreview &&
+          activeDocumentPage &&
+          (isPuzzleModuleType(activeDocumentPage.moduleType) ||
+            isTextModuleType(activeDocumentPage.moduleType)) ? (
+            <CanvasFormatBar
+              selection={formatBarSelection}
+              onPatchVariable={(patch) => {
+                if (!selectedVariableId) return;
+                patchPageVariable(selectedVariableId, patch);
+              }}
+              onPatchNative={(patch) => {
+                if (
+                  activeDocumentPage &&
+                  isTextModuleType(activeDocumentPage.moduleType) &&
+                  (selectedTextBlockId || frontMatterTarget)
+                ) {
+                  applyFrontMatterFontPatch(patch);
+                  return;
+                }
+                applyNativeFontPatch(patch);
+              }}
+              onPatchHeaderShape={applyHeaderShapePatch}
+              onDeleteSelected={() => {
+                if (!selectedVariableId) return;
+                commitPageVariables(
+                  activePageVariables.filter((field) => field.id !== selectedVariableId)
+                );
+                setSelectedVariableId(null);
+                setShapeTextActiveId(null);
+              }}
+              onChooseInsert={(kind, scope) => {
+                if (
+                  kind === 'text' &&
+                  selectedPageVariable &&
+                  isShapePageVariable(selectedPageVariable.kind)
+                ) {
+                  const contentIndex = pageVariableContentIndex(currentBatchIndex, 1);
+                  attachTextToShape(selectedPageVariable, scope, contentIndex);
+                  return;
+                }
+                setPlacingVariableKind(kind);
+                setPlacingScope(scope);
+                setPlacingShapeType(null);
+                setSelectedVariableId(null);
+                setShapeTextActiveId(null);
+                setNativeFormatTarget(null);
+                setFrontMatterTarget(null);
+              }}
+              onChooseShape={(shape) => {
+                setPlacingVariableKind('shape');
+                setPlacingScope('single');
+                setPlacingShapeType(shape);
+                setSelectedVariableId(null);
+                setShapeTextActiveId(null);
+                setNativeFormatTarget(null);
+                setFrontMatterTarget(null);
+              }}
+              onEditContent={() => {
+                if (selectedVariableId) openVariableContentDialog(selectedVariableId);
+              }}
+            />
+          ) : null}
 
           {/* Compact controls for tablet / narrow layouts */}
           {!isFlipbookPreview && (
@@ -7638,6 +9359,7 @@ export function PreviewCanvas() {
                                 murdokuSettings={murdokuSettings}
                                 murdokuBatchPuzzles={murdokuBatchPuzzles}
                                 crosswordCanvasEditEnabled={false}
+                                pageVariableEditor={pageVariableEditor}
                               />
                             </AllPagesGridPreview.Item>
                           ))
@@ -7674,6 +9396,7 @@ export function PreviewCanvas() {
                                     idx,
                                     includeBlankAfterEachPuzzle
                                   )}
+                                  pageVariableEditor={pageVariableEditor}
                                 />
                               </AllPagesGridPreview.Item>
                             ))
@@ -7778,6 +9501,15 @@ export function PreviewCanvas() {
                         genericPuzzleCanvasEditEnabled={genericPuzzleEditEnabled}
                         genericPuzzleEditHideGuides={genericPuzzleEditOpen}
                         onGenericPuzzleEditTargetChange={handleGenericPuzzleEditTargetChange}
+                        onFormatTargetChange={handleFormatTargetChange}
+                        canvasFormatTarget={nativeFormatTarget}
+                        onNativeTextChange={handleNativeTextChange}
+                        onGridScaleChange={handleGridScaleChange}
+                        onStartEndImageScaleChange={handleStartEndImageScaleChange}
+                        onSolutionGapChange={handleSolutionGapChange}
+                        frontMatterTarget={frontMatterTarget}
+                        onFrontMatterTargetChange={handleFrontMatterTargetChange}
+                        pageVariableEditor={pageVariableEditor}
                           />
                         </div>
                   ))
@@ -7803,6 +9535,10 @@ export function PreviewCanvas() {
                       canvasEditHighlightTarget={canvasEditHighlightTarget}
                       canvasEditHideGuides={canvasEditHideGuides}
                       onCanvasEditTargetChange={handleCanvasEditTargetChange}
+                      onFormatTargetChange={handleFormatTargetChange}
+                      canvasFormatTarget={nativeFormatTarget}
+                      onGridScaleChange={handleGridScaleChange}
+                      pageVariableEditor={pageVariableEditor}
                     />
                   ) : null
                 ) : solutionPages[currentSolutionPageIndex] ? (

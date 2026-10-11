@@ -41,6 +41,10 @@ interface WordSearchGridProps {
   /** 0–100 */
   shapeImageOpacity?: number;
   shapeImageFit?: ShapeMaskFit;
+  /** Letters and solution marks are drawn by the shared element view. */
+  hideCellLetters?: boolean;
+  /** Shared letter/mark layer. Must sit inside the cell grid so it is not hidden behind the box. */
+  letterOverlay?: React.ReactNode;
 }
 
 export function WordSearchGrid({
@@ -69,6 +73,8 @@ export function WordSearchGrid({
   shapeImageShow = false,
   shapeImageOpacity = 35,
   shapeImageFit = 'contain',
+  hideCellLetters = false,
+  letterOverlay = null,
 }: WordSearchGridProps) {
   const solutionCanvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -197,7 +203,7 @@ export function WordSearchGrid({
           boxSizing: 'content-box',
         }}
       >
-        {showSolution ? (
+        {showSolution && !hideCellLetters ? (
           <canvas
             ref={solutionCanvasRef}
             className="block"
@@ -273,6 +279,7 @@ export function WordSearchGrid({
                       zIndex: 1,
                     }}
                   >
+                    {hideCellLetters ? null : (
                     <span
                       style={getGridLetterGlyphStyle(fittedFontSize, {
                         strokeColor: letterStrokeColor,
@@ -281,10 +288,26 @@ export function WordSearchGrid({
                     >
                       {letter}
                     </span>
+                    )}
                 </div>
               );
             })
           )}
+          {letterOverlay ? (
+            <div
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                width: innerWidthPx,
+                height: innerHeightPx,
+                zIndex: 5,
+                pointerEvents: 'none',
+              }}
+            >
+              {letterOverlay}
+            </div>
+          ) : null}
         </div>
         )}
       </div>

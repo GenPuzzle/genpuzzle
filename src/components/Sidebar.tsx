@@ -16,6 +16,8 @@ import { useApp } from '@/lib/app-context';
 import { TRIM_SIZES, TrimSize, Direction } from '@/lib/puzzles/types';
 import { getCategories, getQuotesByCategory, getRandomQuote } from '@/lib/puzzles/cryptogram';
 import { PUBLISHING_FONTS } from '@/lib/publishing-fonts';
+import { resolveActiveSplitRequest } from '@/lib/split-puzzle-document-by-chapters';
+import { isGenericPuzzleModuleType, normalizeGenericPuzzleSettings } from '@/lib/generic-puzzle-settings';
 
 const DIRECTION_OPTIONS: { value: Direction; label: string }[] = [
   { value: 'horizontal', label: '→' },
@@ -47,6 +49,11 @@ export function Sidebar() {
     cryptogramText,
     setCryptogramText,
     generatePuzzle,
+    documentPages,
+    activeDocumentPageId,
+    wordSearchSettings,
+    crosswordSettings,
+    genericPuzzleSettings,
   } = useApp();
 
   const [quoteCategory, setQuoteCategory] = useState<string>('all');
@@ -86,7 +93,39 @@ export function Sidebar() {
   };
 
   const handleGenerate = () => {
-    generatePuzzle();
+    const activePage = documentPages.find((page) => page.id === activeDocumentPageId);
+    const moduleType = activePage?.moduleType;
+    const supportsChapterSplit =
+      moduleType === 'word-search' ||
+      moduleType === 'crossword' ||
+      (moduleType ? isGenericPuzzleModuleType(moduleType) : false);
+    if (!activePage || !supportsChapterSplit) {
+      generatePuzzle();
+      return;
+    }
+
+    const generic = isGenericPuzzleModuleType(moduleType)
+      ? normalizeGenericPuzzleSettings(genericPuzzleSettings, moduleType)
+      : null;
+    const numberOfPuzzles =
+      moduleType === 'word-search'
+        ? wordSearchSettings.core.numberOfPuzzles
+        : moduleType === 'crossword'
+          ? crosswordSettings.core.numberOfPuzzles
+          : generic?.core.numberOfPuzzles ?? 1;
+    const puzzlesStartingNumber =
+      moduleType === 'word-search'
+        ? wordSearchSettings.core.puzzlesStartingNumber
+        : moduleType === 'crossword'
+          ? crosswordSettings.core.puzzlesStartingNumber
+          : generic?.core.puzzlesStartingNumber ?? 1;
+    const splitIntoChapters = resolveActiveSplitRequest({
+      documents: documentPages,
+      numberOfPuzzles,
+      puzzlesStartingNumber,
+      alreadySplit: typeof (activePage.settings as { chapterIndex?: number }).chapterIndex === 'number',
+    });
+    generatePuzzle(splitIntoChapters ? { splitIntoChapters } : undefined);
   };
 
   return (

@@ -3,7 +3,7 @@
  * Shared by preview (page map) and export (PDF/PPT compiler).
  */
 
-import { getDefaultWordSearchSettings } from './puzzles/types';
+import { getDefaultWordSearchSettings, normalizeAnswersPerPage } from './puzzles/types';
 import type {
   WordSearchPuzzle,
   WordSearchSettings,
@@ -570,6 +570,39 @@ export function compileBook(
   const pendingMurdokuSolutions: PendingMurdokuSolutionPage[] = [];
   const tocSources: TocSourceEntry[] = [];
 
+  const mergeSolutionGroupsAcrossDocuments = <T extends { puzzles: unknown[] }>(
+    groups: T[],
+    chunkSize: number
+  ): T[] => {
+    const merged: T[] = [];
+    let current: T | null = null;
+    let currentCount = 0;
+
+    for (const group of groups) {
+      const nextCount = currentCount + group.puzzles.length;
+      if (current && nextCount > chunkSize) {
+        merged.push(current);
+        current = null;
+        currentCount = 0;
+      }
+      if (!current) {
+        current = { ...group, puzzles: [] } as T;
+        currentCount = 0;
+      }
+      current.puzzles.push(...group.puzzles);
+      currentCount += group.puzzles.length;
+      if (currentCount >= chunkSize) {
+        merged.push(current);
+        current = null;
+        currentCount = 0;
+      }
+    }
+    if (current && current.puzzles.length > 0) {
+      merged.push(current);
+    }
+    return merged;
+  };
+
   for (const doc of documents) {
     const baseMeta = {
       sourceDocumentId: doc.id,
@@ -668,15 +701,17 @@ export function compileBook(
       }
 
       if (includeSolutions) {
-        const chunkSize = cw.bookCanvas.answersPerPage || 1;
+        const chunkSize = normalizeAnswersPerPage(cw.bookCanvas.answersPerPage);
+        const docSolutionGroups: PendingCrosswordSolutionPage[] = [];
         for (let i = 0; i < docCrosswords.length; i += chunkSize) {
-          pendingCrosswordSolutions.push({
+          docSolutionGroups.push({
             kind: 'crossword-solution',
             ...baseMeta,
             puzzles: docCrosswords.slice(i, i + chunkSize),
             crosswordSettings: cwForIndex(i),
           });
         }
+        pendingCrosswordSolutions.push(...mergeSolutionGroupsAcrossDocuments(docSolutionGroups, chunkSize));
       }
       continue;
     }
@@ -744,14 +779,16 @@ export function compileBook(
 
       if (includeSolutions) {
         const chunkSize = md.bookCanvas.answersPerPage || 1;
+        const docSolutionGroups: PendingMurdokuSolutionPage[] = [];
         for (let i = 0; i < docMurdoku.length; i += chunkSize) {
-          pendingMurdokuSolutions.push({
+          docSolutionGroups.push({
             kind: 'murdoku-solution',
             ...baseMeta,
             puzzles: docMurdoku.slice(i, i + chunkSize),
             murdokuSettings: md,
           });
         }
+        pendingMurdokuSolutions.push(...mergeSolutionGroupsAcrossDocuments(docSolutionGroups, chunkSize));
       }
       continue;
     }
@@ -832,6 +869,7 @@ export function compileBook(
       }
 
       if (includeSolutions) {
+        const docSolutionGroups: PendingGenericSolutionPage[] = [];
         if (moduleType === 'trivia') {
           const answersPerPage = computeTriviaSolutionsPerPage({
             answersPerColumn: gp.core.solutionsPerPage || 20,
@@ -843,7 +881,7 @@ export function compileBook(
           );
           for (let pageIdx = 0; pageIdx < solutionPages.length; pageIdx++) {
             const games = solutionPages[pageIdx];
-            pendingGenericSolutions.push({
+            docSolutionGroups.push({
               kind: 'generic-puzzle-solution',
               ...baseMeta,
               puzzleType: moduleType,
@@ -854,7 +892,7 @@ export function compileBook(
         } else {
           const chunkSize = gp.core.solutionsPerPage || 1;
           for (let i = 0; i < docPuzzles.length; i += chunkSize) {
-            pendingGenericSolutions.push({
+            docSolutionGroups.push({
               kind: 'generic-puzzle-solution',
               ...baseMeta,
               puzzleType: moduleType,
@@ -863,6 +901,10 @@ export function compileBook(
             });
           }
         }
+        const chunkSize = moduleType === 'trivia'
+          ? Math.max(1, gp.core.solutionsPerPage || 1)
+          : gp.core.solutionsPerPage || 1;
+        pendingGenericSolutions.push(...mergeSolutionGroupsAcrossDocuments(docSolutionGroups, chunkSize));
       }
       continue;
     }
@@ -941,15 +983,17 @@ export function compileBook(
     }
 
     if (includeSolutions && docPuzzles.length > 0) {
-      const chunkSize = ws.bookCanvas.answersPerPage || 1;
+      const chunkSize = normalizeAnswersPerPage(ws.bookCanvas.answersPerPage);
+      const docSolutionGroups: PendingSolutionPage[] = [];
       for (let i = 0; i < docPuzzles.length; i += chunkSize) {
-        pendingSolutions.push({
+        docSolutionGroups.push({
           kind: 'solution',
           ...baseMeta,
           puzzles: docPuzzles.slice(i, i + chunkSize),
           wordSearchSettings: ws,
         });
       }
+      pendingSolutions.push(...mergeSolutionGroupsAcrossDocuments(docSolutionGroups, chunkSize));
     }
   }
 

@@ -23,11 +23,8 @@ import {
   normalizeHeaderAssemblySettings,
   type HeaderAssemblySettings,
 } from '@/lib/header-assembly/types';
-import { HeaderAssemblyEditor } from '@/components/header/HeaderAssemblyEditor';
-import { PageNumberShapeEditor } from '@/components/page-number/PageNumberShapeEditor';
 import { normalizePageNumberSettings } from '@/lib/page-number/settings';
-import { TRIM_SIZE_PRESETS, type TrimSizePresetId } from '@/lib/trim-size-layout';
-import type { PageNumberSettings } from '@/lib/puzzles/types';
+import { normalizeAnswersPerPage, type PageNumberSettings } from '@/lib/puzzles/types';
 import { useDebouncedCallback } from '@/hooks/useDebouncedCallback';
 import { usePersistedState } from '@/hooks/usePersistedState';
 import { useOptionalAppBusy } from '@/lib/app-busy-context';
@@ -35,8 +32,8 @@ import { SETTINGS_TAB_STORAGE_KEY, SETTINGS_PANEL_STORAGE_KEY, SETTINGS_SIDEBAR_
 import { computeWordSearchGenerationFingerprint } from '@/lib/generation-fingerprint';
 import { getEditedBatchIndicesForDocument } from '@/lib/canvas-edit-session';
 import { CanvasApplyToAllConfirmDialog } from '@/components/CanvasApplyToAllConfirmDialog';
-import { ChapterPagesBatchPanel } from '@/components/ChapterPagesBatchPanel';
 import { DivideListsIntoChaptersControl } from '@/components/DivideListsIntoChaptersControl';
+import { CrosswordSidebar } from '@/components/CrosswordSidebar';
 
 import {
   computeWordSearchAutoFit,
@@ -56,6 +53,11 @@ import {
   CrosswordTitlesSettingsPanel,
 } from '@/components/CrosswordDocumentPanels';
 import {
+  LayoutBookPanel,
+  LayoutColorsPanel,
+  LayoutChaptersPanel,
+} from '@/components/SharedLayoutPanels';
+import {
   TriviaPuzzleSettingsPanel,
   TriviaWordsSettingsPanel,
 } from '@/components/TriviaDocumentPanels';
@@ -74,6 +76,10 @@ import {
   parseCrosswordLines,
   getDefaultCrosswordSettings,
 } from '@/lib/crossword-settings';
+import {
+  isGenericPuzzleModuleType,
+  type GenericPuzzleModuleType,
+} from '@/lib/generic-puzzle-settings';
 import type { GeneratePuzzleOptions } from '@/lib/app-context';
 import {
   documentLooksAlreadyChapterSplit,
@@ -470,6 +476,17 @@ function WordListTextarea({
 }
 
 export function WordSearchSidebar() {
+  const { activeDocumentPage } = useApp();
+  // Crossword gets the dedicated lighter sidebar. The unified WordSearchSidebar
+  // tree was measured at 150–260ms per commit; keeping both mounted caused
+  // WS↔Crossword switches to stall on the main thread.
+  if (activeDocumentPage?.moduleType === 'crossword') {
+    return <CrosswordSidebar />;
+  }
+  return <WordSearchSidebarMain />;
+}
+
+function WordSearchSidebarMain() {
 
   const {
     wordSearchSettings,
@@ -482,6 +499,7 @@ export function WordSearchSidebar() {
     batchPuzzles,
     activeDocumentPageId,
     puzzleGenerationVersion,
+
     puzzleGridScale,
     pageOverrides,
     pagePuzzleGridScales,
@@ -525,22 +543,13 @@ export function WordSearchSidebar() {
   const moduleIsCrossword = activeDocumentPage?.moduleType === 'crossword';
   const moduleIsMurdoku = activeDocumentPage?.moduleType === 'murdoku';
   const moduleIsTrivia = activeDocumentPage?.moduleType === 'trivia';
-  const moduleIsGeneric =
-    activeDocumentPage?.moduleType === 'sudoku' ||
-    activeDocumentPage?.moduleType === 'maze' ||
-    activeDocumentPage?.moduleType === 'cryptogram' ||
-    activeDocumentPage?.moduleType === 'word-scramble' ||
-    activeDocumentPage?.moduleType === 'trivia';
-  const genericModuleType =
-    activeDocumentPage?.moduleType === 'maze'
-      ? ('maze' as const)
-      : activeDocumentPage?.moduleType === 'cryptogram'
-        ? ('cryptogram' as const)
-        : activeDocumentPage?.moduleType === 'word-scramble'
-          ? ('word-scramble' as const)
-          : activeDocumentPage?.moduleType === 'trivia'
-            ? ('trivia' as const)
-            : ('sudoku' as const);
+  const moduleIsGeneric = Boolean(
+    activeDocumentPage && isGenericPuzzleModuleType(activeDocumentPage.moduleType)
+  );
+  const genericModuleType: GenericPuzzleModuleType =
+    activeDocumentPage && isGenericPuzzleModuleType(activeDocumentPage.moduleType)
+      ? activeDocumentPage.moduleType
+      : 'sudoku';
   const moduleHasPuzzleDocumentTabs = Boolean(
     activeDocumentPage && isPuzzleModuleType(activeDocumentPage.moduleType)
   );
@@ -571,6 +580,7 @@ export function WordSearchSidebar() {
     'book',
     { debounceMs: 300 }
   );
+  const isSettingsTabActive = (tab: string) => activeTab === tab;
   const [sidebarWidth, setSidebarWidth] = usePersistedState<number>(
     SETTINGS_SIDEBAR_WIDTH_KEY,
     440,
@@ -734,24 +744,30 @@ export function WordSearchSidebar() {
     }
   };
 
-  // Handle generated words - update the word list when words are received from extension
+  // Handle generated words - update the word list when words are received from extension.
+  // Do not depend on titleWords: spreading it in setState re-fired this effect forever
+  // (Maximum update depth exceeded on the puzzle settings Select).
   React.useEffect(() => {
-    if (generatedWordsData && generatedWordsData.words) {
-      // Extract all words from the structured response
-      const allWords: string[] = [];
-      generatedWordsData.words.forEach((item: any) => {
-        if (item.words && Array.isArray(item.words)) {
-          allWords.push(...item.words);
-        }
-      });
-      
-      if (allWords.length > 0) {
-        const words = normalizeGeneratedWordList(allWords);
-        console.log('[WordSearchSidebar] Updated word list with', words.length, 'words');
-        setTitleWords({ ...titleWords, words });
+    if (!generatedWordsData?.words) return;
+    const allWords: string[] = [];
+    generatedWordsData.words.forEach((item: { words?: string[] }) => {
+      if (item.words && Array.isArray(item.words)) {
+        allWords.push(...item.words);
       }
-    }
-  }, [generatedWordsData, titleWords, setTitleWords]);
+    });
+    if (allWords.length === 0) return;
+    const words = normalizeGeneratedWordList(allWords);
+    console.log('[WordSearchSidebar] Updated word list with', words.length, 'words');
+    setTitleWords((prev) => {
+      if (
+        prev.words.length === words.length &&
+        prev.words.every((word, index) => word === words[index])
+      ) {
+        return prev;
+      }
+      return { ...prev, words };
+    });
+  }, [generatedWordsData, setTitleWords]);
 
   const { bookCanvas, core, typography, wordList, colors } = wordSearchSettings;
 
@@ -2306,7 +2322,10 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
         ) : null}
 
         {/* ==================== PUZZLE SETTINGS ==================== */}
-        <TabsContent value="puzzle" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')}>
+        <TabsContent value="puzzle" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')} data-gp-tab-gate="puzzle">
+          {isSettingsTabActive('puzzle') ? (
+            <>
+
           {moduleIsCrossword ? (
             <CrosswordPuzzleSettingsPanel onSave={handleSave} />
           ) : moduleIsMurdoku ? (
@@ -2364,6 +2383,27 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                 numberOfPuzzles={core.numberOfPuzzles}
                 puzzlesStartingNumber={core.puzzlesStartingNumber}
               />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">Solutions Per Page</Label>
+              <Select
+                value={String(normalizeAnswersPerPage(bookCanvas.answersPerPage))}
+                onValueChange={(value) => {
+                  const next = normalizeAnswersPerPage(value);
+                  if (next === normalizeAnswersPerPage(bookCanvas.answersPerPage)) return;
+                  updateBookCanvas({ answersPerPage: next });
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="1">1 Solution</SelectItem>
+                  <SelectItem value="2">2 Solutions</SelectItem>
+                  <SelectItem value="4">4 Solutions</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Grid Size */}
@@ -2944,10 +2984,16 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
               Puzzle settings for this document type will use the same Puzzle / Words / Titles tabs.
             </p>
           )}
+        
+            </>
+          ) : null}
         </TabsContent>
 
         {/* ==================== DESIGN SETTINGS ==================== */}
-        <TabsContent value="design" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')}>
+        <TabsContent value="design" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')} data-gp-tab-gate="design">
+          {isSettingsTabActive('design') ? (
+            <>
+
           {moduleIsCrossword ? (
             <CrosswordTitlesSettingsPanel onSave={handleSave} />
           ) : moduleIsMurdoku ? (
@@ -3239,6 +3285,9 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
           ) : (
             <p className="text-sm text-slate-500">Title settings for this document type are coming soon.</p>
           )}
+        
+            </>
+          ) : null}
         </TabsContent>
 
         {/* ==================== WORD LIST SETTINGS ==================== */}
@@ -3252,7 +3301,10 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
               e.stopPropagation();
             }
           }}
-        >
+         data-gp-tab-gate="words">
+          {isSettingsTabActive('words') ? (
+            <>
+
           {moduleIsCrossword ? (
             <CrosswordWordsSettingsPanel onSave={handleSave} />
           ) : moduleIsMurdoku ? (
@@ -3267,7 +3319,23 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
                   ? 'Maze'
                   : genericModuleType === 'cryptogram'
                     ? 'Cryptogram'
-                    : 'Word Scramble'}{' '}
+                    : genericModuleType === 'word-scramble'
+                      ? 'Word Scramble'
+                      : genericModuleType === 'binairo'
+                        ? 'Binairo'
+                        : genericModuleType === 'kakuro'
+                          ? 'Kakuro'
+                          : genericModuleType === 'codewords'
+                            ? 'Codewords'
+                            : genericModuleType === 'math-maze'
+                              ? 'Math Maze'
+                              : genericModuleType === 'word-fill'
+                                ? 'Word Fill-In'
+                                : genericModuleType === 'number-fill'
+                                  ? 'Number Fill-In'
+                                : genericModuleType === 'snake'
+                                  ? 'Word Snake'
+                                  : 'Trivia'}{' '}
               puzzles are generated from the Puzzle tab settings
               {genericModuleType === 'cryptogram' || genericModuleType === 'word-scramble'
                 ? ' (phrases / words live there too)'
@@ -3617,396 +3685,40 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
           ) : (
             <p className="text-sm text-slate-500">Word list settings for this document type are coming soon.</p>
           )}
+        
+            </>
+          ) : null}
         </TabsContent>
 
         <TabsContent
           value="elements"
           style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
           className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')}
-        >
+         data-gp-tab-gate="elements">
+          {isSettingsTabActive('elements') ? (
+            <>
+
           {moduleIsMurdoku ? <MurdokuElementsSettingsPanel onSave={handleSave} /> : null}
+        
+            </>
+          ) : null}
         </TabsContent>
 
         {/* ==================== COLOR SETTINGS ==================== */}
-        <TabsContent value="colors" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')}>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
-                  Layout · Entire book
-                </p>
-                <h3 className="font-semibold text-gray-900">Colors, Frame, Header &amp; Page #</h3>
-              </div>
-              <Button variant="outline" size="sm" onClick={handleSave}>
-                <Save className="w-4 h-4 mr-2" />Save
-              </Button>
-            </div>
-
-            {/* Global Page Frame (puzzle + solution pages) */}
-            <div className="space-y-3">
-              <Label className="text-sm font-medium">Page Number</Label>
-              <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    id="page-number-enabled"
-                    checked={pageNumber.enabled}
-                    onCheckedChange={(checked) => updatePageNumber({ enabled: !!checked })}
-                  />
-                  <Label htmlFor="page-number-enabled" className="text-sm font-medium cursor-pointer select-none">
-                    Show page numbers on all pages
-                  </Label>
-                </div>
-
-                {pageNumber.enabled && (
-                  <div className="space-y-3">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <Label className="text-xs text-gray-500">Start numbering from</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          value={pageNumber.startNumberingFrom}
-                          onChange={(e) =>
-                            updatePageNumber({ startNumberingFrom: Number(e.target.value) || 1 })
-                          }
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs text-gray-500">Start at page</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          value={pageNumber.startAtPage}
-                          onChange={(e) =>
-                            updatePageNumber({ startAtPage: Number(e.target.value) || 1 })
-                          }
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-1">
-                      <Label className="text-xs text-gray-500">Position</Label>
-                      <Select
-                        value={pageNumber.position}
-                        onValueChange={(value) =>
-                          updatePageNumber({ position: value as PageNumberSettings['position'] })
-                        }
-                      >
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="bottom-center">Bottom centre</SelectItem>
-                          <SelectItem value="bottom-left">Bottom left</SelectItem>
-                          <SelectItem value="bottom-right">Bottom right</SelectItem>
-                          <SelectItem value="alternating">Alternating (even left, odd right)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <SliderField
-                        label="Bottom offset"
-                        value={pageNumber.bottomOffsetPx}
-                        onValueChange={(v) => updatePageNumber({ bottomOffsetPx: v })}
-                        min={0}
-                        max={80}
-                        step={1}
-                        format="px"
-                      />
-                      <SliderField
-                        label="Side offset"
-                        value={pageNumber.sideOffsetPx}
-                        onValueChange={(v) => updatePageNumber({ sideOffsetPx: v })}
-                        min={0}
-                        max={80}
-                        step={1}
-                        format="px"
-                        disabled={pageNumber.position === 'bottom-center'}
-                      />
-                    </div>
-
-                    <PageNumberShapeEditor
-                      shape={pageNumber.shape}
-                      textColor={pageNumber.textColor}
-                      fontFamily={pageNumber.fontFamily}
-                      fontSize={pageNumber.fontSize}
-                      fontOptions={PUBLISHING_FONTS}
-                      onShapeChange={(patch) =>
-                        updatePageNumber({ shape: { ...pageNumber.shape, ...patch } })
-                      }
-                      onTextColorChange={(v) => updatePageNumber({ textColor: v })}
-                      onFontFamilyChange={(v) => updatePageNumber({ fontFamily: v })}
-                      onFontSizeChange={(v) => updatePageNumber({ fontSize: v })}
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Global Page Frame (puzzle + solution pages) */}
-            <div className="space-y-3">
-              <Label className="text-sm font-medium">Page Frame</Label>
-              <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    id="page-frame-enabled"
-                    checked={pageFrame.enabled}
-                    onCheckedChange={(checked) => updatePageFrameSettings({ enabled: !!checked })}
-                  />
-                  <Label htmlFor="page-frame-enabled" className="text-xs font-medium cursor-pointer select-none">
-                    Enable page container frame
-                  </Label>
-                </div>
-                {pageFrame.enabled && (
-                  <>
-                    <SliderField
-                      label="Frame Margin"
-                      value={pageFrame.marginSizeIn}
-                      onValueChange={(v) => updatePageFrameSettings({ marginSizeIn: v })}
-                      min={0}
-                      max={1}
-                      step={0.0625}
-                      format="inches"
-                    />
-                    <SliderField
-                      label="Corner Radius"
-                      value={pageFrame.cornerRadiusPx}
-                      onValueChange={(v) => updatePageFrameSettings({ cornerRadiusPx: v })}
-                      min={0}
-                      max={40}
-                      step={1}
-                      format="px"
-                    />
-                    <SliderField
-                      label="Stroke Thickness"
-                      value={pageFrame.strokeThicknessPx}
-                      onValueChange={(v) => updatePageFrameSettings({ strokeThicknessPx: v })}
-                      min={0}
-                      max={10}
-                      step={1}
-                      format="px"
-                    />
-                    <ColorInput
-                      label="Frame Border Color"
-                      value={pageFrame.borderColor}
-                      onChange={(v) => updatePageFrameSettings({ borderColor: v })}
-                    />
-                    <p className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight">
-                      Outer boundary around the full puzzle/solution page. Grid border is configured separately under Puzzle â†’ Grid Options.
-                    </p>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Puzzle Page Colors */}
-            <div className="space-y-3">
-              <Label className="text-sm font-medium">Puzzle Page</Label>
-              <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
-                <ColorInput label="Background" value={colors.puzzlePage.backgroundColor} onChange={(v) => updatePuzzlePageColors({ backgroundColor: v })} />
-                <BackgroundImageControl
-                  label="Puzzle Page"
-                  image={colors.puzzlePage.backgroundImage}
-                  opacity={colors.puzzlePage.backgroundImageOpacity}
-                  fit={colors.puzzlePage.backgroundImageFit}
-                  onImageChange={(base64) => updatePuzzlePageColors({ backgroundImage: base64 })}
-                  onOpacityChange={(v) => updatePuzzlePageColors({ backgroundImageOpacity: v })}
-                  onFitChange={(v) => updatePuzzlePageColors({ backgroundImageFit: v })}
-                  onRemove={() => updatePuzzlePageColors({ backgroundImage: undefined })}
-                />
-
-                <div className="space-y-3 pt-2 border-t border-gray-200 dark:border-slate-700">
-                  <Label className="text-sm font-medium">Header Assembly</Label>
-                  <div className="space-y-3 p-3 bg-gray-50 rounded-lg dark:bg-slate-900/40">
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        id="header-assembly-enabled"
-                        checked={headerAssembly.enabled}
-                        onCheckedChange={(checked) => updateHeaderAssembly({ enabled: !!checked })}
-                      />
-                      <Label htmlFor="header-assembly-enabled" className="text-xs font-medium cursor-pointer select-none">
-                        Enable modular header (mix &amp; match shapes)
-                      </Label>
-                    </div>
-                    {headerAssembly.enabled ? (
-                      <HeaderAssemblyEditor
-                        value={headerAssembly}
-                        onChange={updateHeaderAssembly}
-                        titleTextColor={colors.puzzlePage.titleColor || '#1f2937'}
-                        subtitleTextColor={colors.puzzlePage.subtitleColor || '#6b7280'}
-                        onTitleTextColorChange={(v) => updatePuzzlePageColors({ titleColor: v })}
-                        onSubtitleTextColorChange={(v) => updatePuzzlePageColors({ subtitleColor: v })}
-                      />
-                    ) : (
-                      <div className="space-y-2">
-                        <Label className="text-xs text-gray-500">Colors</Label>
-                <ColorInput label="Title" value={colors.puzzlePage.titleColor} onChange={(v) => updatePuzzlePageColors({ titleColor: v })} />
-                <ColorInput label="Subtitle" value={colors.puzzlePage.subtitleColor} onChange={(v) => updatePuzzlePageColors({ subtitleColor: v })} disabled={!typography.includeFunFacts} />
-                      </div>
-                    )}
-                    <p className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight">
-                      {headerAssembly.enabled
-                        ? 'Title and subtitle text colors are under each element’s style (with Fill / Border).'
-                        : 'Title and subtitle colors live here. Enable Header Assembly to edit them with each shape’s Fill / Border.'}
-                      {' '}Header sits inside the page frame margin + 0.25&quot; inner pad.
-                    </p>
-                  </div>
-                </div>
-
-                <ColorInput label="Box" value={colors.puzzlePage.boxColor} onChange={(v) => updatePuzzlePageColors({ boxColor: v })} />
-                <ColorInput label="Puzzle Letters" value={colors.puzzlePage.puzzleColor} onChange={(v) => updatePuzzlePageColors({ puzzleColor: v })} />
-                <ColorInput label="Word List" value={colors.puzzlePage.wordListColor} onChange={(v) => updatePuzzlePageColors({ wordListColor: v })} />
-              </div>
-            </div>
-
-            {/* Answer Page Colors */}
-            <div className="space-y-3">
-              <Label className="text-sm font-medium">Answer Page</Label>
-              <div className="space-y-3 p-3 bg-gray-50 rounded-lg">
-                <ColorInput label="Background" value={colors.answerPage.backgroundColor} onChange={(v) => updateAnswerPageColors({ backgroundColor: v })} />
-                <BackgroundImageControl
-                  label="Answer Page"
-                  image={colors.answerPage.backgroundImage}
-                  opacity={colors.answerPage.backgroundImageOpacity}
-                  fit={colors.answerPage.backgroundImageFit}
-                  onImageChange={(base64) => updateAnswerPageColors({ backgroundImage: base64 })}
-                  onOpacityChange={(v) => updateAnswerPageColors({ backgroundImageOpacity: v })}
-                  onFitChange={(v) => updateAnswerPageColors({ backgroundImageFit: v })}
-                  onRemove={() => updateAnswerPageColors({ backgroundImage: undefined })}
-                />
-                <ColorInput label="Title" value={colors.answerPage.titleColor} onChange={(v) => updateAnswerPageColors({ titleColor: v })} />
-                <ColorInput label="Box" value={colors.answerPage.boxColor} onChange={(v) => updateAnswerPageColors({ boxColor: v })} />
-              </div>
-            </div>
-
-            <Button variant="outline" onClick={() => {
-              updateWordSearchSettings(applyPageFrameSettingsPatch(wordSearchSettings, {
-                enabled: true,
-                marginSizeIn: 0.56,
-                cornerRadiusPx: 4,
-                strokeThicknessPx: 2,
-                borderColor: '#1f2937',
-              }));
-              updateColors({
-              puzzlePage: { backgroundColor: '#ffffff', titleColor: '#1f2937', subtitleColor: '#6b7280', boxColor: '#1f2937', puzzleColor: '#1f2937', puzzleLetterStrokeColor: '#000000', puzzleLetterStrokeThickness: 0, wordListTitleColor: '#374151', wordListColor: '#4b5563', backgroundImage: undefined, backgroundImageOpacity: 100, backgroundImageFit: 'cover', backgroundImageFrameEnabled: true, backgroundImageFrameMargin: 0.56 },
-              answerPage: { backgroundColor: '#ffffff', titleColor: '#1f2937', boxColor: '#1f2937', lettersInSolutionColor: '#22c55e', lettersNotInSolutionColor: '#d1d5db', solutionStrokeThickness: 12, solutionStrokePadding: 2, solutionFrameColor: '#22c55e', solutionHighlightStrokeColor: '#000000', solutionHighlightStrokeThickness: 0, solutionFrameStyle: 'rounded', solutionFrameRadius: 6, solutionHighlightAlpha: 30, answerTitlePrefix: 'Solution', answerTitleFontFamily: 'Arial', answerTitleFontSize: 20, answerTitleAlignment: 'center', showAnswerNumber: true, backgroundImage: undefined, backgroundImageOpacity: 100, backgroundImageFit: 'cover', backgroundImageFrameEnabled: true, backgroundImageFrameMargin: 0.56 }
-            });
-            }} className="w-full hover:bg-gradient-to-r hover:from-gray-100 hover:to-gray-200 dark:hover:from-slate-700 dark:hover:to-slate-600 transition-all duration-200 border-gray-300 dark:border-slate-600">
-              Reset Colors
-            </Button>
-          </div>
+        <TabsContent value="colors" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')} data-gp-tab-gate="colors">
+          {isSettingsTabActive('colors') ? (
+            <LayoutColorsPanel onSave={handleSave} />
+          ) : null}
         </TabsContent>
 
         {/* ==================== BOOK SETTINGS ==================== */}
-        <TabsContent value="book" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')}>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
-                  Layout · Entire book
-                </p>
-                <h3 className="font-semibold text-gray-900">Trim &amp; Page Size</h3>
-              </div>
-              <Button variant="outline" size="sm" onClick={handleSave}>
-                <Save className="w-4 h-4 mr-2" />Save
-              </Button>
-            </div>
-
-            {/* Measurement Units */}
-            <div className="space-y-1">
-              <Label className="text-sm font-medium">Measurement Units</Label>
-              <Select value={bookCanvas.measurementUnits || 'INCHES'} onValueChange={(value) => updateBookCanvas({ measurementUnits: value as any })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="INCHES">Inches</SelectItem>
-                  <SelectItem value="CENTIMETERS">Centimeters</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Custom Trim Size */}
-            <div className="space-y-2">
-              <div className="flex items-center space-x-2">
-                <Checkbox id="useCustomTrim" checked={bookCanvas.useCustomTrim} onCheckedChange={(checked) => updateBookCanvas({ useCustomTrim: checked === true })} />
-                <Label htmlFor="useCustomTrim" className="text-sm font-normal">Custom Trim Size</Label>
-              </div>
-
-              {bookCanvas.useCustomTrim && (
-                <div className="pl-6 grid grid-cols-2 gap-3">
-                  <div>
-                    <Label className="text-xs text-gray-500">Width ({bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'})</Label>
-                    <DecimalInput
-                      value={bookCanvas.measurementUnits === 'CENTIMETERS' ? (bookCanvas.customWidth || 0) * 2.54 : (bookCanvas.customWidth || 0)}
-                      onChange={(val) => {
-                        const inchesValue = bookCanvas.measurementUnits === 'CENTIMETERS' ? val / 2.54 : val;
-                        updateBookCanvas({ customWidth: inchesValue });
-                      }}
-                      onCommit={(val) => {
-                        const inchesValue = bookCanvas.measurementUnits === 'CENTIMETERS' ? val / 2.54 : val;
-                        applyCustomTrimLayout(inchesValue, bookCanvas.customHeight || 11);
-                      }}
-                      placeholder={bookCanvas.measurementUnits === 'CENTIMETERS' ? '21.59' : '8.5'}
-                      min={0}
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs text-gray-500">Length ({bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'})</Label>
-                    <DecimalInput
-                      value={bookCanvas.measurementUnits === 'CENTIMETERS' ? (bookCanvas.customHeight || 0) * 2.54 : (bookCanvas.customHeight || 0)}
-                      onChange={(val) => {
-                        const inchesValue = bookCanvas.measurementUnits === 'CENTIMETERS' ? val / 2.54 : val;
-                        updateBookCanvas({ customHeight: inchesValue });
-                      }}
-                      onCommit={(val) => {
-                        const inchesValue = bookCanvas.measurementUnits === 'CENTIMETERS' ? val / 2.54 : val;
-                        applyCustomTrimLayout(bookCanvas.customWidth || 8.5, inchesValue);
-                      }}
-                      placeholder={bookCanvas.measurementUnits === 'CENTIMETERS' ? '27.94' : '11'}
-                      min={0}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Trim Size */}
-            {!bookCanvas.useCustomTrim && (
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">Trim Size</Label>
-                <Select value={bookCanvas.trimSizePreset || ''} onValueChange={(value) => {
-                  if (value) {
-                    const dims = TRIM_SIZE_PRESETS[value as TrimSizePresetId];
-                    if (dims) {
-                      applyTrimSizeLayoutChange(
-                        { trimSizePreset: value as TrimSizePresetId, useCustomTrim: false },
-                        dims
-                      );
-                    }
-                  }
-                }}>
-                  <SelectTrigger><SelectValue placeholder="Select a trim size" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="5X8IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '12.7 x 20.32' : '5 x 8'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="5_25X8IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '13.34 x 20.32' : '5.25 x 8'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="5_5X8_5IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '13.97 x 21.59' : '5.5 x 8.5'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="6X9IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '15.24 x 22.86' : '6 x 9'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="5_06X7_81IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '12.85 x 19.84' : '5.06 x 7.81'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="6_14X9_21IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '15.6 x 23.39' : '6.14 x 9.21'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="6_69X9_61IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '16.99 x 24.4' : '6.69 x 9.61'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="7X10IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '17.78 x 25.4' : '7 x 10'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="7_44X9_69IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '18.9 x 24.61' : '7.44 x 9.69'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="7_5X9_25IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '19.05 x 23.5' : '7.5 x 9.25'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="8X10IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '20.32 x 25.4' : '8 x 10'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="8_5X11IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '21.59 x 27.94' : '8.5 x 11'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                    <SelectItem value="8_27X11_69IN">{bookCanvas.measurementUnits === 'CENTIMETERS' ? '21 x 29.7' : '8.27 x 11.69'} {bookCanvas.measurementUnits === 'CENTIMETERS' ? 'cm' : 'in'}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-          </div>
+        <TabsContent value="book" style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }} className={cn('flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2', (collapsed || canvasEditOpen) && 'hidden')} data-gp-tab-gate="book">
+          {isSettingsTabActive('book') ? (
+            <LayoutBookPanel onSave={handleSave} />
+          ) : null}
         </TabsContent>
 
-        {/* ==================== CHAPTER PAGES (Layout Â· All documents) ==================== */}
+        {/* ==================== CHAPTER PAGES (Layout · All documents) ==================== */}
         <TabsContent
           value="pages"
           style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
@@ -4014,21 +3726,10 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
             'flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2',
             (collapsed || canvasEditOpen) && 'hidden'
           )}
-        >
-          <div className="space-y-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
-                  Layout · Entire book
-                </p>
-                <h3 className="font-semibold text-gray-900 dark:text-white">Chapter title</h3>
-              </div>
-              <Button variant="outline" size="sm" onClick={handleSave}>
-                <Save className="w-4 h-4 mr-2" />Save
-              </Button>
-            </div>
-            <ChapterPagesBatchPanel />
-          </div>
+         data-gp-tab-gate="pages">
+          {isSettingsTabActive('pages') ? (
+            <LayoutChaptersPanel onSave={handleSave} />
+          ) : null}
         </TabsContent>
 
         {!moduleHasPuzzleDocumentTabs && (
@@ -4040,7 +3741,10 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
             isFrontMatterEditor ? 'p-0 overflow-hidden' : 'p-4 space-y-4',
             (collapsed || canvasEditOpen) && 'hidden'
           )}
-        >
+         data-gp-tab-gate="page">
+          {isSettingsTabActive('page') ? (
+            <>
+
           {isTocPage && activeTextSettings && activeDocumentPage ? (
             <TocContextualControls
               pageName={activeDocumentPage.name}
@@ -4147,6 +3851,9 @@ ${examples.map((t, i) => `- ${t}`).join('\n')}`;
               </div>
             </>
           )}
+        
+            </>
+          ) : null}
         </TabsContent>
         )}
       </Tabs>

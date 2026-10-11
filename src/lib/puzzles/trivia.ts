@@ -3,6 +3,7 @@
  */
 
 import type { TriviaPuzzle } from './types';
+import { localeLowerCase, normalizePuzzleText } from '../unicode-text';
 
 export type TriviaLayoutFormat = 'single-column' | 'two-column' | 'compact';
 export type TriviaCheckboxStyle = 'circle' | 'square';
@@ -23,8 +24,9 @@ export function parseTriviaLines(text: string): string[] {
     .filter(Boolean);
 }
 
+/** NFC + locale-aware lowercase so "café" matches "café" however it was typed. */
 function normalizeAnswerKey(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+  return localeLowerCase(value.trim(), undefined).replace(/\s+/g, ' ');
 }
 
 function seededRandom(seed: number): () => number {
@@ -112,7 +114,7 @@ export function fitSuggestionsKeepingAnswer(
   seed: number
 ): string[] {
   const target = Math.max(2, targetCount);
-  const clean = suggestions.map((s) => s.trim()).filter(Boolean);
+  const clean = suggestions.map((s) => normalizePuzzleText(s).trim()).filter(Boolean);
   const answerIdx = resolveTriviaAnswerIndex(clean, answer);
   const answerText =
     (answerIdx >= 0 ? clean[answerIdx] : answer.trim()) || clean[0] || 'Answer';
@@ -144,7 +146,8 @@ export function buildTriviaQuestion(
   answer: string,
   options?: { targetSuggestionCount?: number; shuffleSeed?: number }
 ): TriviaQuestion {
-  const cleanAnswer = answer.trim();
+  // NFC before matching/saving so accented answers compare and persist intact.
+  const cleanAnswer = normalizePuzzleText(answer).trim();
   const target = options?.targetSuggestionCount;
   const fitted =
     typeof target === 'number' && target > 0
@@ -154,10 +157,10 @@ export function buildTriviaQuestion(
           target,
           options?.shuffleSeed ?? 1
         )
-      : suggestions.map((s) => s.trim()).filter(Boolean);
+      : suggestions.map((s) => normalizePuzzleText(s).trim()).filter(Boolean);
 
   return {
-    prompt: prompt.trim(),
+    prompt: normalizePuzzleText(prompt).trim(),
     suggestions: fitted,
     answer: cleanAnswer,
     answerIndex: resolveTriviaAnswerIndex(fitted, cleanAnswer),
@@ -210,6 +213,36 @@ export function resolveTriviaAnswerLabel(q: {
   const idx = q.answerIndex ?? -1;
   if (idx >= 0 && suggestions[idx]) return suggestions[idx];
   return (q.answer || '').trim();
+}
+
+/** Resolve the suggested-letter answer for a trivia question, e.g. A/B/C. */
+export function resolveTriviaAnswerLetter(q: {
+  answer?: string;
+  answerIndex?: number;
+  suggestions?: string[];
+}): string {
+  const suggestions = q.suggestions ?? [];
+  const idx = q.answerIndex ?? -1;
+  if (idx >= 0 && idx < suggestions.length) {
+    return String.fromCharCode(65 + idx);
+  }
+
+  const raw = (q.answer || '').trim();
+  if (!raw) return 'A';
+
+  const letter = raw.match(/^([A-Za-z])[.)]?$/);
+  if (letter) return letter[1].toUpperCase();
+
+  const key = normalizeAnswerKey(raw);
+  const matched = suggestions.findIndex((s) => normalizeAnswerKey(s) === key);
+  if (matched >= 0) return String.fromCharCode(65 + matched);
+
+  const partial = suggestions.findIndex(
+    (s) => normalizeAnswerKey(s).includes(key) || key.includes(normalizeAnswerKey(s))
+  );
+  if (partial >= 0) return String.fromCharCode(65 + partial);
+
+  return 'A';
 }
 
 export interface TriviaAnswerRow {
@@ -372,7 +405,9 @@ export function formatTriviaSolutionHeading(
         (typeof puzzle.puzzleIndexInDocument === 'number'
           ? puzzle.puzzleIndexInDocument
           : fallbackIndex);
-  return `Trivia #${Math.max(1, n)}`;
+  const title = (puzzle as { pageName?: string } | undefined)?.pageName?.trim();
+  if (title) return `${Math.max(1, n)}. ${title}`;
+  return `${Math.max(1, n)}. Trivia`;
 }
 
 /** Chunk flat question / suggestion / answer lines into page puzzles. */

@@ -31,6 +31,10 @@ import {
   processImageEffect,
 } from '@/lib/text-page-image-effects';
 import { captureTextBlockSelection, notifyTextBlockSelectionChange, readRichTextFromElement } from '@/lib/text-page-rich-text';
+import {
+  PageVariableOverlay,
+  type PageVariableEditorState,
+} from '@/components/PageVariableOverlay';
 import './canvas-contextual-controls.css';
 
 const MIN_WIDTH_PERCENT = 6;
@@ -1079,6 +1083,7 @@ export function TextPageBlockCanvas({
   onSettingsChange,
   onCanvasBackgroundClick,
   onDeleteBlock,
+  pageVariableEditor = null,
 }: {
   page: DocumentPage;
   settings: TextModuleSettings;
@@ -1100,6 +1105,7 @@ export function TextPageBlockCanvas({
   ) => void;
   onCanvasBackgroundClick?: () => void;
   onDeleteBlock?: (blockId: string) => void;
+  pageVariableEditor?: PageVariableEditorState | null;
 }) {
   const blocks = getMutableTextPageBlocks(settings, page.name, wordSearchSettings);
   const isEditing = textEditEnabled && !!onSettingsChange;
@@ -1250,6 +1256,19 @@ export function TextPageBlockCanvas({
           />
         ))}
       </div>
+      {pageVariableEditor ? (
+        <PageVariableOverlay
+          editor={pageVariableEditor}
+          context={{
+            contentIndex: 0,
+            bookPageNumber: 1,
+            puzzleNumber: 1,
+            pageWidthPt,
+            pageHeightPt,
+            ptToPx,
+          }}
+        />
+      ) : null}
     </div>
   );
 }

@@ -85,22 +85,5 @@ export async function drawPageNumberOnPdfPage(
     pageNumberSettings
   );
   if (!layout) return;
-
-  const snapshot = await renderPageNumberToDataUrl(layout);
-  if (snapshot) {
-    try {
-      const image = await pdfDoc.embedPng(dataUrlToUint8Array(snapshot.dataUrl));
-      page.drawImage(image, {
-        x: layout.leftPt,
-        y: pageHeightPt - layout.topPt - layout.heightPt,
-        width: layout.widthPt,
-        height: layout.heightPt,
-      });
-      return;
-    } catch (error) {
-      console.warn('[page-number-pdf] Canvas snapshot embed failed, using vector fallback:', error);
-    }
-  }
-
   drawPageNumberVectorFallback(page, pageHeightPt, layout, font, getColor);
 }

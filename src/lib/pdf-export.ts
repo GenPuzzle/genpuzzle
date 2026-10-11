@@ -24,6 +24,7 @@ import {
   TitleWordsSettings,
   CrosswordPuzzle,
   DEFAULT_TITLE_START_AT,
+  normalizeAnswersPerPage,
 } from './puzzles/types';
 import {
   isWordSearchShapeCell,
@@ -33,9 +34,22 @@ import {
 import {
   captureCompiledPageSnapshot,
   isGenericOrCrosswordPageKind,
-  isNativelyDrawnPageKind,
 } from './compiled-page-snapshot';
+import { assertNativePainter, exportRoute } from './resolved-layout/export-routes';
 import { addNativeGenericOrCrosswordPdfPage } from './generic-puzzle-pdf-draw';
+import {
+  drawPageVariablesOnPdfPage,
+  pageVariablesFromDocument,
+  resolvePageVariableContext,
+  resolveContextForDocumentPages,
+} from './page-variables-draw';
+import { buildWordListElements } from './resolved-layout/book-elements';
+import { renderResolvedPdf } from './resolved-layout/render-pdf';
+import {
+  buildWordSearchChromeElements,
+  buildWordSearchGridElements,
+  wordSearchSolutionStyle,
+} from './resolved-layout/word-search-elements';
 import type { CrosswordSettings } from './crossword-settings';
 import { calculateLayout, cssPxToPoints, formatWords, getSolutionGridFontSize } from './puzzle-layout';
 import { parseRgba, getAlpha01 } from './color-utils';
@@ -80,6 +94,7 @@ import {
 import {
   buildPageFrameRoundedRectSvgPath,
   clampCornerRadius,
+  getPageFrameStrokeGeometry,
   pageFrameCornerRadiusPt,
 } from './page-frame-geometry';
 import { layoutSolutionBlockTitlePt } from './header-assembly/fit-title';
@@ -542,20 +557,12 @@ function drawPageContainerFrame(
   frame: PageFrameSettings
 ): void {
   if (!frame.enabled) return;
-
-  const marginPt = frame.marginSizeIn * 72;
-  const strokePt = cssPxToPoints(frame.strokeThicknessPx);
-  const halfStroke = strokePt / 2;
-  // Inset so outer edge of centered stroke matches CSS border-box (canvas).
-  const x = marginPt + halfStroke;
-  const y = marginPt + halfStroke;
-  const width = pageWidth - marginPt * 2 - strokePt;
-  const height = pageHeight - marginPt * 2 - strokePt;
+  const geometry = getPageFrameStrokeGeometry(pageWidth, pageHeight, frame);
+  const { xPt: x, yPt: y, widthPt: width, heightPt: height, strokePt } = geometry;
   if (width <= 0 || height <= 0) return;
 
-  const radiusPt = pageFrameCornerRadiusPt(frame.cornerRadiusPx);
   const strokeColor = safeColor(frame.borderColor, '#1f2937');
-  const r = clampCornerRadius(radiusPt, width, height);
+  const r = clampCornerRadius(geometry.radiusPt, width, height);
 
   if (r >= 0.1) {
     const path = buildPageFrameRoundedRectSvgPath(x, y, width, height, r);
@@ -1137,59 +1144,8 @@ async function drawWordSearchPuzzle(
       subtitleFont,
       noText
     );
-  } else if (!isGridOnlyPage && layout.title) {
-    const t = layout.title;
-    const textWidth = titleFont.widthOfTextAtSize(t.text, t.fontSizePt);
-    let titleX = pageMargin;
-    if (t.align === 'center') {
-      titleX = (pageWidth - textWidth) / 2;
-    } else if (t.align === 'right') {
-      titleX = pageWidth - pageMargin - textWidth;
-    }
-    try {
-      const includeBleed = !!(layout.page && layout.page.marginIn === 0.125);
-      const safetyMarginPt = getKDPSafetyMarginPt(includeBleed);
-      const minX = safetyMarginPt;
-      const maxX = Math.max(minX, pageWidth - safetyMarginPt - textWidth);
-      titleX = Math.min(Math.max(titleX, minX), maxX);
-    } catch (e) {
-      // ignore and keep computed titleX
-    }
-
-    const pdfTitleY = pageHeight - (t.topPt + t.fontSizePt);
-    if (!noText) {
-      page.drawText(t.text, {
-        x: titleX,
-        y: pdfTitleY,
-        size: t.fontSizePt,
-        font: titleFont,
-        color: safeColor(t.color, '#000000'),
-      });
-    }
-  }
-
-  if (!isGridOnlyPage && !layout.headerAssembly && layout.subtitle) {
-    const s = layout.subtitle;
-    const subtitleLineHeightPt = s.fontSizePt * 1.2;
-    const wrappedLines =
-      s.wrappedLines && s.wrappedLines.length > 0 ? s.wrappedLines : [s.text];
-
-    for (let i = 0; i < wrappedLines.length; i++) {
-      const line = wrappedLines[i];
-      const lineWidth = titleFont.widthOfTextAtSize(line, s.fontSizePt);
-      const lineX = s.leftPt + Math.max(0, (s.widthPt - lineWidth) / 2);
-      const pdfSubtitleY = pageHeight - (s.topPt + i * subtitleLineHeightPt + s.fontSizePt);
-
-      if (!noText) {
-        page.drawText(line, {
-          x: lineX,
-          y: pdfSubtitleY,
-          size: s.fontSizePt,
-          font: titleFont,
-          color: safeColor(s.color, '#666666'),
-        });
-      }
-    }
+  } else if (!isGridOnlyPage && !noText) {
+    renderResolvedPdf(page, pageHeight, buildWordSearchChromeElements(layout), () => titleFont);
   }
 
   const shouldDrawGridOnThisPage = showSolution || !settings.core.twoPagePuzzles || pagePart === 'grid';
@@ -1197,52 +1153,8 @@ async function drawWordSearchPuzzle(
   // ===== BLOCK 2: PUZZLE GRID RENDERING =====
   if (!shouldDrawGridOnThisPage) {
     const wl = layout.wordList;
-    if (!showSolution && wl && wl.words.length > 0) {
-      const wordListAscent = wordListFont.heightAtSize(wl.fontSizePt, { descender: false });
-      const wordsPerCol = wl.wordsPerColumn;
-      const columnWidths = wl.columnWidthsPt;
-      const wordListX = wl.centeredLeftPt;
-
-      for (let i = 0; i < wl.words.length; i++) {
-        const col = Math.floor(i / wordsPerCol);
-        const row = i % wordsPerCol;
-        const word = wl.words[i];
-        const wordX =
-          wordListX +
-          columnWidths.slice(0, col).reduce((sum, width) => sum + width, 0) +
-          col * wl.columnGapPt;
-
-        const wordRowTopY = wl.topPt + getWordListRowTopOffsetPt(row, wl.lineHeightPt);
-        const baselineFromTop = getWordListRowBaselineFromTopPt(
-          wl.lineHeightPt,
-          wl.fontSizePt,
-          wordListAscent
-        );
-        const yPos = pageHeight - (wordRowTopY + baselineFromTop);
-
-        if (wl.addCheckboxes) {
-          const cbTop = wordRowTopY + Math.max(0, (wl.lineHeightPt - wl.checkboxSizePt) / 2);
-          page.drawRectangle({
-            x: wordX,
-            y: pageHeight - (cbTop + wl.checkboxSizePt),
-            width: wl.checkboxSizePt,
-            height: wl.checkboxSizePt,
-            borderColor: safeColor(wl.checkboxColor, '#666666'),
-            borderWidth: 0.75,
-          });
-        }
-
-        const textX = wl.addCheckboxes ? wordX + wl.checkboxSizePt + wl.checkboxGapPt : wordX;
-        if (!noText) {
-          page.drawText(word, {
-            x: textX,
-            y: yPos,
-            size: wl.fontSizePt,
-            font: wordListFont,
-            color: safeColor(wl.color, '#000000'),
-          });
-        }
-      }
+    if (!showSolution && wl && wl.words.length > 0 && !noText) {
+      renderResolvedPdf(page, pageHeight, buildWordListElements(wl), () => wordListFont);
     }
 
     drawPageContainerFrame(page, pageWidth, pageHeight, resolvePageFrameSettings(settings));
@@ -1308,7 +1220,7 @@ async function drawWordSearchPuzzle(
 
   await drawShapeMaskImageOnPdfPage(
     pdfDoc,
-    page,
+      page,
     settings,
     puzzle,
     gridStartX,
@@ -1317,45 +1229,13 @@ async function drawWordSearchPuzzle(
     gridHeight
   );
 
-  // Render letters in cells (centred + auto-scaled to fit cell)
-  for (let row = 0; row < totalRows; row++) {
-    for (let col = 0; col < totalColumns; col++) {
-      if (!isWordSearchShapeCell(puzzle.shapeMask, row, col)) continue;
-      const letter = puzzle.grid[row][col];
-      if (!letter) continue;
-      const cell = getGridCellRectPdf(
-        gridStartX,
-        pdfGridTopY,
-        col,
-        row,
-        cellWidth,
-        cellHeight
-      );
-      const draw = getPdfLetterDrawCoordsAtRequestedSize(gridFont, letter, fontSize, cell);
-
       if (!noText) {
-        // Solution letters use the same fill/stroke as puzzle grid letters.
-        const fillHex =
-          colors.puzzlePage.puzzleColor || g.letterColor || '#000000';
-        const strokeHex =
-          colors.puzzlePage.puzzleLetterStrokeColor || g.letterStrokeColor || '#000000';
-        const strokeThicknessPt = Math.max(
-          0,
-          cssPxToPoints(colors.puzzlePage.puzzleLetterStrokeThickness ?? 0)
-        );
-
-        drawPdfLetterGlyph(page, letter, {
-          x: draw.x,
-          y: draw.y,
-          size: draw.size,
-          font: gridFont,
-          fillColor: safeColor(fillHex, '#000000'),
-          strokeColor: safeColor(strokeHex, '#000000'),
-          strokeThicknessPt,
-          opacity: Math.min(safeOpacity(fillHex), safeOpacity(strokeHex, 1)),
-        });
-      }
-    }
+    renderResolvedPdf(
+      page,
+      pageHeight,
+      buildWordSearchGridElements({ puzzle, grid: g, layer: 'letters' }),
+      () => gridFont
+    );
   }
 
   // Border stroke after letters (on top, matches UI canvas)
@@ -1376,113 +1256,24 @@ async function drawWordSearchPuzzle(
     gridCols: g.cols,
   };
 
-  // Draw solution highlights (word placement paths with capsule styling)
   if (showSolution && puzzle.placements && puzzle.placements.length > 0) {
-    const fillHex = colors.answerPage.solutionFrameColor || '#22c55e';
-    const fillColor = safeColor(fillHex);
-    const highlightStrokeHex = colors.answerPage.solutionHighlightStrokeColor || '#000000';
-    const highlightStrokeColor = safeColor(highlightStrokeHex);
-    const highlightStrokePt = Math.max(
-      0,
-      cssPxToPoints(colors.answerPage.solutionHighlightStrokeThickness ?? 0)
+    renderResolvedPdf(
+      page,
+      pageHeight,
+      buildWordSearchGridElements({
+        puzzle,
+        grid: g,
+        showSolution: true,
+        solution: wordSearchSolutionStyle(colors.answerPage),
+        layer: 'marks',
+      }),
+      () => gridFont
     );
-    const bodyThickness = Math.max(
-      1,
-      cssPxToPoints(colors.answerPage.solutionStrokeThickness || 12)
-    );
-    const strokeOpacity = Math.max(
-      0,
-      Math.min(
-        1,
-        ((colors.answerPage.solutionHighlightAlpha ?? 30) / 100) *
-          safeOpacity(fillHex)
-      )
-    );
-
-    for (const placement of puzzle.placements) {
-      const startCol = placement.start.col;
-      const startRow = placement.start.row;
-      const endCol = placement.end.col;
-      const endRow = placement.end.row;
-
-      const start = {
-        x: legacyLayout.gridStartX + startCol * cellSize + cellSize / 2,
-        y: legacyLayout.gridStartY - (startRow * cellSize + cellSize / 2),
-      };
-      const end = {
-        x: legacyLayout.gridStartX + endCol * cellSize + cellSize / 2,
-        y: legacyLayout.gridStartY - (endRow * cellSize + cellSize / 2),
-      };
-
-      if (highlightStrokePt > 0) {
-        page.drawLine({
-          start,
-          end,
-          color: highlightStrokeColor,
-          thickness: bodyThickness + highlightStrokePt * 2,
-          opacity: Math.min(1, strokeOpacity + 0.25),
-          lineCap: LineCapStyle.Round,
-        });
-      }
-
-      page.drawLine({
-        start,
-        end,
-        color: fillColor,
-        thickness: bodyThickness,
-        opacity: strokeOpacity,
-        lineCap: LineCapStyle.Round,
-      });
-    }
   }
 
   const wl = layout.wordList;
-  if (!showSolution && !isGridOnlyPage && wl && wl.words.length > 0) {
-    const wordListAscent = wordListFont.heightAtSize(wl.fontSizePt, { descender: false });
-    const wordsPerCol = wl.wordsPerColumn;
-    const columnWidths = wl.columnWidthsPt;
-    const wordListX = wl.centeredLeftPt;
-
-    for (let i = 0; i < wl.words.length; i++) {
-      const col = Math.floor(i / wordsPerCol);
-      const row = i % wordsPerCol;
-      const word = wl.words[i];
-      const wordX =
-        wordListX +
-        columnWidths.slice(0, col).reduce((sum, width) => sum + width, 0) +
-        col * wl.columnGapPt;
-
-      const wordRowTopY = wl.topPt + getWordListRowTopOffsetPt(row, wl.lineHeightPt);
-      const baselineFromTop = getWordListRowBaselineFromTopPt(
-        wl.lineHeightPt,
-        wl.fontSizePt,
-        wordListAscent
-      );
-      const yPos = pageHeight - (wordRowTopY + baselineFromTop);
-
-      if (wl.addCheckboxes) {
-        const cbTop = wordRowTopY + Math.max(0, (wl.lineHeightPt - wl.checkboxSizePt) / 2);
-        page.drawRectangle({
-          x: wordX,
-          y: pageHeight - (cbTop + wl.checkboxSizePt),
-          width: wl.checkboxSizePt,
-          height: wl.checkboxSizePt,
-          borderColor: safeColor(wl.checkboxColor, '#666666'),
-          borderWidth: 0.75,
-        });
-      }
-
-      const textX = wl.addCheckboxes ? wordX + wl.checkboxSizePt + wl.checkboxGapPt : wordX;
-      if (!noText) {
-        page.drawText(word, {
-          x: textX,
-          y: yPos,
-          size: wl.fontSizePt,
-          font: wordListFont,
-          color: safeColor(wl.color, '#000000'),
-        });
-      }
-    }
+  if (!showSolution && !isGridOnlyPage && wl && wl.words.length > 0 && !noText) {
+    renderResolvedPdf(page, pageHeight, buildWordListElements(wl), () => wordListFont);
   }
 
   drawPageContainerFrame(page, pageWidth, pageHeight, resolvePageFrameSettings(settings));
@@ -1687,54 +1478,24 @@ async function drawWordSearchSolutionPage(
     );
 
     const answerGridFontSize = getSolutionGridFontSize(settings.typography);
-
-    // Solution Grid Cell Dimensions (EXACT BASELINE MATH)
-    const solutionCellWidth = cellSize; // Each cell is cellSize wide
-    const solutionCellHeight = cellSize; // Each cell is cellSize tall
-    const solutionTotalColumns = puzzle.grid[0].length;
-    const solutionTotalRows = puzzle.grid.length;
-
-    // Render letters — centred in each cell, scaled to fit
-    for (let row = 0; row < solutionTotalRows; row++) {
-      for (let col = 0; col < solutionTotalColumns; col++) {
-        if (!isWordSearchShapeCell(puzzle.shapeMask, row, col)) continue;
-        const letter = puzzle.grid[row][col];
-        if (!letter) continue;
-        const cell = getGridCellRectPdf(
-          gridStartX,
-          gridStartY,
-          col,
-          row,
-          solutionCellWidth,
-          solutionCellHeight
-        );
-        const draw = getPdfLetterDrawCoordsAtRequestedSize(
-          gridFont,
-          letter,
-          answerGridFontSize,
-          cell
-        );
+    const solutionGrid = {
+      leftPt: gridStartX,
+      topPt: pageHeight - gridStartY,
+      cellSizePt: cellSize,
+      fontSizePt: answerGridFontSize,
+      fontFamily: settings.typography.setFontForAnswerPages
+        ? settings.typography.answerGridFontFamily || 'Arial'
+        : settings.typography.puzzleGridFontFamily || 'Arial',
+      letterColor: settings.colors.puzzlePage.puzzleColor || '#000000',
+    };
 
         if (!noText) {
-          const fillHex = settings.colors.puzzlePage.puzzleColor || '#000000';
-          const strokeHex =
-            settings.colors.puzzlePage.puzzleLetterStrokeColor || '#000000';
-          const strokeThicknessPt = Math.max(
-            0,
-            cssPxToPoints(settings.colors.puzzlePage.puzzleLetterStrokeThickness ?? 0)
-          );
-          drawPdfLetterGlyph(page, letter, {
-            x: draw.x,
-            y: draw.y,
-            size: draw.size,
-            font: gridFont,
-            fillColor: safeColor(fillHex, '#000000'),
-            strokeColor: safeColor(strokeHex, '#000000'),
-            strokeThicknessPt,
-            opacity: safeOpacity(fillHex),
-          });
-        }
-      }
+      renderResolvedPdf(
+        page,
+        pageHeight,
+        buildWordSearchGridElements({ puzzle, grid: solutionGrid, layer: 'letters' }),
+        () => gridFont
+      );
     }
 
     if (solutionBorderGeom) {
@@ -1747,84 +1508,18 @@ async function drawWordSearchSolutionPage(
     }
 
     if (puzzle.placements && puzzle.placements.length > 0) {
-      const fillColorHex = settings.colors.answerPage.solutionFrameColor || '#000000';
-      const fillColor = safeColor(fillColorHex);
-      const highlightStrokeHex =
-        settings.colors.answerPage.solutionHighlightStrokeColor || '#000000';
-      const highlightStrokeColor = safeColor(highlightStrokeHex);
-      const highlightStrokePt = Math.max(
-        0,
-        cssPxToPoints(settings.colors.answerPage.solutionHighlightStrokeThickness ?? 0)
+      renderResolvedPdf(
+        page,
+        pageHeight,
+        buildWordSearchGridElements({
+          puzzle,
+          grid: solutionGrid,
+          showSolution: true,
+          solution: wordSearchSolutionStyle(settings.colors.answerPage),
+          layer: 'marks',
+        }),
+        () => gridFont
       );
-      const strokeWidth = settings.colors.answerPage.solutionStrokeThickness || 12;
-
-      for (const placement of puzzle.placements) {
-        const solutionPath = getPDFSolutionPaths(
-          {
-            word: placement.word,
-            startX: placement.start.col,
-            startY: placement.start.row,
-            endX: placement.end.col,
-            endY: placement.end.row,
-            cellSize,
-          },
-          {
-            mode: 'line-highlight',
-            color: fillColorHex,
-            thickness: strokeWidth,
-            padding: 0,
-            frameRadius: settings.colors.answerPage.solutionFrameRadius || 4,
-            solutionHighlightMode: 'box-frame',
-            solutionLineCap: 'round',
-            alpha: settings.colors.answerPage.solutionHighlightAlpha ?? 30,
-          }
-        );
-
-        if (!solutionPath) continue;
-
-        const opacity =
-          (solutionPath.opacity ?? 1) * safeOpacity(fillColorHex);
-        const lineCap = solutionPath.lineCap || 'butt';
-        const bodyThickness = solutionPath.thickness || strokeWidth;
-
-        if (
-          solutionPath.type === 'line' &&
-          solutionPath.startX !== undefined &&
-          solutionPath.startY !== undefined &&
-          solutionPath.endX !== undefined &&
-          solutionPath.endY !== undefined
-        ) {
-          const start = {
-            x: gridStartX + solutionPath.startX,
-            y: gridStartY - solutionPath.startY,
-          };
-          const end = {
-            x: gridStartX + solutionPath.endX,
-            y: gridStartY - solutionPath.endY,
-          };
-
-          // Outer stroke outline (behind fill) when configured.
-          if (highlightStrokePt > 0) {
-            page.drawLine({
-              start,
-              end,
-              color: highlightStrokeColor,
-              thickness: bodyThickness + highlightStrokePt * 2,
-              opacity: Math.min(1, opacity + 0.25),
-              lineCap: mapSolutionLineCap(lineCap),
-            });
-          }
-
-          page.drawLine({
-            start,
-            end,
-            color: fillColor,
-            thickness: bodyThickness,
-            opacity,
-            lineCap: mapSolutionLineCap(lineCap),
-          });
-        }
-      }
     }
   }
 
@@ -1874,7 +1569,7 @@ function buildBaseSettingsFromWordSearch(
       customWidth: bookSettings.customWidth || 8.5,
       customHeight: bookSettings.customHeight || 11,
       puzzleType: 'word-search' as const,
-      answersPerPage: bookSettings.answersPerPage || 1,
+      answersPerPage: normalizeAnswersPerPage(bookSettings.answersPerPage || 1),
       includePageBetweenPuzzleAndSolutions: bookSettings.includePageBetweenPuzzleAndSolutions || false,
     },
     core: {
@@ -2050,7 +1745,7 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
     new Promise<void>((resolve) => {
       if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
         window.requestAnimationFrame(() => resolve());
-      } else {
+  } else {
         setTimeout(resolve, 0);
       }
     });
@@ -2207,6 +1902,22 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
             safeColor
           );
         }
+        await drawPageVariablesOnPdfPage({
+          pdfDoc,
+          page: blankPage,
+          pageWidthPt: pageWidth,
+          pageHeightPt: pageHeight,
+          fields: pageVariablesFromDocument(documentPages, compiledPage.sourceDocumentId),
+          contentIndex: 0,
+          bookPageNumber: compiledPage.bookPageIndex + 1,
+          puzzleNumber: 1,
+          getFont: getOrEmbedFont,
+          resolveContext: resolveContextForDocumentPages(
+            documentPages,
+            compiledPage.sourceDocumentId,
+            { contentIndex: 0, pageNumber: compiledPage.bookPageIndex + 1, puzzleNumber: 1 }
+          ),
+        });
         continue;
       }
 
@@ -2225,8 +1936,8 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
         continue;
       }
 
-      // Unknown page kinds still rasterize from the preview canvas.
-      if (!isNativelyDrawnPageKind(compiledPage.kind)) {
+      // Only kinds registered as existing snapshot debt may flatten. A new kind throws.
+      if (exportRoute(compiledPage.kind).mode === 'snapshot') {
         const snapshot = await captureCompiledPageSnapshot(compiledPage, {
           documentPages,
           layoutSettings,
@@ -2249,6 +1960,10 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
           });
         }
         continue;
+      }
+
+      if (compiledPage.kind !== 'puzzle' && compiledPage.kind !== 'solution') {
+        assertNativePainter(compiledPage.kind, 'PDF');
       }
 
       const ws = buildBaseSettingsFromWordSearch(
@@ -2329,11 +2044,37 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
           allowPageNumber ? sectionPageNumberFont : undefined,
           compiledPage.pagePart ?? 'clues'
         );
+        const variableCtx = resolvePageVariableContext({
+          puzzleIndexInDocument: compiledPage.puzzleIndexInDocument,
+          puzzlesPerPage: 1,
+          puzzlesStartingNumber: effectiveSettings.core.puzzlesStartingNumber,
+          bookPageIndex: compiledPage.bookPageIndex,
+        });
+        await drawPageVariablesOnPdfPage({
+          pdfDoc,
+          page,
+          pageWidthPt: pageWidth,
+          pageHeightPt: pageHeight,
+          fields: pageVariablesFromDocument(pagesForBook, compiledPage.sourceDocumentId),
+          contentIndex: variableCtx.contentIndex,
+          bookPageNumber: variableCtx.bookPageNumber,
+          puzzleNumber: variableCtx.puzzleNumber,
+          getFont: getOrEmbedFont,
+          resolveContext: resolveContextForDocumentPages(
+            pagesForBook,
+            compiledPage.sourceDocumentId,
+            {
+              contentIndex: variableCtx.contentIndex,
+              pageNumber: variableCtx.bookPageNumber,
+              puzzleNumber: variableCtx.puzzleNumber,
+            }
+          ),
+        });
         continue;
       }
 
       if (compiledPage.kind === 'solution') {
-        const chunkSize = effectiveSettings.bookCanvas.answersPerPage || 1;
+        const chunkSize = normalizeAnswersPerPage(effectiveSettings.bookCanvas.answersPerPage);
         const answerGridFont = await getOrEmbedFont(
           effectiveSettings.typography.setFontForAnswerPages
             ? effectiveSettings.typography.answerGridFontFamily || 'Arial'
@@ -2403,6 +2144,33 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
             solutionPageNumberFont
           );
         }
+        const firstPuzzle = compiledPage.puzzles[0];
+        const variableCtx = resolvePageVariableContext({
+          puzzleIndexInDocument: firstPuzzle?.puzzleIndexInDocument ?? 0,
+          puzzlesPerPage: 1,
+          puzzlesStartingNumber: effectiveSettings.core.puzzlesStartingNumber,
+          bookPageIndex: compiledPage.bookPageIndex,
+        });
+        await drawPageVariablesOnPdfPage({
+          pdfDoc,
+          page,
+          pageWidthPt: pageWidth,
+          pageHeightPt: pageHeight,
+          fields: pageVariablesFromDocument(pagesForBook, compiledPage.sourceDocumentId),
+          contentIndex: variableCtx.contentIndex,
+          bookPageNumber: variableCtx.bookPageNumber,
+          puzzleNumber: variableCtx.puzzleNumber,
+          getFont: getOrEmbedFont,
+          resolveContext: resolveContextForDocumentPages(
+            pagesForBook,
+            compiledPage.sourceDocumentId,
+            {
+              contentIndex: variableCtx.contentIndex,
+              pageNumber: variableCtx.bookPageNumber,
+              puzzleNumber: variableCtx.puzzleNumber,
+            }
+          ),
+        });
       }
     }
 
@@ -2425,7 +2193,7 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
     }
   }
   if (includeSolution) {
-    const chunkSize = baseSettings.bookCanvas.answersPerPage || 1;
+    const chunkSize = normalizeAnswersPerPage(baseSettings.bookCanvas.answersPerPage);
     estimatedTotalPages +=
       chunkSize <= 1 ? puzzles.length : Math.ceil(puzzles.length / Math.max(1, chunkSize));
   }
@@ -2586,7 +2354,7 @@ export async function generatePuzzlePDF(options: ExportOptions): Promise<Uint8Ar
     // For single-answer solution pages we should reuse the unified layout
     // (same math used by the preview canvas). For multi-answer pages keep
     // the compact solution layout.
-    const chunkSize = baseSettings.bookCanvas.answersPerPage || 1;
+    const chunkSize = normalizeAnswersPerPage(baseSettings.bookCanvas.answersPerPage);
 
     if (chunkSize === 1) {
       // One solution per page: draw each solution using the unified layout

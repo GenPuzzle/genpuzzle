@@ -1,0 +1,209 @@
+.canvas-format-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+  flex-shrink: 0;
+  z-index: 19;
+}
+
+.canvas-format-bar__hint {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.canvas-format-bar__group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.canvas-format-bar__group--wrap {
+  max-width: 100%;
+}
+
+.canvas-format-bar__label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.canvas-format-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 1.75rem;
+  padding: 0 0.55rem;
+  border-radius: 0.375rem;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.canvas-format-bar__btn:hover {
+  background: #f1f5f9;
+}
+
+.canvas-format-bar__btn--active {
+  background: #0f172a;
+  color: #fff;
+  border-color: #0f172a;
+}
+
+.canvas-format-bar__menu {
+  position: relative;
+}
+
+.canvas-format-bar__menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  min-width: 11rem;
+  padding: 0.3rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  background: #fff;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+}
+
+.canvas-format-bar__menu-list--wide {
+  min-width: 13rem;
+  max-height: 18rem;
+  overflow: auto;
+}
+
+.canvas-format-bar__menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.55rem;
+  border-radius: 0.35rem;
+  font-size: 12px;
+  color: #1e293b;
+}
+
+.canvas-format-bar__menu-item-title {
+  font-weight: 600;
+}
+
+.canvas-format-bar__menu-item-hint {
+  font-size: 10px;
+  color: #64748b;
+}
+
+.canvas-format-bar__menu-item:hover {
+  background: #f1f5f9;
+}
+
+.canvas-object {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  overflow: visible;
+}
+
+.canvas-object:hover:not(.canvas-object--selected) {
+  border-color: rgba(0, 120, 212, 0.45);
+}
+
+.canvas-object--selected {
+  border-color: transparent;
+}
+
+.canvas-object__selection-outline {
+  position: absolute;
+  inset: 0;
+  border: 2px solid #0078d4;
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 2;
+  box-sizing: border-box;
+}
+
+.canvas-object__chrome-actions {
+  z-index: 60;
+}
+
+.canvas-object__handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: 0;
+  padding: 0;
+  background: #ffffff;
+  border: 2px solid #0078d4;
+  border-radius: 1px;
+  box-sizing: border-box;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25);
+  z-index: 100;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.canvas-object__handle--nw { top: 1px; left: 1px; cursor: nwse-resize; }
+.canvas-object__handle--n { top: 1px; left: calc(50% - 5px); cursor: ns-resize; }
+.canvas-object__handle--ne { top: 1px; right: 1px; cursor: nesw-resize; }
+.canvas-object__handle--e { top: calc(50% - 5px); right: 1px; cursor: ew-resize; }
+.canvas-object__handle--se { bottom: 1px; right: 1px; cursor: nwse-resize; }
+.canvas-object__handle--s { bottom: 1px; left: calc(50% - 5px); cursor: ns-resize; }
+.canvas-object__handle--sw { bottom: 1px; left: 1px; cursor: nesw-resize; }
+.canvas-object__handle--w { top: calc(50% - 5px); left: 1px; cursor: ew-resize; }
+
+.canvas-object__editor {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: inherit;
+  box-sizing: border-box;
+  padding: 2px 6px;
+  outline: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+  background: transparent;
+}
+
+.canvas-object__editor:empty::before {
+  content: 'Type here';
+  color: #94a3b8;
+  pointer-events: none;
+}
+
+.canvas-format-bar input[type='number'] {
+  width: 3.25rem;
+  height: 1.75rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.375rem;
+  padding: 0 0.35rem;
+  font-size: 11px;
+}
+
+.dark .canvas-format-bar {
+  background: #1e293b;
+  border-bottom-color: #334155;
+}
+
+.dark .canvas-format-bar__btn {
+  background: #0f172a;
+  border-color: #475569;
+  color: #e2e8f0;
+}
+
+.dark .canvas-format-bar__menu-list {
+  background: #0f172a;
+  border-color: #334155;
+}

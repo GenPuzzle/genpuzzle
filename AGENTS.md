@@ -62,3 +62,16 @@ export default function Dashboard() {
 ```
 
 3. Route is automatically registered as `/dashboard`
+
+## Page layout
+
+Matching canvas previews, editable PDFs, and editable PowerPoint files is a permanent requirement. No feature that affects page content or layout is complete until it works in the preview and both exports and passes the relevant consistency checks.
+
+Every new Sudoku or maze option, and every new puzzle type, must use the shared layout engine so the change applies to all three outputs and stays editable. Do not flatten pages, outline text, or replace editable puzzle elements with images.
+
+If a feature needs a drawing element the renderers do not support yet, add that element to canvas, PDF, and PPTX in the same change. `dispatchResolved` is the single switch. `EXPORT_ROUTES` must name every compiled page kind. A new kind that is missing, or that flattens the page, fails `npm run check:layout`.
+
+Run `npm run check:layout` from `genpuzzle`. Checks that could not run are printed as `NOT RUN`. Known gaps are printed as `NOT PASSED`. Neither is a pass.
+
+See `src/lib/resolved-layout/README.md`.
+

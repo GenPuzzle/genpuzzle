@@ -53,6 +53,9 @@ export async function POST(request: NextRequest) {
     const ai = await callDeepSeekJson({
       systemPrompt: buildAiSystemPrompt(),
       userPrompt: buildAiUserPrompt(batchRequest),
+      // Crosswords return large JSON; fail faster so the client can retry smaller chunks.
+      timeoutMs: batchRequest.puzzleType === 'crossword' ? 70_000 : 120_000,
+      temperature: batchRequest.puzzleType === 'crossword' ? 0.55 : 0.7,
     });
 
     if (!ai.ok) {

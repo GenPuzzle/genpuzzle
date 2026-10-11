@@ -3,6 +3,13 @@
 import React from 'react';
 import { WordScramblePuzzle } from '@/lib/puzzles/types';
 import type { ScrambleAnswerStyle } from '@/lib/generic-puzzle-settings';
+import {
+  applyLetterCase,
+  graphemeCount,
+  localeCompareText,
+  resolveUnicodeFontFamily,
+  segmentGraphemes,
+} from '@/lib/unicode-text';
 
 interface WordScrambleDisplayProps {
   puzzle: WordScramblePuzzle;
@@ -27,11 +34,11 @@ interface WordScrambleDisplayProps {
 type ScrambleWord = { original: string; scrambled: string };
 
 function applyCase(value: string, letterCase: 'upper' | 'lower') {
-  return letterCase === 'lower' ? value.toLowerCase() : value.toUpperCase();
+  return applyLetterCase(value, letterCase);
 }
 
 function letterCount(word: string) {
-  return Math.max(4, word.replace(/[\s-]/g, '').length);
+  return Math.max(4, graphemeCount(word.replace(/[\s-]/g, '')));
 }
 
 function blankFor(word: string, style: Exclude<ScrambleAnswerStyle, 'boxes'>) {
@@ -56,7 +63,7 @@ function BoxesRow({
   color: string;
   fontSize: number;
 }) {
-  const letters = word.replace(/[\s-]/g, '').split('');
+  const letters = segmentGraphemes(word.replace(/[\s-]/g, ''));
   const boxSize = Math.max(12, fontSize * 1.1);
   return (
     <span
@@ -126,8 +133,12 @@ export function WordScrambleDisplay({
 }: WordScrambleDisplayProps) {
   const words = normalizeWords(puzzle?.words);
   const bankWords = includeWordBank
-    ? [...words.map((w) => w.original)].sort((a, b) => a.localeCompare(b))
+    ? [...words.map((w) => w.original)].sort((a, b) => localeCompareText(a, b))
     : [];
+  const resolvedFontFamily = resolveUnicodeFontFamily(
+    fontFamily || 'Arial',
+    words.map((w) => `${w.original}${w.scrambled}`).join('')
+  );
 
   const safeFontSize = Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 16;
   const wordGap =
@@ -163,7 +174,7 @@ export function WordScrambleDisplay({
       style={{
         color: textColor || '#1f2937',
         fontSize: safeFontSize,
-        fontFamily: fontFamily || 'Arial',
+        fontFamily: resolvedFontFamily,
         maxWidth: maxWidthPx,
         width: '100%',
       }}

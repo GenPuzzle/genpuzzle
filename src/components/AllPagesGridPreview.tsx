@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pencil, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ensureGpIsolationRuntime } from '@/lib/gp-isolation';
 
 const GRID_GAP_PX = 24;
 const VIEWPORT_HEIGHT_PAD_PX = 40;
@@ -165,14 +166,27 @@ export function AllPagesGridPreview({
   const [viewportHeight, setViewportHeight] = useState(0);
 
   useEffect(() => {
+    ensureGpIsolationRuntime();
     const el = containerRef.current;
     if (!el) return;
 
     const viewport = el.parentElement;
 
     const update = () => {
-      setContainerWidth(el.clientWidth);
-      setViewportHeight(viewport?.clientHeight ?? 0);
+      const nextW = el.clientWidth;
+      const nextH = viewport?.clientHeight ?? 0;
+      let didSet = false;
+      setContainerWidth((prev) => {
+        if (prev === nextW) return prev;
+        didSet = true;
+        return nextW;
+      });
+      setViewportHeight((prev) => {
+        if (prev === nextH) return prev;
+        didSet = true;
+        return nextH;
+      });
+      window.__GP_ISO__?.bumpMeasure(didSet);
     };
     update();
 

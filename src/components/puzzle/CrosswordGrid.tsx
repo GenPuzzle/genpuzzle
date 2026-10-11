@@ -10,6 +10,7 @@ import {
   INTERIOR_LIGHT_GREY_FILL,
 } from '@/lib/crossword-settings';
 import { findInteriorUnusedCells } from '@/lib/puzzles/crossword';
+import { formatCrosswordLetter } from '@/lib/generic-puzzle-geometry';
 import {
   crosswordClueSpacingFromSettings,
   estimateWrapLineCount,
@@ -17,6 +18,9 @@ import {
   minCrosswordClueSpacing,
   type CrosswordClueSpacing,
 } from '@/lib/crossword-puzzle-page-layout';
+import { cssTextEffect } from '@/lib/text-effects';
+import { CanvasSelectable } from '@/components/CanvasSelectable';
+import type { CanvasFormatTarget } from '@/lib/canvas-native-format';
 
 interface CrosswordGridProps {
   puzzle: CrosswordPuzzle;
@@ -27,6 +31,8 @@ interface CrosswordGridProps {
   puzzleToCluesGapPx?: number;
   /** Hide Across/Down clue lists (e.g. multi-solution pages). */
   hideClues?: boolean;
+  selectedTarget?: CanvasFormatTarget | null;
+  onSelectTarget?: (target: CanvasFormatTarget) => void;
 }
 
 function emptySquareFill(squareColorRange: number): string {
@@ -49,6 +55,20 @@ function clueItemText(clue: { number: number; clue: string }): string {
   return `${clue.number}. ${clue.clue}`;
 }
 
+function crosswordSettingsKey(settings: CrosswordSettings | null | undefined): string {
+  return JSON.stringify(settings ?? null);
+}
+
+function crosswordGridKey(puzzle: CrosswordPuzzle): string {
+  return puzzle.grid
+    .map((row) =>
+      row
+        .map((cell) => `${cell.isBlack ? 1 : 0}:${cell.clueNumber ?? ''}:${cell.letter ?? ''}`)
+        .join(',')
+    )
+    .join(';');
+}
+
 /** Across / Down clue columns — always intended to span full page content width. */
 export function CrosswordClueLists({
   puzzle,
@@ -56,6 +76,8 @@ export function CrosswordClueLists({
   className,
   availableHeightPx,
   fillHeight = false,
+  selectedTarget = null,
+  onSelectTarget,
 }: {
   puzzle: CrosswordPuzzle;
   crosswordSettings?: CrosswordSettings | null;
@@ -64,23 +86,32 @@ export function CrosswordClueLists({
   availableHeightPx?: number;
   /** Fill the parent and measure its height for fitting. */
   fillHeight?: boolean;
+  selectedTarget?: CanvasFormatTarget | null;
+  onSelectTarget?: (target: CanvasFormatTarget) => void;
 }) {
-  const settings = normalizeCrosswordSettings(
-    crosswordSettings ?? getDefaultCrosswordSettings()
+  const settingsKey = crosswordSettingsKey(crosswordSettings);
+  const settings = useMemo(
+    () => normalizeCrosswordSettings(crosswordSettings ?? getDefaultCrosswordSettings()),
+    [settingsKey]
   );
   const { colors, typography } = settings;
   const preferredColumns = typography.clueLayout === 'single' ? 1 : 2;
+  
+  // Memoize clue arrays to avoid object recreation on every render
+  const acrossCluesKey = puzzle.acrossClues.map(clueItemText).join('|');
+  const downCluesKey = puzzle.downClues.map(clueItemText).join('|');
+  
   const preferred = useMemo(
     () => crosswordClueSpacingFromSettings(settings),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [settings.typography.clueSpaceVertical, settings.typography.clueSpaceHorizontal]
   );
   const wrapRef = useRef<HTMLDivElement>(null);
   const [measured, setMeasured] = useState({ width: 0, height: 0 });
 
-  useLayoutEffect(() => {
+  React.useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
+
     const apply = () => {
       const height =
         availableHeightPx != null && availableHeightPx > 0
@@ -89,20 +120,55 @@ export function CrosswordClueLists({
             ? el.clientHeight
             : 0;
       const width = el.clientWidth;
-      setMeasured((prev) =>
-        Math.abs(prev.width - width) > 0.5 || Math.abs(prev.height - height) > 0.5
-          ? { width, height }
-          : prev
-      );
+      if (width > 0 || height > 0) {
+        let didSet = false;
+        setMeasured((prev) => {
+          const next =
+            Math.abs(prev.width - width) > 1 || Math.abs(prev.height - height) > 1
+              ? { width, height }
+              : prev;
+          didSet = next !== prev;
+          return next;
+        });
+        window.__GP_ISO__?.bumpMeasure(didSet);
+      }
     };
-    apply();
-    const ro = new ResizeObserver(apply);
+
+    let debounceTimer: number | null = null;
+    const scheduleApply = () => {
+      if (debounceTimer !== null) window.clearTimeout(debounceTimer);
+      debounceTimer = window.setTimeout(() => {
+        debounceTimer = null;
+        apply();
+      }, 150);
+    };
+
+    // Let the initial page render settle before running the expensive fit calculation.
+    const initialTimer = window.setTimeout(apply, 200);
+    const ro = new ResizeObserver(scheduleApply);
     ro.observe(el);
-    return () => ro.disconnect();
-  }, [availableHeightPx, fillHeight, puzzle, typography.clueFontSize, typography.clueLayout]);
+
+    return () => {
+      window.clearTimeout(initialTimer);
+      if (debounceTimer !== null) window.clearTimeout(debounceTimer);
+      ro.disconnect();
+    };
+  }, [availableHeightPx, fillHeight, acrossCluesKey, downCluesKey, typography.clueFontSize, typography.clueLayout]);
 
   const fitWidth = measured.width > 0 ? measured.width : 1;
   const fitHeight = measured.height > 0 ? measured.height : availableHeightPx ?? 0;
+  
+  // Memoize text arrays to avoid recreating them on every render
+  // This prevents expensive fitCrosswordClueSpacing recalculation
+  const acrossTexts = useMemo(
+    () => puzzle.acrossClues.map(clueItemText),
+    [acrossCluesKey]
+  );
+  const downTexts = useMemo(
+    () => puzzle.downClues.map(clueItemText),
+    [downCluesKey]
+  );
+  
   const fitted = useMemo(() => {
     if (fitHeight <= 0) {
       return { spacing: preferred, columns: preferredColumns as 1 | 2 };
@@ -116,8 +182,8 @@ export function CrosswordClueLists({
         headingFontSize: typography.acrossDownFontSize || typography.clueFontSize + 2,
         preferred,
         min: minCrosswordClueSpacing(),
-        acrossTexts: puzzle.acrossClues.map(clueItemText),
-        downTexts: puzzle.downClues.map(clueItemText),
+        acrossTexts,
+        downTexts,
         measureLineCount: estimateWrapLineCount,
       }).spacing,
       columns: preferredColumns as 1 | 2,
@@ -127,8 +193,8 @@ export function CrosswordClueLists({
     fitWidth,
     preferred,
     preferredColumns,
-    puzzle.acrossClues,
-    puzzle.downClues,
+    acrossTexts,
+    downTexts,
     typography.acrossDownFontSize,
     typography.clueFontSize,
   ]);
@@ -155,6 +221,12 @@ export function CrosswordClueLists({
       }}
     >
       <div className="min-w-0">
+        <CanvasSelectable
+          target="clue-heading"
+          label="Across"
+          active={selectedTarget === 'clue-heading'}
+          onSelect={onSelectTarget}
+        >
         <h4
           className="font-bold uppercase tracking-wide"
           style={{
@@ -163,10 +235,18 @@ export function CrosswordClueLists({
             color: colors.cluesColor,
             marginBottom: spacing.headingAfter,
             lineHeight: 1.35,
+            ...cssTextEffect(typography.clueTextEffect, colors.cluesColor),
           }}
         >
           ACROSS
         </h4>
+        </CanvasSelectable>
+        <CanvasSelectable
+          target="clues"
+          label="Clues"
+          active={selectedTarget === 'clues'}
+          onSelect={onSelectTarget}
+        >
         <ul style={{ display: 'flex', flexDirection: 'column', gap: spacing.itemGap }}>
           {puzzle.acrossClues.map((clue) => (
             <li
@@ -178,6 +258,7 @@ export function CrosswordClueLists({
                 color: colors.cluesColor,
                 overflowWrap: 'anywhere',
                 wordBreak: 'break-word',
+                ...cssTextEffect(typography.clueTextEffect, colors.cluesColor),
               }}
             >
               <span className="font-bold" style={{ color: colors.numbersColor, fontWeight: 'bold' }}>
@@ -187,8 +268,15 @@ export function CrosswordClueLists({
             </li>
           ))}
         </ul>
+        </CanvasSelectable>
       </div>
       <div className="min-w-0">
+        <CanvasSelectable
+          target="clue-heading"
+          label="Down"
+          active={selectedTarget === 'clue-heading'}
+          onSelect={onSelectTarget}
+        >
         <h4
           className="font-bold uppercase tracking-wide"
           style={{
@@ -197,10 +285,18 @@ export function CrosswordClueLists({
             color: colors.cluesColor,
             marginBottom: spacing.headingAfter,
             lineHeight: 1.35,
+            ...cssTextEffect(typography.clueTextEffect, colors.cluesColor),
           }}
         >
           DOWN
         </h4>
+        </CanvasSelectable>
+        <CanvasSelectable
+          target="clues"
+          label="Clues"
+          active={selectedTarget === 'clues'}
+          onSelect={onSelectTarget}
+        >
         <ul style={{ display: 'flex', flexDirection: 'column', gap: spacing.itemGap }}>
           {puzzle.downClues.map((clue) => (
             <li
@@ -212,6 +308,7 @@ export function CrosswordClueLists({
                 color: colors.cluesColor,
                 overflowWrap: 'anywhere',
                 wordBreak: 'break-word',
+                ...cssTextEffect(typography.clueTextEffect, colors.cluesColor),
               }}
             >
               <span className="font-bold" style={{ color: colors.numbersColor, fontWeight: 'bold' }}>
@@ -221,10 +318,13 @@ export function CrosswordClueLists({
             </li>
           ))}
         </ul>
+        </CanvasSelectable>
       </div>
     </div>
   );
 }
+
+const MemoizedCrosswordClueLists = React.memo(CrosswordClueLists);
 
 /**
  * Build the SVG path data for all grid lines needed for a crossword.
@@ -317,9 +417,13 @@ export function CrosswordGrid({
   crosswordSettings,
   puzzleToCluesGapPx,
   hideClues = false,
+  selectedTarget = null,
+  onSelectTarget,
 }: CrosswordGridProps) {
-  const settings = normalizeCrosswordSettings(
-    crosswordSettings ?? getDefaultCrosswordSettings()
+  const settingsKey = crosswordSettingsKey(crosswordSettings);
+  const settings = useMemo(
+    () => normalizeCrosswordSettings(crosswordSettings ?? getDefaultCrosswordSettings()),
+    [settingsKey]
   );
   const { colors, typography, core } = settings;
   const emptyFill = emptySquareFill(colors.squareColorRange);
@@ -338,10 +442,8 @@ export function CrosswordGrid({
     ? null
     : greyscaleToCss(colors.blackSquareGreyscale ?? 255);
 
-  const interiorUnused = useMemo(
-    () => findInteriorUnusedCells(puzzle.grid),
-    [puzzle.grid]
-  );
+  const gridKey = crosswordGridKey(puzzle);
+  const interiorUnused = useMemo(() => findInteriorUnusedCells(puzzle.grid), [gridKey]);
 
   /**
    * Integer cell size — guarantees all grid coordinates are on integer pixels.
@@ -373,11 +475,8 @@ export function CrosswordGrid({
   const gridW = gridCols * cs;
   const gridH = gridRows * cs;
 
-  const formatAnswer = (answer: string) => {
-    if (core.answerCase === 'lower') return answer.toLowerCase();
-    if (core.answerCase === 'original') return answer;
-    return answer.toUpperCase();
-  };
+  const formatAnswer = (answer: string) =>
+    formatCrosswordLetter(answer, core.answerCase, core.language);
 
   const numberFontSize = showSolution
     ? typography.numberFontSizeAnswers
@@ -388,8 +487,14 @@ export function CrosswordGrid({
     cs * 0.72
   );
 
-  const acrossKey = formatAnswerKeyLine(puzzle.acrossClues, formatAnswer);
-  const downKey = formatAnswerKeyLine(puzzle.downClues, formatAnswer);
+  const acrossKey = useMemo(
+    () => formatAnswerKeyLine(puzzle.acrossClues, formatAnswer),
+    [puzzle.acrossClues, core.answerCase, core.language]
+  );
+  const downKey = useMemo(
+    () => formatAnswerKeyLine(puzzle.downClues, formatAnswer),
+    [puzzle.downClues, core.answerCase, core.language]
+  );
 
   /**
    * SVG line paths — computed once per render.
@@ -400,8 +505,7 @@ export function CrosswordGrid({
    */
   const { horizontal: hPath, vertical: vPath } = useMemo(
     () => buildGridLinePaths(puzzle, gridRows, gridCols, cs, unusedTransparent, interiorUnused),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [puzzle.grid, gridRows, gridCols, cs, unusedTransparent, interiorUnused]
+    [gridKey, gridRows, gridCols, cs, unusedTransparent, interiorUnused]
   );
   const combinedPath = hPath + vPath;
 
@@ -436,6 +540,12 @@ export function CrosswordGrid({
          * strokes land on exact integer coordinates regardless of the container's
          * fractional scroll/transform position.
          */}
+        <CanvasSelectable
+          target="grid"
+          label="Grid"
+          active={selectedTarget === 'grid'}
+          onSelect={onSelectTarget}
+        >
         <div
           className="shrink-0"
           style={{
@@ -454,9 +564,9 @@ export function CrosswordGrid({
               display: 'grid',
               gridTemplateColumns: `repeat(${gridCols}, ${cs}px)`,
               gridTemplateRows: `repeat(${gridRows}, ${cs}px)`,
-            }}
-          >
-            {puzzle.grid.map((row, rowIndex) =>
+          }}
+        >
+          {puzzle.grid.map((row, rowIndex) =>
               row.map((cell, colIndex) => {
                 if (cell.isBlack) {
                   const isInterior = interiorUnused[rowIndex]?.[colIndex] === true;
@@ -479,9 +589,9 @@ export function CrosswordGrid({
 
                 // Active cell — fill + content (no border; SVG layer draws the line).
                 return (
-                  <div
-                    key={`${rowIndex}-${colIndex}`}
-                    style={{
+              <div
+                key={`${rowIndex}-${colIndex}`}
+                style={{
                       width: cs,
                       height: cs,
                       backgroundColor: emptyFill,
@@ -514,6 +624,7 @@ export function CrosswordGrid({
                           fontSize: letterFontSize,
                           color: colors.answersColor,
                           fontFamily: typography.numberFontFamily,
+                          ...cssTextEffect(typography.gridTextEffect, colors.answersColor),
                         }}
                       >
                         {formatAnswer(cell.letter)}
@@ -522,8 +633,8 @@ export function CrosswordGrid({
                   </div>
                 );
               })
-            )}
-          </div>
+                )}
+              </div>
 
           {/* ── Layer 2: SVG grid lines ── */}
           {combinedPath && (
@@ -551,7 +662,8 @@ export function CrosswordGrid({
               />
             </svg>
           )}
-        </div>
+      </div>
+        </CanvasSelectable>
 
         {showAnswerKey ? (
           <div
@@ -584,17 +696,21 @@ export function CrosswordGrid({
                 {downKey}
               </p>
             ) : null}
-          </div>
+        </div>
         ) : null}
       </div>
 
       {showClueLists ? (
-        <CrosswordClueLists
+        <MemoizedCrosswordClueLists
           puzzle={puzzle}
           crosswordSettings={settings}
           className="w-full min-w-0"
+          selectedTarget={selectedTarget}
+          onSelectTarget={onSelectTarget}
         />
       ) : null}
     </div>
   );
 }
+
+export const MemoizedCrosswordGrid = React.memo(CrosswordGrid);

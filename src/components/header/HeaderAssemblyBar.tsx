@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   normalizeHeaderAssemblySettings,
   type HeaderAssemblySettings,
@@ -9,6 +9,34 @@ import type { HeaderTextParts } from '@/lib/header-assembly/resolve-parts';
 import { computeHeaderRowMetrics } from '@/lib/header-assembly/compute-row';
 import { resolveHeaderNumberTextStyle } from '@/lib/header-assembly/resolve-number-text';
 import { ShapeContainer } from '@/components/header/ShapeContainer';
+import { CanvasSelectable } from '@/components/CanvasSelectable';
+import type { CanvasFormatTarget } from '@/lib/canvas-native-format';
+
+function HeaderLiveText({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange?: (text: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!ref.current || !onChange) return;
+    if (document.activeElement === ref.current) return;
+    if (ref.current.textContent !== value) ref.current.textContent = value;
+  }, [onChange, value]);
+
+  if (!onChange) return <>{value}</>;
+  return (
+    <div
+      ref={ref}
+      className="outline-none"
+      contentEditable
+      suppressContentEditableWarning
+      onInput={() => onChange(ref.current?.textContent ?? '')}
+    />
+  );
+}
 
 export interface HeaderAssemblyBarProps {
   parts: HeaderTextParts;
@@ -23,6 +51,10 @@ export interface HeaderAssemblyBarProps {
   subtitleFontFamily?: string;
   subtitleTextWidthPt: number;
   ptToPx: (pt: number) => number;
+  selectedTarget?: CanvasFormatTarget | null;
+  onSelectTarget?: (target: CanvasFormatTarget) => void;
+  onTitleTextChange?: (text: string) => void;
+  onSubtitleTextChange?: (text: string) => void;
 }
 
 /**
@@ -43,6 +75,10 @@ export function HeaderAssemblyBar({
   subtitleFontFamily: subtitleFontFamilyProp,
   subtitleTextWidthPt,
   ptToPx,
+  selectedTarget = null,
+  onSelectTarget,
+  onTitleTextChange,
+  onSubtitleTextChange,
 }: HeaderAssemblyBarProps) {
   const settings = normalizeHeaderAssemblySettings(rawSettings);
   const { number, title, subtitle } = settings;
@@ -64,7 +100,7 @@ export function HeaderAssemblyBar({
   }
 
   return (
-    <div style={{ width: '100%', maxWidth: '100%', fontFamily, boxSizing: 'border-box', overflow: 'hidden' }}>
+    <div style={{ width: '100%', maxWidth: '100%', fontFamily, boxSizing: 'border-box', overflow: 'visible' }}>
       <div
         style={{
           display: 'flex',
@@ -72,10 +108,17 @@ export function HeaderAssemblyBar({
           gap,
           width: '100%',
           maxWidth: '100%',
-          overflow: 'hidden',
+          overflow: 'visible',
         }}
       >
         {parts.showNumber && (
+          <CanvasSelectable
+            target="header-number"
+            label="Number"
+            active={selectedTarget === 'header-number'}
+            onSelect={onSelectTarget}
+            style={{ flexShrink: 0 }}
+          >
           <ShapeContainer
             shapeId={number.shapeId}
             fillColor={number.fillColor}
@@ -91,8 +134,16 @@ export function HeaderAssemblyBar({
           >
             {parts.numberText}
           </ShapeContainer>
+          </CanvasSelectable>
         )}
         {parts.titleText && (
+          <CanvasSelectable
+            target="title"
+            label="Title"
+            active={selectedTarget === 'title'}
+            onSelect={onSelectTarget}
+            style={{ flex: 1, minWidth: 0 }}
+          >
           <ShapeContainer
             shapeId={title.shapeId}
             fillColor={title.fillColor}
@@ -106,8 +157,13 @@ export function HeaderAssemblyBar({
             fontSize={titleFontPx}
             fontWeight={700}
           >
-            {parts.titleText}
+            {onTitleTextChange ? (
+              <HeaderLiveText value={parts.titleText} onChange={onTitleTextChange} />
+            ) : (
+              parts.titleText
+            )}
           </ShapeContainer>
+          </CanvasSelectable>
         )}
       </div>
 
@@ -122,6 +178,12 @@ export function HeaderAssemblyBar({
             overflow: 'hidden',
           }}
         >
+          <CanvasSelectable
+            target="subtitle"
+            label="Subtitle"
+            active={selectedTarget === 'subtitle'}
+            onSelect={onSelectTarget}
+          >
           <ShapeContainer
             shapeId={subtitle.shapeId}
             fillColor={subtitle.fillColor}
@@ -140,11 +202,19 @@ export function HeaderAssemblyBar({
             fontWeight={400}
           >
             <div style={{ whiteSpace: 'normal', lineHeight: 1.3 }}>
-              {subtitleContent.map((line, i) => (
-                <div key={i}>{line}</div>
-              ))}
+              {onSubtitleTextChange ? (
+                <HeaderLiveText
+                  value={subtitleContent.join('\n')}
+                  onChange={onSubtitleTextChange}
+                />
+              ) : (
+                subtitleContent.map((line, i) => (
+                  <div key={i}>{line}</div>
+                ))
+              )}
             </div>
           </ShapeContainer>
+          </CanvasSelectable>
         </div>
       )}
     </div>

@@ -8,6 +8,7 @@ node_modules
 !.env.example
 
 # local scratch / temp artifacts
+.trace-debug
 -H
 temp-*
 tsc-*.txt

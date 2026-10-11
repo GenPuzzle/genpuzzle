@@ -14,7 +14,14 @@ export type PuzzleType =
   | 'maze'
   | 'word-match'
   | 'dot-to-dot'
-  | 'murdoku';
+  | 'murdoku'
+  | 'codewords'
+  | 'binairo'
+  | 'kakuro'
+  | 'math-maze'
+  | 'word-fill'
+  | 'number-fill'
+  | 'snake';
 
 export type Difficulty = 'easy' | 'medium' | 'hard' | 'expert';
 
@@ -73,8 +80,8 @@ export interface BookCanvasSettings {
   // Puzzle Type
   puzzleType: PuzzleType;
 
-  // Answers Per Page
-  answersPerPage: number;
+  /** Solutions shown on one answer page. Only 1, 2, or 4 are supported. */
+  answersPerPage: 1 | 2 | 4;
 
   // Page Structure
   includePageBetweenPuzzleAndSolutions: boolean;
@@ -178,7 +185,12 @@ export interface TypographySpacingSettings {
   // Fonts & Sizes
   puzzleTitleFontFamily: string;
   puzzleTitleFontSize: number;
+  puzzleTitleItalic?: boolean;
   answerTitleFontSize: number;
+  titleTextEffect?: import('../text-effects').TextEffectStyle;
+  subtitleTextEffect?: import('../text-effects').TextEffectStyle;
+  gridTextEffect?: import('../text-effects').TextEffectStyle;
+  wordListTextEffect?: import('../text-effects').TextEffectStyle;
 
   // Spacing Adjustments
   titleStartAt: number;
@@ -189,12 +201,19 @@ export interface TypographySpacingSettings {
   puzzleGridCase: 'upper' | 'lower';
   puzzleGridFontFamily: string;
   puzzleGridFontSize: number;
+  puzzleGridItalic?: boolean;
 
   // Manual Letter Calibration Offsets (for perfect centering)
   uiOffsetX: number;
   uiOffsetY: number;
   pdfOffsetX: number;
   pdfOffsetY: number;
+
+  /**
+   * Free placement deltas (pt) for native canvas elements, keyed by layout slot.
+   * Applied on top of the stack layout so preview / PDF / PPTX stay matching.
+   */
+  canvasLayoutOffsets?: import('../canvas-element-position').CanvasLayoutOffsets;
 
   // Answer Page Grid
   setFontForAnswerPages: boolean;
@@ -225,6 +244,7 @@ export interface PageNumberSettings {
   fontSize: number;
   bottomOffsetPx: number;
   sideOffsetPx: number;
+  textEffect?: import('../text-effects').TextEffectStyle;
 }
 
 /** Default top offset for the puzzle title (typography.titleStartAt). */
@@ -503,7 +523,17 @@ export interface CalcudokuCage {
   target: number;
 }
 
-export type SudokuVariant = 'standard' | 'calcudoku';
+export type SudokuVariant = 'standard' | 'calcudoku' | 'x' | 'greater-than';
+
+/** Orthogonal inequality clue: value(r1,c1) ? value(r2,c2) with gt ⇒ > else <. */
+export interface SudokuInequality {
+  r1: number;
+  c1: number;
+  r2: number;
+  c2: number;
+  /** true ⇒ cell1 > cell2; false ⇒ cell1 < cell2 */
+  gt: boolean;
+}
 
 // Sudoku Specific
 export interface SudokuPuzzle extends DocumentBatchPuzzleMeta {
@@ -513,13 +543,18 @@ export interface SudokuPuzzle extends DocumentBatchPuzzleMeta {
   difficulty: Difficulty;
   /**
    * Board size (cells per side). Defaults to 9 when missing on older projects.
-   * Standard Sudoku uses 4/6/9/12/16/25; Calcudoku uses 4–9.
+   * Standard / Sudoku X / Greater Than use 4/6/9/12/16/25; Calcudoku uses 4–9.
    */
   size?: number;
-  /** Absent or `standard` on older saved puzzles. */
+  /**
+   * Absent or `standard` on older saved puzzles.
+   * `x` = Sudoku X (diagonals). `greater-than` = inequality edges.
+   */
   variant?: SudokuVariant;
   /** Present when variant is calcudoku. */
   cages?: CalcudokuCage[];
+  /** Present when variant is greater-than. */
+  inequalities?: SudokuInequality[];
   seed?: number;
 }
 
@@ -620,7 +655,13 @@ export type GenericBatchPuzzle =
   | MazePuzzle
   | CryptogramPuzzle
   | WordScramblePuzzle
-  | TriviaPuzzle;
+  | TriviaPuzzle
+  | import('./codewords').CodewordPuzzle
+  | import('./binairo').BinairoPuzzle
+  | import('./kakuro').KakuroPuzzle
+  | import('./math-maze').MathMazePuzzle
+  | import('./fill').FillPuzzle
+  | import('./snake').SnakePuzzle;
 
 // Word Match Specific
 export interface WordMatchPuzzle {
@@ -648,7 +689,13 @@ export type Puzzle =
   | MazePuzzle
   | WordMatchPuzzle
   | DotToDotPuzzle
-  | import('./murdoku').MurdokuPuzzle;
+  | import('./murdoku').MurdokuPuzzle
+  | import('./codewords').CodewordPuzzle
+  | import('./binairo').BinairoPuzzle
+  | import('./kakuro').KakuroPuzzle
+  | import('./math-maze').MathMazePuzzle
+  | import('./fill').FillPuzzle
+  | import('./snake').SnakePuzzle;
 
 export type { MurdokuPuzzle } from './murdoku';
 
@@ -668,6 +715,21 @@ export interface SavedPuzzle {
   };
 }
 
+/** Word Search / Crossword answer pages only support 1, 2, or 4 solutions. */
+export type AnswersPerPage = 1 | 2 | 4;
+
+/** Clamp any stored / AI value back to a supported solutions-per-page count. */
+export function normalizeAnswersPerPage(value: unknown): AnswersPerPage {
+  const n = Math.round(Number(value));
+  if (n === 4) return 4;
+  if (n === 2) return 2;
+  if (n === 1) return 1;
+  // Nearest supported layout for out-of-range leftovers (3, 5–9, NaN, …).
+  if (!Number.isFinite(n) || n <= 1) return 1;
+  if (n <= 2) return 2;
+  return 4;
+}
+
 // Default Word Search Settings
 export function getDefaultWordSearchSettings(): WordSearchSettings {
   return {
@@ -679,7 +741,7 @@ export function getDefaultWordSearchSettings(): WordSearchSettings {
       trimSizePreset: '8_5X11IN',
       measurementUnits: 'INCHES',
       puzzleType: 'word-search',
-      answersPerPage: 4,
+      answersPerPage: 1,
       includePageBetweenPuzzleAndSolutions: false,
     },
     core: {

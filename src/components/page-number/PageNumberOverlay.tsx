@@ -3,6 +3,8 @@
 import React, { useMemo } from 'react';
 import type { WordSearchSettings } from '@/lib/puzzles/types';
 import { ShapeContainer } from '@/components/header/ShapeContainer';
+import { CanvasSelectable } from '@/components/CanvasSelectable';
+import type { CanvasFormatTarget } from '@/lib/canvas-native-format';
 import { computePageNumberLayout } from '@/lib/page-number/layout';
 import { normalizePageNumberSettings } from '@/lib/page-number/settings';
 import { ptToCssPx } from '@/lib/header-assembly/compute-row';
@@ -13,12 +15,16 @@ export function PageNumberOverlay({
   pageWidthPt,
   pageHeightPt,
   ptToPx,
+  selected = false,
+  onSelect,
 }: {
   settings: WordSearchSettings;
   bookPageIndex: number;
   pageWidthPt: number;
   pageHeightPt: number;
   ptToPx: (pt: number) => number;
+  selected?: boolean;
+  onSelect?: (target: CanvasFormatTarget) => void;
 }) {
   const pageNumberSettings = normalizePageNumberSettings(settings.typography.pageNumber);
   const layout = useMemo(
@@ -38,7 +44,11 @@ export function PageNumberOverlay({
   const shape = layout.shape;
 
   return (
-    <div
+    <CanvasSelectable
+      target="page-number"
+      label="Page #"
+      active={selected}
+      onSelect={onSelect}
       style={{
         position: 'absolute',
         left: ptToPx(layout.leftPt),
@@ -46,7 +56,7 @@ export function PageNumberOverlay({
         width: ptToPx(layout.widthPt),
         height: ptToPx(layout.heightPt),
         zIndex: 45,
-        pointerEvents: 'none',
+        pointerEvents: onSelect ? 'auto' : 'none',
       }}
     >
       <ShapeContainer
@@ -63,6 +73,6 @@ export function PageNumberOverlay({
       >
         {layout.text}
       </ShapeContainer>
-    </div>
+    </CanvasSelectable>
   );
 }

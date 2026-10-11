@@ -32,6 +32,7 @@ import type {
   CrosswordSolutionTitleStyle,
   CrosswordTitleOption,
 } from '@/lib/crossword-settings';
+import { normalizeAnswersPerPage } from '@/lib/puzzles/types';
 import {
   cleanCrosswordAnswer,
   getDefaultCrosswordSettings,
@@ -44,26 +45,33 @@ function useCrosswordDoc() {
   const {
     crosswordSettings,
     updateCrosswordSettings,
+    updateCrosswordText,
     titleWords,
-    setTitleWords,
     wordSearchSettings,
   } = useApp();
 
-  const settings = normalizeCrosswordSettings(crosswordSettings ?? getDefaultCrosswordSettings());
+  const settings = useMemo(
+    () => normalizeCrosswordSettings(crosswordSettings ?? getDefaultCrosswordSettings()),
+    [crosswordSettings]
+  );
   const { core, typography, colors, bookCanvas } = settings;
 
-  const patchCore = (patch: Partial<CrosswordSettings['core']>) => {
+  // Use useCallback to maintain stable function references across renders
+  const patchCore = useCallback((patch: Partial<CrosswordSettings['core']>) => {
     updateCrosswordSettings({ core: { ...core, ...patch } });
-  };
-  const patchTypography = (patch: Partial<CrosswordSettings['typography']>) => {
+  }, [core, updateCrosswordSettings]);
+  
+  const patchTypography = useCallback((patch: Partial<CrosswordSettings['typography']>) => {
     updateCrosswordSettings({ typography: { ...typography, ...patch } });
-  };
-  const patchColors = (patch: Partial<CrosswordSettings['colors']>) => {
+  }, [typography, updateCrosswordSettings]);
+  
+  const patchColors = useCallback((patch: Partial<CrosswordSettings['colors']>) => {
     updateCrosswordSettings({ colors: { ...colors, ...patch } });
-  };
-  const patchBookCanvas = (patch: Partial<CrosswordSettings['bookCanvas']>) => {
+  }, [colors, updateCrosswordSettings]);
+  
+  const patchBookCanvas = useCallback((patch: Partial<CrosswordSettings['bookCanvas']>) => {
     updateCrosswordSettings({ bookCanvas: { ...bookCanvas, ...patch } });
-  };
+  }, [bookCanvas, updateCrosswordSettings]);
 
   const answerLines = useMemo(() => {
     const fromCore = parseCrosswordLines(core.answersText);
@@ -74,11 +82,14 @@ function useCrosswordDoc() {
   const clueLines = useMemo(() => parseCrosswordLines(core.cluesText), [core.cluesText]);
   const requiredPairs = Math.max(1, core.numberOfPuzzles) * Math.max(1, core.cluesPerPuzzle);
 
-  const setAnswersText = (text: string) => {
-    const words = parseCrosswordLines(text);
-    patchCore({ answersText: text });
-    setTitleWords({ ...titleWords, words });
-  };
+  const setAnswersText = useCallback((text: string) => {
+    updateCrosswordText({ answersText: text });
+  }, [updateCrosswordText]);
+
+  const setCluesText = useCallback(
+    (text: string) => updateCrosswordText({ cluesText: text }),
+    [updateCrosswordText]
+  );
 
   return {
     core,
@@ -96,7 +107,7 @@ function useCrosswordDoc() {
     clueLines,
     requiredPairs,
     setAnswersText,
-    setCluesText: (text: string) => patchCore({ cluesText: text }),
+    setCluesText,
   };
 }
 
@@ -178,11 +189,12 @@ function useCrosswordAutoFit() {
       ...(Object.keys(typePatch).length ? { typography: { ...typography, ...typePatch } } : {}),
     });
   }, [
-    core,
-    typography,
+    applyKey,
     settings,
     wordSearchSettings,
-    crosswordBatchPuzzles,
+    core,
+    typography,
+    activeCrosswordPuzzles,
     updateCrosswordSettings,
   ]);
 
@@ -276,9 +288,9 @@ export function CrosswordPuzzleSettingsPanel({ onSave }: { onSave?: () => void }
         <div className="space-y-1">
           <Label className="text-sm font-medium">Solutions Per Page</Label>
           <Select
-            value={(bookCanvas.answersPerPage || 1).toString()}
+            value={String(normalizeAnswersPerPage(bookCanvas.answersPerPage))}
             onValueChange={(value) =>
-              patchBookCanvas({ answersPerPage: parseInt(value, 10) })
+              patchBookCanvas({ answersPerPage: normalizeAnswersPerPage(value) })
             }
           >
             <SelectTrigger>
@@ -433,6 +445,16 @@ export function CrosswordWordsSettingsPanel({ onSave }: { onSave?: () => void })
   } = useCrosswordDoc();
   const missingAnswers = Math.max(0, requiredPairs - answerLines.length);
   const missingClues = Math.max(0, requiredPairs - clueLines.length);
+  const [answersDraft, setAnswersDraft] = useState(core.answersText || answerLines.join('\n'));
+  const [cluesDraft, setCluesDraft] = useState(core.cluesText);
+
+  React.useEffect(() => {
+    setAnswersDraft(core.answersText || answerLines.join('\n'));
+  }, [core.answersText, answerLines]);
+
+  React.useEffect(() => {
+    setCluesDraft(core.cluesText);
+  }, [core.cluesText]);
 
   const maxGridDimension = Math.max(core.lettersAcross || 15, core.lettersDown || 13);
   const tooLongAnswers = useMemo(() => {
@@ -469,8 +491,9 @@ export function CrosswordWordsSettingsPanel({ onSave }: { onSave?: () => void })
         <Label className="text-sm font-medium">Answers (one answer per line)</Label>
         <textarea
           className="w-full min-h-[120px] rounded-md border border-gray-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
-          value={core.answersText || answerLines.join('\n')}
-          onChange={(e) => setAnswersText(e.target.value)}
+          value={answersDraft}
+          onChange={(e) => setAnswersDraft(e.target.value)}
+          onBlur={() => setAnswersText(answersDraft)}
           placeholder={'REFLECT\nVALUES\nCHOICE\nHONESTY'}
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.stopPropagation();
@@ -505,8 +528,9 @@ export function CrosswordWordsSettingsPanel({ onSave }: { onSave?: () => void })
         <Label className="text-sm font-medium">Clues (one clue per line)</Label>
         <textarea
           className="w-full min-h-[140px] rounded-md border border-gray-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
-          value={core.cluesText}
-          onChange={(e) => setCluesText(e.target.value)}
+          value={cluesDraft}
+          onChange={(e) => setCluesDraft(e.target.value)}
+          onBlur={() => setCluesText(cluesDraft)}
           placeholder={'Think about yourself\nGuiding personal principles\nDecision between options'}
           onKeyDown={(e) => {
             if (e.key === 'Enter') e.stopPropagation();

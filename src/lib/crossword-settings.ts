@@ -5,8 +5,9 @@
  */
 
 import type { BookCanvasSettings, PageFrameSettings } from './puzzles/types';
-import { DEFAULT_PAGE_NUMBER_SETTINGS } from './puzzles/types';
+import { DEFAULT_PAGE_NUMBER_SETTINGS, normalizeAnswersPerPage } from './puzzles/types';
 import { uppercaseWordSearchWord } from './puzzles/word-search-letters';
+import { isLetterGrapheme, segmentGraphemes } from './unicode-text';
 
 export const INTERIOR_LIGHT_GREY_FILL = '#e0e0e0';
 
@@ -84,6 +85,11 @@ export interface CrosswordTypographySettings {
   subtitleToPuzzleGap: number;
   puzzleTitleFontFamily: string;
   puzzleTitleFontSize: number;
+  puzzleTitleItalic?: boolean;
+  titleTextEffect?: import('./text-effects').TextEffectStyle;
+  subtitleTextEffect?: import('./text-effects').TextEffectStyle;
+  clueTextEffect?: import('./text-effects').TextEffectStyle;
+  gridTextEffect?: import('./text-effects').TextEffectStyle;
   answerTitleFontSize: number;
   /** Inches from top of page. */
   titleStartAt: number;
@@ -97,6 +103,11 @@ export interface CrosswordTypographySettings {
   solutionPageMarginPx: number;
   /** Gap between crossword grid and Across/Down clue lists (inches). */
   spaceBetweenPuzzleAndClues: number;
+  /**
+   * Free placement deltas (pt) for native canvas elements (title / grid / clues).
+   * Applied in crossword layout so preview / PDF / PPTX stay matching.
+   */
+  canvasLayoutOffsets?: import('./canvas-element-position').CanvasLayoutOffsets;
   /** Vertical gap between clue lines (px). */
   clueSpaceVertical: number;
   /** Horizontal gap between Across/Down columns (px). */
@@ -378,7 +389,13 @@ export function normalizeCrosswordSettings(
   }
 
   return {
-    bookCanvas: { ...defaults.bookCanvas, ...(raw.bookCanvas ?? {}) },
+    bookCanvas: {
+      ...defaults.bookCanvas,
+      ...(raw.bookCanvas ?? {}),
+      answersPerPage: normalizeAnswersPerPage(
+        (raw.bookCanvas ?? defaults.bookCanvas).answersPerPage
+      ),
+    },
     core,
     typography,
     colors,
@@ -413,12 +430,19 @@ export function cleanCrosswordAnswer(
   language = ''
 ): string {
   if (!raw) return '';
-  const normalized = raw.normalize('NFC');
-  const upper = uppercaseWordSearchWord(normalized, language);
-  const chars = Array.from(upper).filter((char) =>
-    allowNumbers ? /\p{L}|\p{N}/u.test(char) : /\p{L}/u.test(char)
-  );
-  return chars.join('');
+  const upper = uppercaseWordSearchWord(raw, language);
+  return segmentGraphemes(upper)
+    .filter((char) => {
+      if (allowNumbers) {
+        try {
+          return /\p{L}|\p{N}/u.test(char);
+        } catch {
+          return isLetterGrapheme(char) || /[0-9]/.test(char);
+        }
+      }
+      return isLetterGrapheme(char);
+    })
+    .join('');
 }
 
 /** Pair answers with clues by index for one puzzle slice.

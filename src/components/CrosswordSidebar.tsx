@@ -1,936 +1,770 @@
 'use client';
 
+/**
+ * Crossword settings sidebar — same Layout / Document rail chrome as Word Search
+ * and other puzzle documents. Layout panels are book-global; Document panels are
+ * for the active crossword tab only.
+ */
+
 import React, { useMemo, useState } from 'react';
-import { AlertTriangle, BookOpen, ListTree, Palette, Settings2, Sparkles, Zap } from 'lucide-react';
+import { RefreshCw, Zap, Sparkles as LucideSparkles } from 'lucide-react';
 import { useApp } from '@/lib/app-context';
 import { useOptionalAppBusy } from '@/lib/app-busy-context';
-import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
-import { SliderField } from '@/components/ui/slider-field';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Button } from '@/components/ui/button';
-import { MiniColorInput } from '@/components/ui/color-input';
+import { usePersistedState } from '@/hooks/usePersistedState';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { SettingsTextInput, SettingsTextarea } from '@/components/ui/settings-text-input';
-import { PUBLISHING_FONTS } from '@/lib/publishing-fonts';
-import type {
-  CrosswordAnswerCase,
-  CrosswordClueLayout,
-  CrosswordNumberingStyle,
-  CrosswordSettings,
-  CrosswordSolutionTitleStyle,
-  CrosswordTitleOption,
-} from '@/lib/crossword-settings';
 import {
-  cleanCrosswordAnswer,
-  getDefaultCrosswordSettings,
+  SETTINGS_TAB_STORAGE_KEY,
+  SETTINGS_PANEL_STORAGE_KEY,
+  SETTINGS_SIDEBAR_WIDTH_KEY,
+} from '@/lib/settings-persistence';
+import { cn } from '@/lib/utils';
+import {
   normalizeCrosswordSettings,
+  getDefaultCrosswordSettings,
   parseCrosswordLines,
 } from '@/lib/crossword-settings';
-import type { PuzzleModuleSettings } from '@/lib/document-model';
-import { ChapterPagesBatchPanel } from '@/components/ChapterPagesBatchPanel';
-import { cn } from '@/lib/utils';
+import {
+  CrosswordPuzzleSettingsPanel,
+  CrosswordWordsSettingsPanel,
+  CrosswordTitlesSettingsPanel,
+} from '@/components/CrosswordDocumentPanels';
+import {
+  LayoutBookPanel,
+  LayoutColorsPanel,
+  LayoutChaptersPanel,
+} from '@/components/SharedLayoutPanels';
+import { CrosswordContextualControls } from '@/components/CrosswordContextualControls';
+import { useCanvasEditPanel } from '@/lib/canvas-edit-panel-context';
+import { AiProjectWizard } from '@/components/ai/AiProjectWizard';
+import { isAiPuzzleType } from '@/lib/ai/types';
+
+const LAYOUT_TABS = ['book', 'colors', 'pages'] as const;
+const DOCUMENT_TABS = ['puzzle', 'words', 'design'] as const;
+
+const PANEL_CLASS =
+  'flex-1 min-h-0 p-4 space-y-6 bg-gradient-to-b from-white to-gray-50 dark:from-slate-800 dark:to-slate-850 rounded-lg shadow-sm border border-gray-200 dark:border-slate-700 m-2';
+
+function normalizeSettingsPanel(value: string): 'layout' | 'document' {
+  if (
+    value === 'document' ||
+    (DOCUMENT_TABS as readonly string[]).includes(value)
+  ) {
+    return 'document';
+  }
+  return 'layout';
+}
+
+function normalizeSettingsTab(value: string, panel: 'layout' | 'document'): string {
+  if (panel === 'layout') {
+    return (LAYOUT_TABS as readonly string[]).includes(value) ? value : 'book';
+  }
+  if ((LAYOUT_TABS as readonly string[]).includes(value) || value === 'page') {
+    return 'puzzle';
+  }
+  if ((DOCUMENT_TABS as readonly string[]).includes(value)) return value;
+  return 'puzzle';
+}
+
+function Book({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function Grid3X3({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="3" y="3" width="7" height="7" stroke="currentColor" strokeWidth="1.6" rx="1" />
+      <rect x="14" y="3" width="7" height="7" stroke="currentColor" strokeWidth="1.6" rx="1" />
+      <rect x="14" y="14" width="7" height="7" stroke="currentColor" strokeWidth="1.6" rx="1" />
+      <rect x="3" y="14" width="7" height="7" stroke="currentColor" strokeWidth="1.6" rx="1" />
+    </svg>
+  );
+}
+function Type({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M4 7V4H20V7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9 20H15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12 4V20" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function List({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M8 6H21" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M8 12H21" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M8 18H21" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="3" cy="6" r="1.6" fill="currentColor" />
+      <circle cx="3" cy="12" r="1.6" fill="currentColor" />
+      <circle cx="3" cy="18" r="1.6" fill="currentColor" />
+    </svg>
+  );
+}
+function Palette({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.555C21.965 6.012 17.461 2 12 2z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function Sparkles({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+const SIDEBAR_RAIL_CSS = `
+  .word-search-sidebar [role="tablist"] {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 1rem;
+    width: 5.25rem;
+    padding: 14px 10px 14px 12px;
+    background: #f8fafc;
+    border-right: 1px solid #e2e8f0;
+  }
+  .word-search-sidebar .sidebar-rail-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    gap: 0.4rem;
+  }
+  .word-search-sidebar .sidebar-rail-heading {
+    width: 100%;
+    padding: 0 2px;
+    text-align: center;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    cursor: pointer;
+    transform: none !important;
+  }
+  .word-search-sidebar .sidebar-rail-heading__title {
+    margin: 0;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: #64748b;
+    line-height: 1.2;
+  }
+  .word-search-sidebar .sidebar-radio-input {
+    position: relative;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    border-radius: 0.85rem;
+    background: #ffffff;
+    color: #0f172a;
+    border: 1px solid #d1d5db;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+    overflow: hidden;
+  }
+  .word-search-sidebar .sidebar-radio-input .sidebar-radio-options {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: 4px;
+    gap: 2px;
+  }
+  .word-search-sidebar .sidebar-radio-input button[role="tab"].modern-tabs-trigger,
+  .word-search-sidebar .sidebar-radio-input button[role="tab"] {
+    position: relative;
+    z-index: 1;
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    height: 4.25rem !important;
+    min-height: 4.25rem !important;
+    min-width: 0 !important;
+    padding: 0.7rem 0.35rem !important;
+    border-radius: 0.65rem !important;
+    font-weight: 600 !important;
+    border: 1px solid transparent !important;
+    background: transparent !important;
+    color: #334155 !important;
+    box-shadow: none !important;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 0.3rem;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;
+    transform: none !important;
+  }
+  .word-search-sidebar .sidebar-radio-input button[role="tab"]:hover {
+    background: #f1f5f9 !important;
+    color: #1a5a8c !important;
+  }
+  .word-search-sidebar .sidebar-radio-input button[role="tab"][data-state="active"] {
+    background: #e8eef3 !important;
+    color: #1a5a8c !important;
+    border-color: #d0dae4 !important;
+  }
+  .word-search-sidebar .sidebar-radio-input button[role="tab"][data-state="active"]::before {
+    display: none;
+  }
+  .word-search-sidebar .sidebar-radio-input button[role="tab"] .tab-subtitle {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    line-height: 1.15;
+    max-width: 100%;
+    color: #475569;
+  }
+  .word-search-sidebar .sidebar-radio-input button[role="tab"]:hover .tab-subtitle,
+  .word-search-sidebar .sidebar-radio-input button[role="tab"][data-state="active"] .tab-subtitle {
+    color: #1a5a8c;
+  }
+  .word-search-sidebar .sidebar-radio-input button[role="tab"] svg {
+    display: block;
+    margin: 0 auto;
+    width: 1.55rem !important;
+    height: 1.55rem !important;
+    stroke-width: 2;
+    color: #475569;
+    stroke: currentColor;
+    fill: none;
+  }
+  .word-search-sidebar .sidebar-radio-input button[role="tab"]:hover svg,
+  .word-search-sidebar .sidebar-radio-input button[role="tab"][data-state="active"] svg {
+    color: #1a5a8c !important;
+    stroke: #1a5a8c !important;
+  }
+  .word-search-sidebar .sidebar-generate-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+    flex-shrink: 0;
+    width: 100%;
+    margin-top: 0.15rem;
+    padding: 0;
+  }
+  .word-search-sidebar .sidebar-generate-btn {
+    flex: 0;
+    width: 100%;
+    height: 4.25rem;
+    min-height: 4.25rem;
+    padding: 0.7rem 0.35rem;
+    border-radius: 0.85rem;
+    font-weight: 600;
+    border: 1px solid #144a75;
+    background: #1a5a8c;
+    color: #ffffff;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+  }
+  .word-search-sidebar .sidebar-generate-btn svg {
+    width: 1.55rem;
+    height: 1.55rem;
+    color: #ffffff;
+    stroke: #ffffff;
+  }
+  .word-search-sidebar .sidebar-generate-btn:hover:not(:disabled) {
+    background: #144a75;
+  }
+  .word-search-sidebar .sidebar-generate-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    background: #94a3b8;
+    border-color: #94a3b8;
+  }
+  .word-search-sidebar .sidebar-generate-caption {
+    margin: 0;
+    padding: 0 0.15rem;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.25;
+    text-align: center;
+    color: #1a5a8c;
+    max-width: 100%;
+  }
+  .word-search-sidebar .sidebar-generate-btn--ai {
+    border-color: #6d28d9;
+    background: #7c3aed;
+  }
+  .word-search-sidebar .sidebar-generate-btn--ai:hover:not(:disabled) {
+    background: #6d28d9;
+  }
+  .word-search-sidebar .sidebar-generate-caption--ai {
+    color: #6d28d9;
+  }
+  @media (max-width: 1023px) {
+    .word-search-sidebar [role="tabpanel"] {
+      height: auto !important;
+      max-height: none !important;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      margin: 0.5rem !important;
+      padding: 0.85rem !important;
+    }
+    .word-search-sidebar [role="tablist"] {
+      width: 4.75rem;
+      padding: 10px 8px 10px 10px;
+    }
+  }
+`;
 
 /**
- * Left pane — crossword generation / document controls (mirrors Word Search structure).
+ * Left pane — crossword generation / document controls.
+ * Matches Word Search: Layout (global) + Document (this tab).
  */
 export function CrosswordSidebar() {
   const {
     activeDocumentPage,
+    activeDocumentPageId,
     crosswordSettings,
-    updateCrosswordSettings,
+    crosswordBatchPuzzles,
+    currentPuzzle,
     generatePuzzle,
+    savePuzzle,
     titleWords,
-    setTitleWords,
+    projectName,
   } = useApp();
   const { showBusy, hideBusy } = useOptionalAppBusy();
+  const { crosswordPanelProps } = useCanvasEditPanel();
+  const canvasEditOpen = !!crosswordPanelProps;
 
-  const settings = normalizeCrosswordSettings(crosswordSettings ?? getDefaultCrosswordSettings());
-  const { core, typography, colors, bookCanvas } = settings;
-  const [activeTab, setActiveTab] = useState('words');
+  const settings = useMemo(
+    () => normalizeCrosswordSettings(crosswordSettings ?? getDefaultCrosswordSettings()),
+    [crosswordSettings]
+  );
+  const { core } = settings;
+
+  const [settingsPanel, setSettingsPanel] = usePersistedState<'layout' | 'document'>(
+    SETTINGS_PANEL_STORAGE_KEY,
+    'document'
+  );
+  const [activeTab, setActiveTab] = usePersistedState(SETTINGS_TAB_STORAGE_KEY, 'puzzle');
   const [collapsed, setCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = usePersistedState(SETTINGS_SIDEBAR_WIDTH_KEY, 352);
+  const [isSidebarResizing, setIsSidebarResizing] = useState(false);
+  const [isDesktopLayout, setIsDesktopLayout] = useState(true);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [aiGenerateOpen, setAiGenerateOpen] = useState(false);
 
-  const answerLines = useMemo(() => {
-    const fromCore = parseCrosswordLines(core.answersText);
-    if (fromCore.length > 0) return fromCore;
-    return titleWords.words.filter(Boolean);
-  }, [core.answersText, titleWords.words]);
+  React.useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const sync = () => setIsDesktopLayout(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
 
-  const clueLines = useMemo(() => parseCrosswordLines(core.cluesText), [core.cluesText]);
-  const requiredPairs = Math.max(1, core.numberOfPuzzles) * Math.max(1, core.cluesPerPuzzle);
-  const missingAnswers = Math.max(0, requiredPairs - answerLines.length);
-  const missingClues = Math.max(0, requiredPairs - clueLines.length);
+  React.useEffect(() => {
+    const panel = normalizeSettingsPanel(settingsPanel);
+    const tab = normalizeSettingsTab(activeTab, panel);
+    if (panel !== settingsPanel) setSettingsPanel(panel);
+    if (tab !== activeTab) setActiveTab(tab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- normalize once on mount / module enter
+  }, []);
 
-  const maxGridDimension = Math.max(core.lettersAcross || 15, core.lettersDown || 13);
-  const tooLongAnswers = useMemo(() => {
-    return answerLines
-      .map((raw) => {
-        const clean = cleanCrosswordAnswer(raw, core.allowNumbersInAnswers, core.language);
-        return { raw, cleanLength: clean.length };
-      })
-      .filter((item) => item.cleanLength > maxGridDimension);
-  }, [answerLines, core.allowNumbersInAnswers, core.language, maxGridDimension]);
+  React.useEffect(() => {
+    if (!canvasEditOpen) return;
+    setSettingsPanel('document');
+    setActiveTab('puzzle');
+    setCollapsed(false);
+  }, [canvasEditOpen, setSettingsPanel, setActiveTab]);
 
   if (activeDocumentPage?.moduleType !== 'crossword') {
     return null;
   }
 
-  const patchCore = (patch: Partial<CrosswordSettings['core']>) => {
-    updateCrosswordSettings({ core: { ...core, ...patch } });
+  const answerCount = Math.max(
+    parseCrosswordLines(core.answersText).length,
+    titleWords.words.filter(Boolean).length
+  );
+  const puzzleCount = core.numberOfPuzzles || 1;
+  const hasPuzzles =
+    crosswordBatchPuzzles.some((p) => p.pageId === activeDocumentPageId) ||
+    currentPuzzle?.type === 'crossword';
+  const requiredPairs = Math.max(1, puzzleCount) * Math.max(1, core.cluesPerPuzzle);
+  const isGenerateLocked = answerCount < requiredPairs || isGenerating;
+  const generateLabel = hasPuzzles ? `Update ${puzzleCount}` : `Generate ${puzzleCount}`;
+  const generateTitle = hasPuzzles
+    ? `Update ${puzzleCount} crossword${puzzleCount === 1 ? '' : 's'}`
+    : `Generate ${puzzleCount} crossword${puzzleCount === 1 ? '' : 's'}`;
+
+  const isSettingsTabActive = (tab: string) => !collapsed && !canvasEditOpen && activeTab === tab;
+
+  const handlePanelChange = (panel: 'layout' | 'document') => {
+    if (panel === 'layout') {
+      crosswordPanelProps?.onClose();
+    }
+    setSettingsPanel(panel);
+    setActiveTab(normalizeSettingsTab(activeTab, panel));
+    setCollapsed(false);
   };
 
-  const patchTypography = (patch: Partial<CrosswordSettings['typography']>) => {
-    updateCrosswordSettings({ typography: { ...typography, ...patch } });
+  const handleTabChange = (value: string) => {
+    if (value === 'puzzle' || value === 'words' || value === 'design') {
+      crosswordPanelProps?.onClose();
+    }
+    const panel = normalizeSettingsPanel(value);
+    setSettingsPanel(panel);
+    setActiveTab(normalizeSettingsTab(value, panel));
+    setCollapsed(false);
   };
 
-  const patchColors = (patch: Partial<CrosswordSettings['colors']>) => {
-    updateCrosswordSettings({ colors: { ...colors, ...patch } });
+  const handleTriggerPointerDown = (
+    e: React.PointerEvent,
+    tab: string
+  ) => {
+    if (activeTab === tab && !collapsed) {
+      e.preventDefault();
+      setCollapsed(true);
+    } else {
+      setCollapsed(false);
+    }
   };
 
-  const setAnswersText = (text: string) => {
-    const words = parseCrosswordLines(text);
-    patchCore({ answersText: text });
-    setTitleWords({ ...titleWords, words });
-  };
-
-  const setCluesText = (text: string) => {
-    patchCore({ cluesText: text });
+  const handleSave = () => {
+    const name = `${projectName || titleWords.title || 'crossword'} - ${new Date().toLocaleDateString()}`;
+    savePuzzle(name);
   };
 
   const handleGenerate = () => {
-    showBusy('Generating crossword…');
+    if (isGenerateLocked) return;
+    setIsGenerating(true);
+    showBusy(hasPuzzles ? 'Updating crossword…' : 'Generating crossword…');
     window.setTimeout(() => {
       try {
-        generatePuzzle();
+        void generatePuzzle();
       } finally {
-        window.setTimeout(() => hideBusy(), 280);
+        window.setTimeout(() => {
+          hideBusy();
+          setIsGenerating(false);
+        }, 280);
       }
     }, 40);
   };
 
-  const tabBtn =
-    'flex flex-col gap-1 h-auto py-3 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700';
+  const clampedSidebarWidth = Math.min(520, Math.max(280, sidebarWidth));
+
+  const handleSidebarResizePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setIsSidebarResizing(true);
+  };
+  const handleSidebarResizePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isSidebarResizing) return;
+    const rect = e.currentTarget.parentElement?.getBoundingClientRect();
+    if (!rect) return;
+    setSidebarWidth(Math.min(520, Math.max(280, e.clientX - rect.left)));
+  };
+  const handleSidebarResizePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    setIsSidebarResizing(false);
+  };
 
   return (
     <div
       className={cn(
-        'crossword-sidebar h-full flex bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-700 shadow-xl transition-all duration-300 max-lg:w-full',
-        collapsed ? 'w-24' : 'w-[22rem]'
+        'word-search-sidebar relative h-full bg-white dark:bg-slate-950 border-r border-slate-200 dark:border-slate-800 flex flex-col overflow-visible max-lg:w-full',
+        collapsed
+          ? 'w-28 transition-all duration-300'
+          : isSidebarResizing
+            ? ''
+            : 'transition-[width] duration-75'
       )}
+      style={collapsed || !isDesktopLayout ? undefined : { width: clampedSidebarWidth }}
     >
+      <button
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        onClick={() => setCollapsed((c) => !c)}
+        className="absolute top-1/2 -right-2 z-50 hidden lg:flex items-center justify-center p-0 m-0 rounded-sm opacity-20 transition duration-100 hover:opacity-80 hover:scale-110"
+        style={{
+          transform: 'translateY(-50%)',
+          width: 20,
+          height: 22,
+          background: '#e8ecf0',
+          border: '1px solid #9ca3af',
+          boxShadow: '0 0 0 1px rgba(0,0,0,0.12)',
+        }}
+      >
+        <div
+          style={{
+            width: 0,
+            height: 0,
+            borderTop: '4px solid transparent',
+            borderBottom: '4px solid transparent',
+            borderLeft: collapsed ? '8px solid #000' : '0 solid transparent',
+            borderRight: collapsed ? '0 solid transparent' : '8px solid #000',
+          }}
+        />
+      </button>
+
+      {!collapsed ? (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize settings panel"
+          title="Drag to resize panel"
+          onPointerDown={handleSidebarResizePointerDown}
+          onPointerMove={handleSidebarResizePointerMove}
+          onPointerUp={handleSidebarResizePointerUp}
+          onPointerCancel={handleSidebarResizePointerUp}
+          className="group/resize absolute inset-y-0 -right-1.5 z-40 hidden w-4 cursor-col-resize touch-none lg:block"
+        >
+          <span
+            className={cn(
+              'pointer-events-none absolute inset-y-12 right-[6px] w-1 rounded-full transition-colors',
+              isSidebarResizing
+                ? 'bg-sky-500'
+                : 'bg-slate-300/70 group-hover/resize:bg-sky-400 dark:bg-slate-500/70'
+            )}
+          />
+        </div>
+      ) : null}
+
+      <style>{SIDEBAR_RAIL_CSS}</style>
+
       <Tabs
         value={activeTab}
-        onValueChange={(v) => {
-          setActiveTab(v);
-          setCollapsed(false);
-        }}
         orientation="vertical"
-        className="flex h-full w-full"
+        className="w-full flex-1 flex min-h-0"
+        onValueChange={handleTabChange}
       >
-        <TabsList className="flex h-auto flex-col w-24 gap-2 bg-transparent shrink-0 py-4 px-2">
-          {(
-            [
-              ['words', ListTree, 'Words'],
-              ['general', Settings2, 'Puzzle'],
-              ['design', Palette, 'Titles'],
-              ['ai', Sparkles, 'AI'],
-              ['book', BookOpen, 'Book'],
-            ] as const
-          ).map(([value, Icon, label]) => (
-            <TabsTrigger
-              key={value}
-              value={value}
-              className={tabBtn}
-              onPointerDown={(e) => {
-                if (activeTab === value) {
-                  e.preventDefault();
-                  setCollapsed((c) => !c);
-                }
-              }}
-            >
-              <Icon className="h-4 w-4" />
-              <span className="text-[10px] font-semibold">{label}</span>
-            </TabsTrigger>
-          ))}
-          <div className="mt-auto px-1">
-            <Button
+        <TabsList className="flex h-full min-h-0 flex-col w-[5.25rem] gap-4 bg-transparent shrink-0 px-0 py-0">
+          <div className="sidebar-rail-group">
+            <button
               type="button"
-              size="sm"
-              className="w-full h-auto flex flex-col gap-1 py-2.5"
-              onClick={handleGenerate}
-              title="Generate crossword puzzles"
+              onClick={() => handlePanelChange('layout')}
+              className="sidebar-rail-heading"
+              title="Book-wide layout settings"
             >
-              <Zap className="h-4 w-4" />
-              <span className="text-[9px] font-bold leading-tight">
-                {core.numberOfPuzzles > 1 ? `Generate ${core.numberOfPuzzles}` : 'Generate'}
-              </span>
-            </Button>
+              <p className="sidebar-rail-heading__title">Layout</p>
+            </button>
+            <article className="sidebar-radio-input">
+              <div className="sidebar-radio-options">
+                <TabsTrigger
+                  value="book"
+                  label="Trim"
+                  title="Trim size & margins"
+                  className="w-full"
+                  onPointerDown={(e) => {
+                    setSettingsPanel('layout');
+                    handleTriggerPointerDown(e, 'book');
+                  }}
+                >
+                  <Book />
+                </TabsTrigger>
+                <TabsTrigger
+                  value="colors"
+                  label="Style"
+                  title="Colors, frame & page numbers"
+                  className="w-full"
+                  onPointerDown={(e) => {
+                    setSettingsPanel('layout');
+                    handleTriggerPointerDown(e, 'colors');
+                  }}
+                >
+                  <Palette />
+                </TabsTrigger>
+                <TabsTrigger
+                  value="pages"
+                  label="Chapters"
+                  title="Chapter pages"
+                  className="w-full"
+                  onPointerDown={(e) => {
+                    setSettingsPanel('layout');
+                    handleTriggerPointerDown(e, 'pages');
+                  }}
+                >
+                  <Sparkles />
+                </TabsTrigger>
+              </div>
+            </article>
+          </div>
+
+          <div className="sidebar-rail-group">
+            <button
+              type="button"
+              onClick={() => handlePanelChange('document')}
+              className="sidebar-rail-heading"
+              title="Settings for this document"
+            >
+              <p className="sidebar-rail-heading__title">Document</p>
+            </button>
+            <article className="sidebar-radio-input">
+              <div className="sidebar-radio-options">
+                <TabsTrigger
+                  value="puzzle"
+                  label="Puzzle"
+                  title="Puzzle settings"
+                  className="w-full"
+                  onPointerDown={(e) => {
+                    setSettingsPanel('document');
+                    handleTriggerPointerDown(e, 'puzzle');
+                  }}
+                >
+                  <Grid3X3 />
+                </TabsTrigger>
+                <TabsTrigger
+                  value="words"
+                  label="Words"
+                  title="Clues & answers"
+                  className="w-full"
+                  onPointerDown={(e) => {
+                    setSettingsPanel('document');
+                    handleTriggerPointerDown(e, 'words');
+                  }}
+                >
+                  <List />
+                </TabsTrigger>
+                <TabsTrigger
+                  value="design"
+                  label="Titles"
+                  title="Puzzle titles"
+                  className="w-full"
+                  onPointerDown={(e) => {
+                    setSettingsPanel('document');
+                    handleTriggerPointerDown(e, 'design');
+                  }}
+                >
+                  <Type />
+                </TabsTrigger>
+              </div>
+            </article>
+          </div>
+
+          <div className="sidebar-generate-wrap">
+            <button
+              type="button"
+              className="sidebar-generate-btn"
+              onClick={handleGenerate}
+              disabled={isGenerateLocked}
+              title={generateTitle}
+              aria-label={generateTitle}
+            >
+              {hasPuzzles ? (
+                <RefreshCw className={cn(isGenerating && 'animate-spin')} />
+              ) : (
+                <Zap />
+              )}
+            </button>
+            <p className="sidebar-generate-caption">{generateLabel}</p>
+            {isAiPuzzleType('crossword') ? (
+              <>
+                <button
+                  type="button"
+                  className="sidebar-generate-btn sidebar-generate-btn--ai"
+                  onClick={() => setAiGenerateOpen(true)}
+                  disabled={isGenerating}
+                  title="Generate with AI"
+                  aria-label="Generate with AI"
+                >
+                  <LucideSparkles />
+                </button>
+                <p className="sidebar-generate-caption sidebar-generate-caption--ai">
+                  Generate with AI
+                </p>
+              </>
+            ) : null}
           </div>
         </TabsList>
 
-        {!collapsed && (
-          <div className="flex-1 overflow-y-auto border-l border-slate-100 dark:border-slate-800 p-4 space-y-4">
-            {/* —— WORDS: clues + answers —— */}
-            <TabsContent value="words" className="mt-0 space-y-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 mb-1">
-                  Clues & Answers
-                </h3>
-                <p className="text-[11px] text-slate-500 mb-3">
-                  One clue and one answer per line. Lines are paired by index (line 1 clue ↔ line 1
-                  answer).
-                </p>
-              </div>
-
-              <SliderField
-                label="Clues per Puzzle"
-                value={core.cluesPerPuzzle}
-                onValueChange={(v) => patchCore({ cluesPerPuzzle: v })}
-                min={0}
-                max={50}
-                step={1}
-              />
-              <label className="flex items-start gap-2 text-sm cursor-pointer">
-                <Checkbox
-                  checked={core.exactClueCount === true}
-                  onCheckedChange={(c) => patchCore({ exactClueCount: c === true })}
-                  className="mt-0.5"
-                />
-                <span>
-                  Make exactly {Math.max(1, core.cluesPerPuzzle || 15)} clues
-                  <span className="block text-[11px] text-slate-500">This could take time</span>
-                </span>
-              </label>
-              <p className="text-[11px] text-slate-500">
-                Total needed: {requiredPairs} ({core.numberOfPuzzles} × {core.cluesPerPuzzle})
-              </p>
-
-              <div className="space-y-1">
-                <Label className="text-xs font-semibold text-slate-600">
-                  Answers (one answer per line)
-                </Label>
-                <textarea
-                  className="w-full min-h-[120px] rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-950"
-                  value={core.answersText || answerLines.join('\n')}
-                  onChange={(e) => setAnswersText(e.target.value)}
-                  placeholder={'KIWI\nWALRUS\nTURTLE\nMOUSE'}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') e.stopPropagation();
-                  }}
-                />
-                {missingAnswers > 0 && (
-                  <p className="text-xs font-medium text-rose-700">
-                    {missingAnswers} more answer{missingAnswers === 1 ? '' : 's'} needed
-                  </p>
-                )}
-                {tooLongAnswers.length > 0 && (
-                  <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200 space-y-1 mt-1">
-                    <p className="font-semibold text-amber-800 dark:text-amber-300 flex items-center gap-1">
-                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                      {tooLongAnswers.length} answer{tooLongAnswers.length === 1 ? '' : 's'} longer than grid size ({maxGridDimension}×{maxGridDimension})
-                    </p>
-                    <ul className="list-disc pl-4 space-y-0.5 text-[11px] max-h-[80px] overflow-y-auto">
-                      {tooLongAnswers.map(({ raw, cleanLength }) => (
-                        <li key={raw}>
-                          <span className="font-semibold">{raw}</span> — {cleanLength} letters (grid max: {maxGridDimension})
-                        </li>
-                      ))}
-                    </ul>
-                    <p className="text-[10px] text-amber-700 dark:text-amber-400">
-                      Spaces are ignored when measuring length. Increase grid size in Puzzle Settings or shorten long answers.
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-1">
-                <Label className="text-xs font-semibold text-slate-600">
-                  Clues (one clue per line)
-                </Label>
-                <textarea
-                  className="w-full min-h-[140px] rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs dark:border-slate-700 dark:bg-slate-950"
-                  value={core.cluesText}
-                  onChange={(e) => setCluesText(e.target.value)}
-                  placeholder={
-                    'Flightless bird native to New Zealand\nLarge marine animal known for its tusks\nAnimal known for its slow movement and shell\nSmall rodent, often kept as a pet'
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') e.stopPropagation();
-                  }}
-                />
-                {missingClues > 0 && (
-                  <p className="text-xs font-medium text-amber-700">
-                    {missingClues} clue{missingClues === 1 ? '' : 's'} missing — placeholders will
-                    be used for those answers
-                  </p>
-                )}
-              </div>
-            </TabsContent>
-
-            {/* —— GENERAL / PUZZLE —— */}
-            <TabsContent value="general" className="mt-0 space-y-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 mb-1">
-                  Puzzle Settings
-                </h3>
-                <p className="text-[11px] text-slate-500 mb-3">
-                  Batch size, grid size, and scale — same idea as Word Search.
-                </p>
-              </div>
-
-              <SliderField
-                label="Number of Puzzles"
-                value={core.numberOfPuzzles}
-                onValueChange={(v) => patchCore({ numberOfPuzzles: v })}
-                min={0}
-                max={400}
-                step={1}
-              />
-              <SliderField
-                label="Puzzles Starting Number"
-                value={core.puzzlesStartingNumber}
-                onValueChange={(v) => patchCore({ puzzlesStartingNumber: v })}
-                min={0}
-                max={1000000}
-                step={1}
-              />
-              <SliderField
-                label="Clues per Puzzle"
-                value={core.cluesPerPuzzle}
-                onValueChange={(v) => patchCore({ cluesPerPuzzle: v })}
-                min={0}
-                max={50}
-                step={1}
-              />
-              <label className="flex items-start gap-2 text-sm cursor-pointer">
-                <Checkbox
-                  checked={core.exactClueCount === true}
-                  onCheckedChange={(c) => patchCore({ exactClueCount: c === true })}
-                  className="mt-0.5"
-                />
-                <span>
-                  Make exactly {Math.max(1, core.cluesPerPuzzle || 15)} clues
-                  <span className="block text-[11px] text-slate-500">This could take time</span>
-                </span>
-              </label>
-
-              <div className="space-y-2 pt-2 border-t border-slate-100">
-                <Label className="text-xs font-semibold text-slate-600">Grid Dimensions</Label>
-                <SliderField
-                  label="Letters Across"
-                  value={core.lettersAcross}
-                  onValueChange={(v) => patchCore({ lettersAcross: v })}
-                  min={0}
-                  max={50}
-                  step={1}
-                />
-                <SliderField
-                  label="Letters Down"
-                  value={core.lettersDown}
-                  onValueChange={(v) => patchCore({ lettersDown: v })}
-                  min={0}
-                  max={50}
-                  step={1}
-                />
-                <SliderField
-                  label="Puzzle Grid Scale"
-                  value={core.puzzleGridScale}
-                  onValueChange={(v) => patchCore({ puzzleGridScale: v })}
-                  min={0}
-                  max={200}
-                  step={5}
-                  format="%"
-                />
-                <SliderField
-                  label="Puzzle Size (% of Page)"
-                  value={core.puzzleSizePercent}
-                  onValueChange={(v) => patchCore({ puzzleSizePercent: v })}
-                  min={0}
-                  max={80}
-                  step={1}
-                  format="%"
-                />
-                <SliderField
-                  label="Boxes Stroke Thickness"
-                  value={colors.lineThicknessPx ?? 1}
-                  onValueChange={(v) => patchColors({ lineThicknessPx: v })}
-                  min={0}
-                  max={8}
-                  step={0.5}
-                />
-                <MiniColorInput
-                  label="Boxes Stroke Color"
-                  value={colors.lineColor}
-                  onChange={(v) => patchColors({ lineColor: v })}
-                />
-              </div>
-
-              <div className="space-y-2 pt-2 border-t border-slate-100">
-                <Label className="text-xs font-semibold text-slate-600">Answer Formatting</Label>
-                <div className="space-y-1">
-                  <Label className="text-xs text-slate-500">Select Case</Label>
-                  <Select
-                    value={core.answerCase}
-                    onValueChange={(v) => patchCore({ answerCase: v as CrosswordAnswerCase })}
-                  >
-                    <SelectTrigger className="h-8 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="upper">UPPER</SelectItem>
-                      <SelectItem value="lower">lower</SelectItem>
-                      <SelectItem value="original">Original</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <label className="flex items-center gap-2 text-xs cursor-pointer">
-                  <Checkbox
-                    checked={core.twoPagePuzzles}
-                    onCheckedChange={(c) => patchCore({ twoPagePuzzles: c === true })}
-                  />
-                  Two Page Puzzles
-                </label>
-                <label className="flex items-center gap-2 text-xs cursor-pointer">
-                  <Checkbox
-                    checked={core.allowNumbersInAnswers}
-                    onCheckedChange={(c) => patchCore({ allowNumbersInAnswers: c === true })}
-                  />
-                  Allow Numbers in Answers
-                </label>
-                <label className="flex items-center gap-2 text-xs cursor-pointer">
-                  <Checkbox
-                    checked={core.kidsMode}
-                    onCheckedChange={(c) => patchCore({ kidsMode: c === true })}
-                  />
-                  Kids Mode
-                </label>
-              </div>
-            </TabsContent>
-
-            {/* —— DESIGN: titles / subtitle / clues fonts / solutions —— */}
-            <TabsContent value="design" className="mt-0 space-y-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 mb-1">
-                  Titles & Typography
-                </h3>
-                <p className="text-[11px] text-slate-500 mb-3">
-                  Same title / subtitle / solution patterns as Word Search documents.
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-xs font-semibold text-slate-600">Title</Label>
-                <Select
-                  value={
-                    typography.selectTitleOption === 'title-number'
-                      ? 'one-custom-title'
-                      : typography.selectTitleOption === 'different-titles'
-                        ? 'custom'
-                        : typography.selectTitleOption
-                  }
-                  onValueChange={(value) => {
-                    const next = value as CrosswordTitleOption;
-                    const updates: Partial<CrosswordSettings['typography']> = {
-                      selectTitleOption: next,
-                    };
-                    if (next === 'none') updates.titleText = '';
-                    if (next === 'one-custom-title' && typography.titleText) {
-                      updates.titleText =
-                        (typography.titleText || '').split('\n')[0] || 'Crossword';
-                    }
-                    patchTypography(updates);
-                  }}
-                >
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="one-custom-title">One Custom Title</SelectItem>
-                    <SelectItem value="custom">Custom Title Per Puzzle</SelectItem>
-                    <SelectItem value="none">No Title</SelectItem>
-                  </SelectContent>
-                </Select>
-
-                {typography.selectTitleOption !== 'none' &&
-                  typography.selectTitleOption !== 'custom' &&
-                  typography.selectTitleOption !== 'different-titles' && (
-                    <SettingsTextInput
-                      className="h-8 text-xs"
-                      value={typography.titleText}
-                      onChange={(v) => patchTypography({ titleText: v })}
-                      placeholder="Crossword"
-                    />
-                  )}
-
-                {(typography.selectTitleOption === 'custom' ||
-                  typography.selectTitleOption === 'different-titles') && (
-                  <SettingsTextarea
-                    className="w-full min-h-[80px] rounded-md border border-slate-200 px-2 py-1.5 text-xs"
-                    value={typography.titleText || typography.differentTitles}
-                    onChange={(v) =>
-                      patchTypography({
-                        titleText: v,
-                        differentTitles: v,
-                      })
-                    }
-                    placeholder={'1. Animals\n2. Ocean\n3. Space'}
-                  />
-                )}
-
-                {typography.selectTitleOption !== 'none' && (
-                  <div className="space-y-1">
-                    <Label className="text-xs text-slate-500">Puzzle Numbering Style</Label>
-                    <Select
-                      value={typography.puzzleNumberingStyle}
-                      onValueChange={(v) =>
-                        patchTypography({ puzzleNumberingStyle: v as CrosswordNumberingStyle })
-                      }
-                    >
-                      <SelectTrigger className="h-8 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">None</SelectItem>
-                        <SelectItem value="prefix">Prefix (1. Title)</SelectItem>
-                        <SelectItem value="suffix">Suffix (Title #1)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    {(typography.selectTitleOption === 'custom' ||
-                      typography.selectTitleOption === 'different-titles') &&
-                      typography.puzzleNumberingStyle === 'none' && (
-                        <p className="text-[11px] text-slate-500">
-                          Type numbers in each title line if you want them (e.g.
-                          &quot;1. Animals&quot;).
-                        </p>
-                      )}
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-2 pt-2 border-t border-slate-100">
-                <Label className="text-xs font-semibold text-slate-600">Title Font</Label>
-                <Select
-                  value={typography.puzzleTitleFontFamily}
-                  onValueChange={(v) => patchTypography({ puzzleTitleFontFamily: v })}
-                >
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PUBLISHING_FONTS.map((font) => (
-                      <SelectItem key={font} value={font} style={{ fontFamily: font }}>
-                        {font}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <SliderField
-                  label="Font Size — Puzzle Pages"
-                  value={typography.puzzleTitleFontSize}
-                  onValueChange={(v) => patchTypography({ puzzleTitleFontSize: v })}
-                  min={0}
-                  max={50}
-                  step={1}
-                />
-                <SliderField
-                  label="Font Size — Answer Pages"
-                  value={typography.answerTitleFontSize}
-                  onValueChange={(v) => patchTypography({ answerTitleFontSize: v })}
-                  min={0}
-                  max={50}
-                  step={1}
-                />
-                <SliderField
-                  label="Start Title At (in)"
-                  value={typography.titleStartAt}
-                  onValueChange={(v) => patchTypography({ titleStartAt: v })}
-                  min={0}
-                  max={2}
-                  step={0.05}
-                  format="inches"
-                />
-                <SliderField
-                  label="Space Between Title & Grid"
-                  value={typography.spaceBetweenTitleAndPuzzle}
-                  onValueChange={(v) => patchTypography({ spaceBetweenTitleAndPuzzle: v })}
-                  min={0}
-                  max={2}
-                  step={0.05}
-                  format="inches"
-                />
-                <SliderField
-                  label="Space Between Puzzle & Clues"
-                  value={typography.spaceBetweenPuzzleAndClues}
-                  onValueChange={(v) => patchTypography({ spaceBetweenPuzzleAndClues: v })}
-                  min={0}
-                  max={2}
-                  step={0.05}
-                  format="inches"
-                />
-              </div>
-
-              <div className="space-y-2 pt-2 border-t border-slate-100">
-                <label className="flex items-center gap-2 text-xs cursor-pointer">
-                  <Checkbox
-                    checked={typography.includeFunFacts}
-                    onCheckedChange={(c) => patchTypography({ includeFunFacts: c === true })}
-                  />
-                  Add Subtitle / Fun Facts
-                </label>
-                {typography.includeFunFacts && (
-                  <>
-                    <textarea
-                      className="w-full min-h-[72px] rounded-md border border-slate-200 px-2 py-1.5 text-xs"
-                      value={typography.funFactsText}
-                      onChange={(e) => patchTypography({ funFactsText: e.target.value })}
-                      placeholder="One subtitle or fun fact per line…"
-                    />
-                    <Select
-                      value={typography.subtitleFontFamily}
-                      onValueChange={(v) => patchTypography({ subtitleFontFamily: v })}
-                    >
-                      <SelectTrigger className="h-8 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {PUBLISHING_FONTS.map((font) => (
-                          <SelectItem key={font} value={font} style={{ fontFamily: font }}>
-                            {font}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <SliderField
-                      label="Subtitle Font Size"
-                      value={typography.subtitleFontSize}
-                      onValueChange={(v) => patchTypography({ subtitleFontSize: v })}
-                      min={0}
-                      max={24}
-                      step={1}
-                    />
-                    <MiniColorInput
-                      label="Subtitle Color"
-                      value={colors.subtitleColor}
-                      onChange={(v) => patchColors({ subtitleColor: v })}
-                    />
-                    <SliderField
-                      label="Gap Title → Subtitle"
-                      value={typography.subtitleToTitleGap}
-                      onValueChange={(v) => patchTypography({ subtitleToTitleGap: v })}
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      format="inches"
-                    />
-                    <SliderField
-                      label="Gap Subtitle → Grid"
-                      value={typography.subtitleToPuzzleGap}
-                      onValueChange={(v) => patchTypography({ subtitleToPuzzleGap: v })}
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      format="inches"
-                    />
-                  </>
-                )}
-              </div>
-
-              <div className="space-y-2 pt-2 border-t border-slate-100">
-                <Label className="text-xs font-semibold text-slate-600">
-                  Clue Numbers (in grid)
-                </Label>
-                <Select
-                  value={typography.numberFontFamily}
-                  onValueChange={(v) => patchTypography({ numberFontFamily: v })}
-                >
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PUBLISHING_FONTS.map((font) => (
-                      <SelectItem key={font} value={font} style={{ fontFamily: font }}>
-                        {font}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <SliderField
-                  label="Number Font Size (Puzzle)"
-                  value={typography.numberFontSizePuzzle}
-                  onValueChange={(v) => patchTypography({ numberFontSizePuzzle: v })}
-                  min={0}
-                  max={40}
-                  step={1}
-                />
-                <SliderField
-                  label="Number Font Size (Answers)"
-                  value={typography.numberFontSizeAnswers}
-                  onValueChange={(v) => patchTypography({ numberFontSizeAnswers: v })}
-                  min={0}
-                  max={40}
-                  step={1}
-                />
-                <SliderField
-                  label="Grid Letter Font Size (Solutions)"
-                  value={typography.gridLetterFontSize}
-                  onValueChange={(v) => patchTypography({ gridLetterFontSize: v })}
-                  min={0}
-                  max={40}
-                  step={1}
-                />
-              </div>
-
-              <div className="space-y-2 pt-2 border-t border-slate-100">
-                <Label className="text-xs font-semibold text-slate-600">Across / Down Labels</Label>
-                <Select
-                  value={typography.acrossDownFontFamily}
-                  onValueChange={(v) => patchTypography({ acrossDownFontFamily: v })}
-                >
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PUBLISHING_FONTS.map((font) => (
-                      <SelectItem key={font} value={font} style={{ fontFamily: font }}>
-                        {font}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <SliderField
-                  label="Across/Down Font Size"
-                  value={typography.acrossDownFontSize}
-                  onValueChange={(v) => patchTypography({ acrossDownFontSize: v })}
-                  min={0}
-                  max={40}
-                  step={1}
-                />
-              </div>
-
-              <div className="space-y-2 pt-2 border-t border-slate-100">
-                <Label className="text-xs font-semibold text-slate-600">Clues Format</Label>
-                <Select
-                  value={typography.clueFontFamily}
-                  onValueChange={(v) => patchTypography({ clueFontFamily: v })}
-                >
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PUBLISHING_FONTS.map((font) => (
-                      <SelectItem key={font} value={font} style={{ fontFamily: font }}>
-                        {font}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <SliderField
-                  label="Clue Font Size"
-                  value={typography.clueFontSize}
-                  onValueChange={(v) => patchTypography({ clueFontSize: v })}
-                  min={0}
-                  max={40}
-                  step={1}
-                />
-                <div className="space-y-1">
-                  <Label className="text-xs text-slate-500">Clue Layout</Label>
-                  <Select
-                    value={typography.clueLayout}
-                    onValueChange={(v) =>
-                      patchTypography({ clueLayout: v as CrosswordClueLayout })
-                    }
-                  >
-                    <SelectTrigger className="h-8 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="single">Single column</SelectItem>
-                      <SelectItem value="double">Double column (Across | Down)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="space-y-2 pt-2 border-t border-slate-100">
-                <Label className="text-xs font-semibold text-slate-600">Solution Page Title</Label>
-                <Select
-                  value={typography.solutionTitleStyle}
-                  onValueChange={(v) => {
-                    const next = v as CrosswordSolutionTitleStyle;
-                    if (next === 'same_as_puzzle') {
-                      patchTypography({
-                        solutionTitleStyle: next,
-                        solutionNumberingStyle: 'none',
-                      });
-                    } else {
-                      patchTypography({ solutionTitleStyle: next });
-                    }
-                  }}
-                >
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="same_as_puzzle">Same as Puzzle</SelectItem>
-                    <SelectItem value="custom">Custom Title</SelectItem>
-                  </SelectContent>
-                </Select>
-                {typography.solutionTitleStyle === 'custom' && (
-                  <>
-                    <SettingsTextInput
-                      className="h-8 text-xs"
-                      value={typography.customSolutionTitle}
-                      onChange={(v) => patchTypography({ customSolutionTitle: v })}
-                      placeholder="Solution"
-                    />
-                    <Select
-                      value={typography.solutionNumberingStyle}
-                      onValueChange={(v) =>
-                        patchTypography({
-                          solutionNumberingStyle: v as CrosswordNumberingStyle,
-                        })
-                      }
-                    >
-                      <SelectTrigger className="h-8 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">None</SelectItem>
-                        <SelectItem value="prefix">Prefix (1. Title)</SelectItem>
-                        <SelectItem value="suffix">Suffix (Title #1)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </>
-                )}
-                <SliderField
-                  label="Space Between Title & Answer"
-                  value={typography.spaceBetweenTitleAndAnswer}
-                  onValueChange={(v) => patchTypography({ spaceBetweenTitleAndAnswer: v })}
-                  min={0}
-                  max={2}
-                  step={0.05}
-                  format="inches"
-                />
-              </div>
-            </TabsContent>
-
-            {/* —— AI —— */}
-            <TabsContent value="ai" className="mt-0 space-y-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 mb-1">
-                  AI & Content
-                </h3>
-              </div>
-              <label className="flex items-center gap-2 text-xs cursor-pointer">
-                <Checkbox
-                  checked={core.useAiClues}
-                  onCheckedChange={(c) => patchCore({ useAiClues: c === true })}
-                />
-                Use AI to Generate Clues/Answers
-              </label>
-              <div className="space-y-1">
-                <Label className="text-xs text-slate-500">Themes (one per line)</Label>
-                <textarea
-                  className="w-full min-h-[88px] rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs"
-                  value={core.themes}
-                  onChange={(e) => patchCore({ themes: e.target.value })}
-                  placeholder={'Animals\nOcean life'}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-slate-500">Language</Label>
-                <Input
-                  className="h-8 text-xs"
-                  value={core.language}
-                  onChange={(e) => patchCore({ language: e.target.value })}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-slate-500">Age Level</Label>
-                <Input
-                  className="h-8 text-xs"
-                  value={core.ageLevel}
-                  onChange={(e) => patchCore({ ageLevel: e.target.value })}
-                />
-              </div>
-              <SliderField
-                label="Max Clue Characters"
-                value={core.maxClueCharacters}
-                onValueChange={(v) => patchCore({ maxClueCharacters: v })}
-                min={0}
-                max={500}
-                step={1}
-              />
-              <SliderField
-                label="Max Answer Length"
-                value={core.maxAnswerLength}
-                onValueChange={(v) => patchCore({ maxAnswerLength: v })}
-                min={0}
-                max={50}
-                step={1}
-              />
-            </TabsContent>
-
-            {/* —— BOOK —— */}
-            <TabsContent value="book" className="mt-0 space-y-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 mb-1">Book</h3>
-                <p className="text-[11px] text-slate-500">
-                  Solution page packing and chapter helpers.
-                </p>
-              </div>
-              <label className="flex items-center gap-2 text-xs cursor-pointer">
-                <Checkbox
-                  checked={bookCanvas.includeBleed}
-                  onCheckedChange={(c) =>
-                    updateCrosswordSettings({
-                      bookCanvas: { ...bookCanvas, includeBleed: c === true },
-                    })
-                  }
-                />
-                Include Bleed
-              </label>
-              <label className="flex items-center gap-2 text-xs cursor-pointer">
-                <Checkbox
-                  checked={bookCanvas.includePageBetweenPuzzleAndSolutions}
-                  onCheckedChange={(c) =>
-                    updateCrosswordSettings({
-                      bookCanvas: {
-                        ...bookCanvas,
-                        includePageBetweenPuzzleAndSolutions: c === true,
-                      },
-                    })
-                  }
-                />
-                Blank page between puzzles and solutions
-              </label>
-              <SliderField
-                label="Answers Per Page"
-                value={bookCanvas.answersPerPage}
-                onValueChange={(v) =>
-                  updateCrosswordSettings({
-                    bookCanvas: { ...bookCanvas, answersPerPage: v },
-                  })
-                }
-                min={0}
-                max={6}
-                step={1}
-              />
-              <div className="pt-3 border-t border-slate-200 dark:border-slate-700">
-                <ChapterPagesBatchPanel />
-              </div>
-            </TabsContent>
+        {canvasEditOpen && crosswordPanelProps && !collapsed ? (
+          <div
+            className="flex-1 min-h-0 m-2 overflow-hidden rounded-lg border border-sky-200 bg-gradient-to-b from-white to-gray-50 shadow-sm dark:border-sky-800 dark:from-slate-800 dark:to-slate-850"
+            style={{ height: 'calc(100vh - 100px)' }}
+          >
+            <CrosswordContextualControls {...crosswordPanelProps} variant="sidebar" />
           </div>
-        )}
+        ) : null}
+
+        <TabsContent
+          value="puzzle"
+          style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
+          className={cn(PANEL_CLASS, (collapsed || canvasEditOpen) && 'hidden')}
+        >
+          {isSettingsTabActive('puzzle') ? (
+            <CrosswordPuzzleSettingsPanel onSave={handleSave} />
+          ) : null}
+        </TabsContent>
+
+        <TabsContent
+          value="words"
+          style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
+          className={cn(PANEL_CLASS, (collapsed || canvasEditOpen) && 'hidden')}
+        >
+          {isSettingsTabActive('words') ? (
+            <CrosswordWordsSettingsPanel onSave={handleSave} />
+          ) : null}
+        </TabsContent>
+
+        <TabsContent
+          value="design"
+          style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
+          className={cn(PANEL_CLASS, (collapsed || canvasEditOpen) && 'hidden')}
+        >
+          {isSettingsTabActive('design') ? (
+            <CrosswordTitlesSettingsPanel onSave={handleSave} />
+          ) : null}
+        </TabsContent>
+
+        <TabsContent
+          value="book"
+          style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
+          className={cn(PANEL_CLASS, (collapsed || canvasEditOpen) && 'hidden')}
+        >
+          {isSettingsTabActive('book') ? <LayoutBookPanel onSave={handleSave} /> : null}
+        </TabsContent>
+
+        <TabsContent
+          value="colors"
+          style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
+          className={cn(PANEL_CLASS, (collapsed || canvasEditOpen) && 'hidden')}
+        >
+          {isSettingsTabActive('colors') ? <LayoutColorsPanel onSave={handleSave} /> : null}
+        </TabsContent>
+
+        <TabsContent
+          value="pages"
+          style={{ height: 'calc(100vh - 100px)', overflowY: 'auto' }}
+          className={cn(PANEL_CLASS, (collapsed || canvasEditOpen) && 'hidden')}
+        >
+          {isSettingsTabActive('pages') ? <LayoutChaptersPanel onSave={handleSave} /> : null}
+        </TabsContent>
       </Tabs>
+
+      <AiProjectWizard
+        open={aiGenerateOpen}
+        onClose={() => setAiGenerateOpen(false)}
+        onComplete={() => setAiGenerateOpen(false)}
+        mode="current-document"
+        lockedType="crossword"
+        lockedCount={puzzleCount}
+        defaultTitle={projectName || titleWords.title || 'Puzzle Book'}
+      />
     </div>
   );
 }
 
-/** Persist helper used by app-context when leaving a crossword document. */
+/** @deprecated Prefer CrosswordDocumentPanels + CrosswordSidebar shell. */
 export function readCrosswordSettingsFromDocument(
-  settings: PuzzleModuleSettings | undefined
-): CrosswordSettings {
-  return normalizeCrosswordSettings(settings?.crosswordSettings ?? getDefaultCrosswordSettings());
+  settings: unknown
+): ReturnType<typeof normalizeCrosswordSettings> | null {
+  if (!settings || typeof settings !== 'object') return null;
+  try {
+    return normalizeCrosswordSettings(settings as Parameters<typeof normalizeCrosswordSettings>[0]);
+  } catch {
+    return null;
+  }
 }

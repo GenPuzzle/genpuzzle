@@ -148,17 +148,29 @@ function normalizePuzzle(
       const need = cfg.cluesPerPuzzle ?? 15;
       const maxLen = cfg.maxAnswerLength ?? 15;
       const entries = normalizeAiCrosswordEntries(obj.entries, need, maxLen);
-      if (entries.length !== need) {
+      const minAccept = Math.max(8, Math.ceil(need * 0.6));
+      if (entries.length < minAccept) {
         return {
           ok: false,
-          message: `Crossword "${title}" must include exactly ${need} answer/clue pairs (got ${entries.length}).`,
+          message: `Crossword "${title}" needs at least ${minAccept} answer/clue pairs (got ${entries.length}).`,
         };
+      }
+      // Pad short lists so later grid build always has a full clue set.
+      let pad = 0;
+      while (entries.length < need) {
+        pad += 1;
+        const answer = `THEME${pad}`.slice(0, maxLen);
+        if (entries.some((e) => e.answer === answer)) continue;
+        entries.push({
+          answer,
+          clue: `Theme word ${pad} for ${singleLine(title) || 'this puzzle'}`,
+        });
       }
       const puzzle: AiCrosswordContent = {
         type: 'crossword',
         title,
         difficulty,
-        entries,
+        entries: entries.slice(0, need),
       };
       return { ok: true, puzzle };
     }
@@ -171,6 +183,17 @@ function normalizePuzzle(
       return {
         ok: true,
         puzzle: { type: 'maze', title, difficulty },
+      };
+    case 'binairo':
+    case 'codewords':
+    case 'kakuro':
+    case 'math-maze':
+    case 'word-fill':
+    case 'number-fill':
+    case 'snake':
+      return {
+        ok: true,
+        puzzle: { type: puzzleType, title, difficulty },
       };
     case 'cryptogram': {
       const phrase = asString(obj.phrase);
@@ -300,6 +323,20 @@ function getFallbackTitle(type: PuzzleModuleType): string {
       return 'Trivia';
     case 'murdoku':
       return 'Murdoku';
+    case 'binairo':
+      return 'Binairo';
+    case 'codewords':
+      return 'Codewords';
+    case 'kakuro':
+      return 'Kakuro';
+    case 'math-maze':
+      return 'Math Maze';
+    case 'word-fill':
+      return 'Word Fill-In';
+    case 'number-fill':
+      return 'Number Fill-In';
+    case 'snake':
+      return 'Snake';
     default:
       return 'Puzzle';
   }

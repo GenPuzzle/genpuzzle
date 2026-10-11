@@ -18,6 +18,8 @@ import {
 import {
   evenChapterPuzzleCounts,
   chapterStartingNumbers,
+  documentLooksAlreadyChapterSplit,
+  resolveActiveSplitRequest,
   resolveChapterSplitSource,
 } from '@/lib/split-puzzle-document-by-chapters';
 
@@ -28,9 +30,11 @@ export function DivideListsIntoChaptersControl({
   numberOfPuzzles: number;
   puzzlesStartingNumber?: number;
 }) {
-  const { documentPages } = useApp();
+  const { documentPages, activeDocumentPage, generatePuzzle } = useApp();
   const [pref, setPref] = useState(readDivideListsPreference);
   const [titlesRevision, setTitlesRevision] = useState(0);
+  const [isApplying, setIsApplying] = useState(false);
+  const [applyMessage, setApplyMessage] = useState<string | null>(null);
 
   // Listen to preference changes dispatched from other tabs/controls
   useEffect(() => {
@@ -61,12 +65,17 @@ export function DivideListsIntoChaptersControl({
 
   const source = useMemo(
     () => resolveChapterSplitSource(documentPages, pref),
-    [documentPages, pref.chapterCount, titlesRevision]
+    // pref.chapterCount is enough; titlesRevision refreshes after draft edits
+    [documentPages, pref, titlesRevision]
   );
 
   const totalPuzzles = Math.max(1, Math.round(numberOfPuzzles) || 1);
   const maxPossibleChapters = Math.max(2, totalPuzzles);
-  const chapterCount = Math.max(2, Math.min(maxPossibleChapters, Math.round(pref.chapterCount) || 2));
+  const chapterCount = Math.max(
+    2,
+    Math.min(maxPossibleChapters, Math.round(source.chapterCount) || 2)
+  );
+  const alreadySplit = documentLooksAlreadyChapterSplit(activeDocumentPage);
 
   // Determine current puzzle counts per chapter
   const currentCounts = useMemo(() => {
@@ -86,11 +95,18 @@ export function DivideListsIntoChaptersControl({
 
   const allocatedSum = currentCounts.reduce((a, b) => a + b, 0);
   const isSumBalanced = allocatedSum === totalPuzzles;
+  const canApply =
+    pref.enabled &&
+    isSumBalanced &&
+    !alreadySplit &&
+    !isApplying &&
+    totalPuzzles >= chapterCount;
 
   // Update pref in state AND localStorage on explicit user actions
   const updatePreference = useCallback((next: DivideListsPreference) => {
     setPref(next);
     writeDivideListsPreference(next);
+    setApplyMessage(null);
   }, []);
 
   const setChapterCount = (nextCount: number) => {
@@ -130,7 +146,10 @@ export function DivideListsIntoChaptersControl({
 
   const handleCheckboxChange = (checked: boolean | string) => {
     const enabled = checked === true;
-    const initialCounts = currentCounts.length === chapterCount ? currentCounts : evenChapterPuzzleCounts(totalPuzzles, chapterCount);
+    const initialCounts =
+      currentCounts.length === chapterCount
+        ? currentCounts
+        : evenChapterPuzzleCounts(totalPuzzles, chapterCount);
     const updated: DivideListsPreference = {
       enabled,
       chapterCount,
@@ -139,9 +158,51 @@ export function DivideListsIntoChaptersControl({
     updatePreference(updated);
     if (enabled) {
       writeChapterTitlesDraft({
-        titles: Array.from({ length: chapterCount }, (_, i) => source.chapterTitles[i] || `Chapter ${i + 1}: `),
+        titles: Array.from(
+          { length: chapterCount },
+          (_, i) => source.chapterTitles[i] || `Chapter ${i + 1}: `
+        ),
         touched: true,
       });
+    }
+  };
+
+  const handleApply = async () => {
+    if (!canApply) return;
+    // Persist latest counts before resolveActiveSplitRequest reads preference.
+    writeDivideListsPreference({
+      enabled: true,
+      chapterCount,
+      customPuzzleCounts: currentCounts,
+    });
+    const splitIntoChapters =
+      resolveActiveSplitRequest({
+        documents: documentPages,
+        numberOfPuzzles: totalPuzzles,
+        puzzlesStartingNumber,
+        alreadySplit,
+      }) ?? {
+        chapterCount,
+        chapterTitles: source.chapterTitles,
+        customPuzzleCounts: currentCounts,
+      };
+
+    setIsApplying(true);
+    setApplyMessage(null);
+    try {
+      await generatePuzzle({
+        splitIntoChapters,
+        clearPageCustomizations: true,
+      });
+      setApplyMessage(
+        `Divided into ${splitIntoChapters.chapterCount} chapters (${(
+          splitIntoChapters.customPuzzleCounts || currentCounts
+        ).join(', ')} puzzles).`
+      );
+    } catch {
+      setApplyMessage('Could not divide this document into chapters.');
+    } finally {
+      setIsApplying(false);
     }
   };
 
@@ -150,10 +211,7 @@ export function DivideListsIntoChaptersControl({
       {/* Checkbox row */}
       <div className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-xs dark:border-slate-700 dark:bg-slate-900">
         <label className="flex items-center gap-2.5 cursor-pointer select-none">
-          <Checkbox
-            checked={pref.enabled}
-            onCheckedChange={handleCheckboxChange}
-          />
+          <Checkbox checked={pref.enabled} onCheckedChange={handleCheckboxChange} />
           <span className="text-sm font-medium text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
             Divide into chapters
           </span>
@@ -180,9 +238,7 @@ export function DivideListsIntoChaptersControl({
               <Label className="text-xs font-medium text-slate-700 dark:text-slate-300">
                 Number of Chapters
               </Label>
-              <span className="text-[11px] text-slate-400">
-                (2 to {maxPossibleChapters})
-              </span>
+              <span className="text-[11px] text-slate-400">(2 to {maxPossibleChapters})</span>
             </div>
             <div className="flex items-center gap-2.5">
               <IntegerInput
@@ -278,6 +334,23 @@ export function DivideListsIntoChaptersControl({
                 </Button>
               )}
             </div>
+
+            <Button
+              type="button"
+              className="w-full h-9 mt-1 font-semibold"
+              disabled={!canApply}
+              onClick={() => void handleApply()}
+            >
+              {isApplying ? 'Applying…' : alreadySplit ? 'Already divided' : 'Apply'}
+            </Button>
+            {applyMessage && (
+              <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-snug">{applyMessage}</p>
+            )}
+            {!isSumBalanced && (
+              <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                Adjust chapter counts so they add up to {totalPuzzles} before applying.
+              </p>
+            )}
           </div>
 
           {/* 3. Link/Info with Layout tab */}
@@ -288,7 +361,8 @@ export function DivideListsIntoChaptersControl({
             </p>
             <p className="leading-relaxed text-sky-800 dark:text-sky-300 text-[10.5px]">
               Chapter title names, subtitles, and cover layouts are managed under{' '}
-              <strong>Layout · Entire book · Chapter title</strong> tab controls. They automatically stay in sync with your settings here.
+              <strong>Layout · Entire book · Chapter title</strong> tab controls. They automatically
+              stay in sync with your settings here.
             </p>
           </div>
         </div>

@@ -1,0 +1,21 @@
+name: layout-consistency
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  layout:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: genpuzzle
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - name: Install LibreOffice for PPTX raster comparison
+        run: sudo apt-get update && sudo apt-get install -y libreoffice
+      - run: npm run check:layout

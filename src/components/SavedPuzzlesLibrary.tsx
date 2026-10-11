@@ -27,6 +27,14 @@ export function SavedPuzzlesLibrary({ isOpen, onClose }: SavedPuzzlesLibraryProp
       'maze': 'MZ',
       'word-match': 'WM',
       'dot-to-dot': 'DD',
+      'murdoku': 'MD',
+      'codewords': 'CD',
+      'binairo': 'BN',
+      'kakuro': 'KK',
+      'math-maze': 'MM',
+      'word-fill': 'WF',
+      'number-fill': 'NF',
+      'snake': 'SN',
     };
     return icons[type] || '?';
   };

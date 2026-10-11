@@ -1,4 +1,8 @@
-import type { WordSearchPuzzle, WordSearchSettings } from './puzzles/types';
+import {
+  normalizeAnswersPerPage,
+  type WordSearchPuzzle,
+  type WordSearchSettings,
+} from './puzzles/types';
 import { resolvePageFrameSettings } from './page-frame-settings';
 
 function finiteOr(value: number, fallback: number): number {
@@ -46,13 +50,11 @@ export interface SolutionPageLayoutResult {
   blocks: SolutionBlockLayout[];
 }
 
-/** 1×1, 1×2, 2×2, 2×3, or 3×3 solution block grid from answers-per-page. */
+/** 1×1, 1×2, or 2×2 solution block grid from the supported answers-per-page values. */
 export function getSolutionGridLayout(answersPerPage: number): SolutionGridLayout {
-  if (answersPerPage >= 9) return { columns: 3, rows: 3 };
-  if (answersPerPage >= 6) return { columns: 2, rows: 3 };
-  if (answersPerPage >= 4) return { columns: 2, rows: 2 };
-  if (answersPerPage >= 3) return { columns: 3, rows: 1 };
-  if (answersPerPage >= 2) return { columns: 1, rows: 2 };
+  const n = normalizeAnswersPerPage(answersPerPage);
+  if (n >= 4) return { columns: 2, rows: 2 };
+  if (n >= 2) return { columns: 1, rows: 2 };
   return { columns: 1, rows: 1 };
 }
 
@@ -78,7 +80,7 @@ export function getSolutionPageMarginInsetPt(
     return Math.max(0, marginDeltaPt);
   }
 
-  const answersPerPage = settings.bookCanvas.answersPerPage || 1;
+  const answersPerPage = normalizeAnswersPerPage(settings.bookCanvas.answersPerPage);
   const isSingleSolution = answersPerPage === 1;
   const baseMarginPt = 36;
   return (isSingleSolution ? 28 : baseMarginPt) + marginDeltaPt;
@@ -190,7 +192,7 @@ export function computeSolutionPageLayout(
   titleToAnswerGap: number,
   gapPt: number
 ): SolutionPageLayoutResult {
-  const answersPerPage = settings.bookCanvas.answersPerPage || 1;
+  const answersPerPage = normalizeAnswersPerPage(settings.bookCanvas.answersPerPage);
   const cappedPuzzles = puzzles.slice(0, answersPerPage);
   const safePageMargin = finiteOr(pageMargin, 40);
   const safeTitleToAnswerGap = finiteOr(titleToAnswerGap, 10);

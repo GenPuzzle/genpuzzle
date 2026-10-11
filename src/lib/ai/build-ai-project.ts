@@ -7,7 +7,10 @@ import {
 } from '@/lib/document-model';
 import type { GpProjectFile } from '@/lib/project-file';
 import type { PersistedAppSettings } from '@/lib/settings-persistence';
-import { getDefaultWordSearchSettings } from '@/lib/puzzles/types';
+import {
+  getDefaultWordSearchSettings,
+  normalizeAnswersPerPage,
+} from '@/lib/puzzles/types';
 import type {
   CrosswordPuzzle,
   GenericBatchPuzzle,
@@ -19,6 +22,7 @@ import { buildCrosswordWordClues } from '@/lib/crossword-settings';
 import { getDefaultCrosswordSettings } from '@/lib/crossword-settings';
 import {
   getDefaultGenericPuzzleSettings,
+  isGenericPuzzleModuleType,
   normalizeGenericPuzzleSettings,
 } from '@/lib/generic-puzzle-settings';
 import { generateSudoku } from '@/lib/puzzles/sudoku';
@@ -26,6 +30,12 @@ import { generateMaze } from '@/lib/puzzles/maze';
 import { generateCryptogram } from '@/lib/puzzles/cryptogram';
 import { generateWordScramble } from '@/lib/puzzles/word-scramble';
 import { buildTriviaBatch } from '@/lib/puzzles/trivia';
+import { generateBinairo } from '@/lib/puzzles/binairo';
+import { generateCodewordPuzzle } from '@/lib/puzzles/codewords';
+import { generateKakuro } from '@/lib/puzzles/kakuro';
+import { generateMathMaze } from '@/lib/puzzles/math-maze';
+import { generateFill } from '@/lib/puzzles/fill';
+import { generateSnake } from '@/lib/puzzles/snake';
 import { enrichMurdokuElementsForScene, generateMurdokuPuzzle, type MurdokuPuzzle } from '@/lib/puzzles/murdoku';
 import {
   applyThemePreset,
@@ -42,6 +52,7 @@ import type {
   AiCryptogramContent,
   AiCrosswordContent,
   AiDifficulty,
+  AiGenericEngineContent,
   AiMazeContent,
   AiMurdokuContent,
   AiProjectSetup,
@@ -52,10 +63,29 @@ import type {
   AiWordScrambleContent,
   AiWordSearchContent,
 } from './types';
-import { aiMurdokuGridFromConfig, getAiChapterTopics, isAiByChapter } from './types';
+import { aiMurdokuGridFromConfig, getAiChapterTopics, getAiPuzzleTypeLabel, isAiByChapter } from './types';
 import { normalizeAiCrosswordEntries } from './validate';
 import { attachAiFrontMatter } from './front-matter';
 import type { AiFrontMatterCopy } from './types';
+import { createPageVariableField, normalizePageVariables } from '@/lib/page-variables';
+import { tokenForVariableKey } from './text-variable-tokens';
+import {
+  buildChapterSplitPlan,
+  evenChapterPuzzleCounts,
+  splitPuzzleDocumentByChapters,
+} from '@/lib/split-puzzle-document-by-chapters';
+import {
+  writeChapterTitlesDraft,
+  writeDivideListsPreference,
+} from '@/lib/chapter-titles-draft';
+
+export interface AiGeneratedBundle {
+  pages: DocumentPage[];
+  batchPuzzles: WordSearchPuzzle[];
+  crosswordBatchPuzzles: CrosswordPuzzle[];
+  genericBatchPuzzles: GenericBatchPuzzle[];
+  murdokuBatchPuzzles: MurdokuPuzzle[];
+}
 
 function mazeSizeForDifficulty(
   d: AiDifficulty,
@@ -77,6 +107,344 @@ function withChapterIndex<T extends { chapterIndex?: number }>(
     ...puzzle,
     chapterIndex: Math.floor(i / perChapter),
   }));
+}
+
+function floorFont(value: number | undefined, min: number, fallback: number): number {
+  const n = Number.isFinite(value) ? Number(value) : fallback;
+  return Math.max(min, n);
+}
+
+/** Apply book-wide AI layout options through existing settings / page variables. */
+function applyAiLayoutOptionsToPage(
+  page: DocumentPage,
+  setup: AiProjectSetup,
+  funFacts: string[] = []
+): DocumentPage {
+  const settings = { ...(page.settings as PuzzleModuleSettings) };
+  const minFontRaw = setup.minimumFontSize;
+  const minFont =
+    minFontRaw != null && Number.isFinite(minFontRaw)
+      ? Math.max(8, Math.min(48, Math.round(minFontRaw)))
+      : 0;
+  const solutionsPerPage =
+    setup.solutionsPerPage != null && Number.isFinite(setup.solutionsPerPage)
+      ? Math.max(1, Math.min(9, Math.round(setup.solutionsPerPage)))
+      : 0;
+  const startNum = Math.max(1, Math.round(setup.startPuzzleNumber ?? 1) || 1);
+  const ensureFunFactVar = setup.ensureFunFactPageVariable === true;
+  // Reserve extra space under the title when a canvas fun-fact variable is used.
+  const headerGapPt = Math.max(36, (minFont || 14) + 24);
+
+  if (settings.wordSearchSettings) {
+    const ws = { ...settings.wordSearchSettings };
+    ws.core = { ...ws.core, puzzlesStartingNumber: startNum };
+    if (solutionsPerPage) {
+      ws.bookCanvas = {
+        ...ws.bookCanvas,
+        answersPerPage: normalizeAnswersPerPage(solutionsPerPage),
+      };
+    }
+    // Keep funFactsText for page-variable resolution, but never draw it twice via typography.
+    if (funFacts.length > 0) {
+      ws.typography = {
+        ...ws.typography,
+        funFactsText: funFacts.join('\n'),
+        includeFunFacts: ensureFunFactVar ? false : Boolean(ws.typography.includeFunFacts),
+      };
+    }
+    if (ensureFunFactVar) {
+      ws.typography = {
+        ...ws.typography,
+        includeFunFacts: false,
+        spaceBetweenTitleAndPuzzle: Math.max(
+          ws.typography.spaceBetweenTitleAndPuzzle ?? 20,
+          headerGapPt
+        ),
+        subtitleToTitleGap: Math.max(ws.typography.subtitleToTitleGap ?? 10, 12),
+      };
+    }
+    if (minFont) {
+      ws.typography = {
+        ...ws.typography,
+        puzzleTitleFontSize: floorFont(ws.typography.puzzleTitleFontSize, minFont, 24),
+        subtitleFontSize: floorFont(ws.typography.subtitleFontSize, minFont, 14),
+      };
+      ws.wordList = {
+        ...ws.wordList,
+        wordListFontSize: floorFont(ws.wordList.wordListFontSize, minFont, 18),
+      };
+    }
+    settings.wordSearchSettings = ws;
+  }
+
+  if (settings.crosswordSettings) {
+    const cw = { ...settings.crosswordSettings };
+    cw.core = { ...cw.core, puzzlesStartingNumber: startNum };
+    if (solutionsPerPage) {
+      cw.bookCanvas = {
+        ...cw.bookCanvas,
+        answersPerPage: normalizeAnswersPerPage(solutionsPerPage),
+      };
+    }
+    if (minFont && cw.typography) {
+      cw.typography = {
+        ...cw.typography,
+        puzzleTitleFontSize: floorFont(
+          (cw.typography as { puzzleTitleFontSize?: number }).puzzleTitleFontSize,
+          minFont,
+          24
+        ),
+      };
+    }
+    settings.crosswordSettings = cw;
+  }
+
+  if (settings.genericPuzzleSettings) {
+    const gp = {
+      ...settings.genericPuzzleSettings,
+      core: { ...settings.genericPuzzleSettings.core },
+      typography: { ...settings.genericPuzzleSettings.typography },
+    };
+    gp.core.puzzlesStartingNumber = startNum;
+    if (solutionsPerPage) gp.core.solutionsPerPage = solutionsPerPage;
+    if (funFacts.length > 0) {
+      gp.typography.funFactsText = funFacts.join('\n');
+    }
+    // Page-variable fun facts replace typography subtitle drawing.
+    gp.typography.includeFunFacts = ensureFunFactVar
+      ? false
+      : funFacts.length > 0 || gp.typography.includeFunFacts === true;
+    if (ensureFunFactVar) {
+      gp.typography.spaceBetweenTitleAndPuzzle = Math.max(
+        gp.typography.spaceBetweenTitleAndPuzzle ?? 0.3,
+        0.55
+      );
+    }
+    if (minFont) {
+      gp.typography.puzzleTitleFontSize = floorFont(
+        gp.typography.puzzleTitleFontSize,
+        minFont,
+        24
+      );
+      gp.typography.puzzleFontSize = floorFont(gp.typography.puzzleFontSize, minFont, 14);
+      gp.typography.answerTitleFontSize = floorFont(
+        gp.typography.answerTitleFontSize,
+        minFont,
+        18
+      );
+    }
+    settings.genericPuzzleSettings = normalizeGenericPuzzleSettings(gp, page.moduleType as never);
+  }
+
+  if (ensureFunFactVar) {
+    const existing = normalizePageVariables(settings.pageVariables);
+    const hasFunFact = existing.some((f) => f.variableKey === 'fun_fact');
+    if (!hasFunFact) {
+      const field = createPageVariableField('text', 50, 18, {
+        widthPercent: 72,
+        heightPercent: Math.max(7, Math.min(14, Math.round((minFont || 14) * 0.55))),
+        fontSize: minFont || 14,
+        bold: false,
+        // Token resolves per puzzle from funFactsText — same system as canvas variables.
+        variableKey: 'fun_fact',
+        textLines: [tokenForVariableKey('fun_fact')],
+        scope: 'document',
+      });
+      // Sit in the reserved band under the title (layout gap bumped above).
+      field.yPercent = 11;
+      field.xPercent = 14;
+      settings.pageVariables = [...existing, field];
+    } else {
+      settings.pageVariables = existing.map((field) =>
+        field.variableKey === 'fun_fact'
+          ? {
+              ...field,
+              textLines: [tokenForVariableKey('fun_fact')],
+              fontSize: Math.max(field.fontSize || 12, minFont || 14),
+            }
+          : field
+      );
+    }
+  }
+
+  return { ...page, settings };
+}
+
+function pagePuzzleCount(page: DocumentPage): number {
+  const settings = page.settings as PuzzleModuleSettings;
+  if (settings.wordSearchSettings) {
+    return Math.max(1, settings.wordSearchSettings.core.numberOfPuzzles || 1);
+  }
+  if (settings.crosswordSettings) {
+    return Math.max(1, settings.crosswordSettings.core.numberOfPuzzles || 1);
+  }
+  if (settings.genericPuzzleSettings) {
+    return Math.max(1, settings.genericPuzzleSettings.core.numberOfPuzzles || 1);
+  }
+  if (settings.murdokuSettings) {
+    return Math.max(1, settings.murdokuSettings.core.numberOfPuzzles || 1);
+  }
+  return 1;
+}
+
+function pageStartingNumber(page: DocumentPage): number {
+  const settings = page.settings as PuzzleModuleSettings;
+  return Math.max(
+    1,
+    settings.wordSearchSettings?.core.puzzlesStartingNumber ||
+      settings.crosswordSettings?.core.puzzlesStartingNumber ||
+      settings.genericPuzzleSettings?.core.puzzlesStartingNumber ||
+      settings.murdokuSettings?.core.puzzlesStartingNumber ||
+      1
+  );
+}
+
+function reassignBatchPuzzlesToChapterDocs<
+  T extends {
+    pageId?: string;
+    pageName?: string;
+    puzzleIndexInDocument?: number;
+    puzzleNumber?: number;
+    chapterIndex?: number;
+  },
+>(
+  puzzles: T[],
+  sourcePageId: string,
+  puzzleDocIds: string[],
+  puzzleCounts: number[],
+  documents: DocumentPage[]
+): T[] {
+  const owned = puzzles.filter((p) => p.pageId === sourcePageId);
+  if (owned.length === 0) return puzzles;
+  const others = puzzles.filter((p) => p.pageId !== sourcePageId);
+  const remapped: T[] = [];
+  let offset = 0;
+  for (let i = 0; i < puzzleDocIds.length; i++) {
+    const count = Math.max(0, puzzleCounts[i] ?? 0);
+    const docId = puzzleDocIds[i]!;
+    const doc = documents.find((p) => p.id === docId);
+    const startNum = doc ? pageStartingNumber(doc) : offset + 1;
+    const slice = owned.slice(offset, offset + count);
+    for (let j = 0; j < slice.length; j++) {
+      remapped.push({
+        ...slice[j]!,
+        pageId: docId,
+        pageName: doc?.name ?? slice[j]!.pageName,
+        puzzleIndexInDocument: j,
+        puzzleNumber: startNum + j,
+        chapterIndex: i,
+      });
+    }
+    offset += count;
+  }
+  return [...others, ...remapped];
+}
+
+/**
+ * Apply the same "Divide into chapters" flow the sidebar uses: one puzzle tab
+ * per chapter per type, with chapter title pages interleaved.
+ */
+export function applyAiDivideIntoChapters(
+  setup: AiProjectSetup,
+  bundle: AiGeneratedBundle
+): AiGeneratedBundle {
+  if (!isAiByChapter(setup)) return bundle;
+  const topics = getAiChapterTopics(setup);
+  const chapterCount = Math.max(2, topics.length);
+  if (chapterCount < 2) return bundle;
+
+  const puzzlePages = bundle.pages.filter(
+    (page) =>
+      isPuzzleModuleType(page.moduleType) &&
+      (page.moduleType === 'word-search' ||
+        page.moduleType === 'crossword' ||
+        isGenericPuzzleModuleType(page.moduleType))
+  );
+  if (puzzlePages.length === 0) return bundle;
+
+  let documents = [...bundle.pages];
+  let batchPuzzles = [...bundle.batchPuzzles];
+  let crosswordBatchPuzzles = [...bundle.crosswordBatchPuzzles];
+  let genericBatchPuzzles = [...bundle.genericBatchPuzzles];
+  let lastCounts = evenChapterPuzzleCounts(
+    pagePuzzleCount(puzzlePages[0]!),
+    chapterCount
+  );
+
+  for (const source of puzzlePages) {
+    // Source may already have been replaced if we iterate stale refs — find by id.
+    const live = documents.find((doc) => doc.id === source.id);
+    if (!live || !isPuzzleModuleType(live.moduleType)) continue;
+    if (typeof (live.settings as PuzzleModuleSettings).chapterIndex === 'number') continue;
+
+    const total = pagePuzzleCount(live);
+    const typeCfg = setup.puzzleTypes.find((t) => t.type === live.moduleType);
+    const perChapter = typeCfg?.count ?? Math.max(1, Math.floor(total / chapterCount));
+    let counts = Array.from({ length: chapterCount }, () => perChapter);
+    if (counts.reduce((a, b) => a + b, 0) !== total) {
+      counts = evenChapterPuzzleCounts(total, chapterCount);
+    }
+    lastCounts = counts;
+
+    const plan = buildChapterSplitPlan({
+      numberOfPuzzles: total,
+      chapterCount,
+      chapterTitles: topics,
+      puzzlesStartingNumber: pageStartingNumber(live),
+      customPuzzleCounts: counts,
+    });
+    if (!plan) continue;
+
+    const split = splitPuzzleDocumentByChapters({
+      documents,
+      sourceDocumentId: live.id,
+      plan,
+    });
+    if (!split) continue;
+
+    documents = split.documentPages;
+    batchPuzzles = reassignBatchPuzzlesToChapterDocs(
+      batchPuzzles,
+      live.id,
+      split.puzzleDocIds,
+      plan.puzzleCounts,
+      documents
+    );
+    crosswordBatchPuzzles = reassignBatchPuzzlesToChapterDocs(
+      crosswordBatchPuzzles,
+      live.id,
+      split.puzzleDocIds,
+      plan.puzzleCounts,
+      documents
+    );
+    genericBatchPuzzles = reassignBatchPuzzlesToChapterDocs(
+      genericBatchPuzzles,
+      live.id,
+      split.puzzleDocIds,
+      plan.puzzleCounts,
+      documents
+    );
+  }
+
+  // Sync sidebar Divide-into-chapters controls with what AI applied.
+  try {
+    writeChapterTitlesDraft({ titles: topics, touched: true });
+    writeDivideListsPreference({
+      enabled: false,
+      chapterCount,
+      customPuzzleCounts: lastCounts,
+    });
+  } catch {
+    // SSR / non-browser — ignore storage sync.
+  }
+
+  return {
+    pages: documents,
+    batchPuzzles,
+    crosswordBatchPuzzles,
+    genericBatchPuzzles,
+    murdokuBatchPuzzles: bundle.murdokuBatchPuzzles,
+  };
 }
 
 function basePersistedSettings(
@@ -171,17 +539,21 @@ export function aiWordSearchToExistingPuzzles(
   return { words, titles, funFacts, puzzles };
 }
 
-export function aiCrosswordToExistingPuzzles(
+export async function aiCrosswordToExistingPuzzles(
   items: AiCrosswordContent[],
   cfg: AiPuzzleTypeConfig,
   pageId: string,
-  pageName: string
-): {
+  pageName: string,
+  options?: {
+    onProgress?: (message: string) => void;
+    signal?: AbortSignal;
+  }
+): Promise<{
   answersText: string;
   cluesText: string;
   titles: string[];
   puzzles: CrosswordPuzzle[];
-} {
+}> {
   const cluesPer = Math.max(1, cfg.cluesPerPuzzle ?? 15);
   const maxAnswerLength = cfg.maxAnswerLength ?? 15;
   const answers: string[] = [];
@@ -189,7 +561,17 @@ export function aiCrosswordToExistingPuzzles(
   const titles: string[] = [];
   const puzzles: CrosswordPuzzle[] = [];
 
-  items.forEach((item, i) => {
+  for (let i = 0; i < items.length; i++) {
+    if (options?.signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
+    const item = items[i]!;
+    options?.onProgress?.(
+      `Building crossword grid ${i + 1} of ${items.length}…`
+    );
+    // Yield so the wizard progress UI stays responsive while placing grids.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
     titles.push(item.title);
     // Re-normalize so textarea lines stay 1:1 even if a clue had line breaks.
     const entries = normalizeAiCrosswordEntries(item.entries, cluesPer, maxAnswerLength);
@@ -222,6 +604,7 @@ export function aiCrosswordToExistingPuzzles(
       lettersDown: 13,
       maxAnswerLength,
       exactClueCount: cfg.exactClueCount === true,
+      timeBudgetMs: 3_500,
     });
     puzzles.push({
       ...generated,
@@ -230,7 +613,7 @@ export function aiCrosswordToExistingPuzzles(
       puzzleIndexInDocument: i,
       puzzleNumber: i + 1,
     });
-  });
+  }
 
   return {
     answersText: answers.join('\n'),
@@ -291,17 +674,97 @@ export function aiMazeToExistingPuzzles(
   return { titles, puzzles };
 }
 
+function codewordsLanguage(setup: AiProjectSetup): string {
+  const lang = (setup.language || 'en').trim().toLowerCase();
+  if (lang.startsWith('fr')) return 'fr';
+  if (lang.startsWith('de')) return 'de';
+  if (lang.startsWith('es') || lang.startsWith('sp')) return 'es';
+  if (lang.startsWith('en') || lang === 'english') return 'en';
+  return 'en';
+}
+
+export function aiGenericEngineToExistingPuzzles(
+  items: AiGenericEngineContent[],
+  type: AiGenericEngineContent['type'],
+  pageId: string,
+  pageName: string,
+  setup: AiProjectSetup
+): { titles: string[]; puzzles: GenericBatchPuzzle[] } {
+  const titles: string[] = [];
+  const puzzles: GenericBatchPuzzle[] = items.map((item, i) => {
+    titles.push(item.title || getAiPuzzleTypeLabel(type));
+    const seed = Date.now() + i * 9973;
+    let generated: GenericBatchPuzzle;
+    switch (type) {
+      case 'binairo':
+        generated = generateBinairo({
+          size: 10,
+          difficulty: item.difficulty,
+          seed,
+          timeBudgetMs: 8000,
+        });
+        break;
+      case 'codewords':
+        generated = generateCodewordPuzzle({
+          rows: 13,
+          cols: 13,
+          difficulty: item.difficulty,
+          seed,
+          language: codewordsLanguage(setup),
+          timeBudgetMs: 8000,
+        });
+        break;
+      case 'kakuro':
+        generated = generateKakuro({
+          size: 9,
+          difficulty: item.difficulty,
+          seed,
+          timeBudgetMs: 40000,
+        });
+        break;
+      case 'math-maze':
+        generated = generateMathMaze({ seed });
+        break;
+      case 'word-fill':
+        generated = generateFill({ seed, mode: 'word' });
+        break;
+      case 'number-fill':
+        generated = generateFill({ seed, mode: 'number' });
+        break;
+      case 'snake':
+        generated = generateSnake({ seed });
+        break;
+      default: {
+        const _exhaustive: never = type;
+        throw new Error(`Unsupported engine type: ${_exhaustive}`);
+      }
+    }
+    return {
+      ...generated,
+      pageId,
+      pageName,
+      puzzleIndexInDocument: i,
+      puzzleNumber: i + 1,
+    };
+  });
+  return { titles, puzzles };
+}
+
 export function aiCryptogramToExistingPuzzles(
   items: AiCryptogramContent[],
   pageId: string,
-  pageName: string
+  pageName: string,
+  language?: string
 ): { phrases: string; titles: string[]; puzzles: GenericBatchPuzzle[] } {
   const titles: string[] = [];
   const phrases: string[] = [];
   const puzzles: GenericBatchPuzzle[] = items.map((item, i) => {
     titles.push(item.title);
     phrases.push(item.phrase);
-    const generated = generateCryptogram(item.phrase, { cipherType: 'letters' });
+    const generated = generateCryptogram(item.phrase, {
+      cipherType: 'letters',
+      language,
+    });
     return {
       ...generated,
       pageId,
@@ -317,7 +780,8 @@ export function aiWordScrambleToExistingPuzzles(
   items: AiWordScrambleContent[],
   cfg: AiPuzzleTypeConfig,
   pageId: string,
-  pageName: string
+  pageName: string,
+  language?: string
 ): { scrambleWords: string; titles: string[]; puzzles: GenericBatchPuzzle[] } {
   const wordsPer = cfg.wordsPerPuzzle ?? 10;
   const titles: string[] = [];
@@ -326,7 +790,7 @@ export function aiWordScrambleToExistingPuzzles(
     titles.push(item.title);
     const slice = item.words.slice(0, wordsPer);
     allWords.push(...slice);
-    const generated = generateWordScramble(slice);
+    const generated = generateWordScramble(slice, language);
     return {
       ...generated,
       pageId,
@@ -563,14 +1027,6 @@ async function aiMurdokuToExistingPuzzles(
   return { settings, puzzles };
 }
 
-export interface AiGeneratedBundle {
-  pages: DocumentPage[];
-  batchPuzzles: WordSearchPuzzle[];
-  crosswordBatchPuzzles: CrosswordPuzzle[];
-  genericBatchPuzzles: GenericBatchPuzzle[];
-  murdokuBatchPuzzles: MurdokuPuzzle[];
-}
-
 /**
  * Convert validated AI content into document tabs + generated puzzles.
  * Does not replace the current project — callers insert or overlay the bundle.
@@ -613,8 +1069,12 @@ export async function buildAiGeneratedBundle(
       ws.wordList.selectWordListOption = 'manual';
       ws.typography.selectTitleOption = 'custom';
       ws.typography.titleText = adapted.titles.join('\n');
-      ws.typography.includeFunFacts = Boolean(typeConfig.generateFunFacts);
+      // Store facts for canvas page-variable resolution; draw only via page variables when enabled.
       ws.typography.funFactsText = adapted.funFacts.join('\n');
+      ws.typography.includeFunFacts =
+        setup.ensureFunFactPageVariable === true
+          ? false
+          : Boolean(typeConfig.generateFunFacts);
       settings.wordSearchSettings = ws;
       settings.titleWords = {
         title: setup.bookTitle || 'Word Search',
@@ -624,11 +1084,12 @@ export async function buildAiGeneratedBundle(
       };
       batchPuzzles.push(...withChapterIndex(adapted.puzzles, typeConfig.count, byChapter));
     } else if (type === 'crossword') {
-      const adapted = aiCrosswordToExistingPuzzles(
+      const adapted = await aiCrosswordToExistingPuzzles(
         items as AiCrosswordContent[],
         typeConfig,
         page.id,
-        page.name
+        page.name,
+        options
       );
       const cw = getDefaultCrosswordSettings();
       cw.core.numberOfPuzzles = adapted.puzzles.length;
@@ -685,7 +1146,8 @@ export async function buildAiGeneratedBundle(
       const adapted = aiCryptogramToExistingPuzzles(
         items as AiCryptogramContent[],
         page.id,
-        page.name
+        page.name,
+        setup.language
       );
       const gp = normalizeGenericPuzzleSettings(
         getDefaultGenericPuzzleSettings('cryptogram'),
@@ -702,7 +1164,8 @@ export async function buildAiGeneratedBundle(
         items as AiWordScrambleContent[],
         typeConfig,
         page.id,
-        page.name
+        page.name,
+        setup.language
       );
       const gp = normalizeGenericPuzzleSettings(
         getDefaultGenericPuzzleSettings('word-scramble'),
@@ -746,21 +1209,81 @@ export async function buildAiGeneratedBundle(
       );
       settings.murdokuSettings = adapted.settings;
       murdokuBatchPuzzles.push(...withChapterIndex(adapted.puzzles, typeConfig.count, byChapter));
+    } else if (
+      type === 'binairo' ||
+      type === 'codewords' ||
+      type === 'kakuro' ||
+      type === 'math-maze' ||
+      type === 'word-fill' ||
+      type === 'number-fill' ||
+      type === 'snake'
+    ) {
+      const adapted = aiGenericEngineToExistingPuzzles(
+        items as AiGenericEngineContent[],
+        type,
+        page.id,
+        page.name,
+        setup
+      );
+      const gp = normalizeGenericPuzzleSettings(
+        getDefaultGenericPuzzleSettings(type),
+        type
+      );
+      gp.core.numberOfPuzzles = adapted.puzzles.length;
+      gp.typography.selectTitleOption = 'custom';
+      gp.typography.titleText = getAiPuzzleTypeLabel(type);
+      gp.typography.differentTitles = '';
+      gp.typography.puzzleNumberingStyle = 'prefix';
+      settings.genericPuzzleSettings = gp;
+      genericBatchPuzzles.push(...withChapterIndex(adapted.puzzles, typeConfig.count, byChapter));
     }
 
-    pages.push(page);
+    const funFactsForPage = (
+      settings.wordSearchSettings?.typography.funFactsText ||
+      settings.genericPuzzleSettings?.typography.funFactsText ||
+      ''
+    )
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    pages.push(applyAiLayoutOptionsToPage(page, setup, funFactsForPage));
   }
 
   if (pages.length === 0) {
     throw new Error('No puzzles were generated.');
   }
 
-  return {
-    pages: attachAiFrontMatter(pages, setup, frontMatterCopy),
+  options?.onProgress?.('Dividing puzzles into chapters…');
+  const divided = applyAiDivideIntoChapters(setup, {
+    pages,
     batchPuzzles,
     crosswordBatchPuzzles,
     genericBatchPuzzles,
     murdokuBatchPuzzles,
+  });
+
+  // Chapter title pages already come from divide-into-chapters — don't duplicate them.
+  const fmSetup: AiProjectSetup =
+    isAiByChapter(setup) &&
+    divided.pages.some((page) => {
+      const settings = page.settings as { isChapterPage?: boolean };
+      return settings.isChapterPage === true;
+    })
+      ? {
+          ...setup,
+          frontMatter: setup.frontMatter
+            ? { ...setup.frontMatter, includeChapterPages: false }
+            : setup.frontMatter,
+        }
+      : setup;
+
+  return {
+    pages: attachAiFrontMatter(divided.pages, fmSetup, frontMatterCopy),
+    batchPuzzles: divided.batchPuzzles,
+    crosswordBatchPuzzles: divided.crosswordBatchPuzzles,
+    genericBatchPuzzles: divided.genericBatchPuzzles,
+    murdokuBatchPuzzles: divided.murdokuBatchPuzzles,
   };
 }
 

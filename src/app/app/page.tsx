@@ -5,9 +5,11 @@ import { WordSearchSidebar } from '@/components/WordSearchSidebar';
 import { PreviewCanvas } from '@/components/PreviewCanvas';
 import { FloatingHelpWidget } from '@/components/FloatingHelpWidget';
 import { EditorTutorial } from '@/components/auth/EditorTutorial';
+import { DiagRenderProbe } from '@/components/DiagRenderProbe';
 import { Menu, X } from 'lucide-react';
 import { useApp } from '@/lib/app-context';
 import { CanvasEditPanelProvider } from '@/lib/canvas-edit-panel-context';
+import { AiCopilotUiProvider } from '@/lib/ai-copilot-ui-context';
 import { cn } from '@/lib/utils';
 
 function PuzzleGeneratorApp() {
@@ -28,6 +30,7 @@ function PuzzleGeneratorApp() {
   }, [sidebarOpen]);
 
   return (
+    <AiCopilotUiProvider>
     <CanvasEditPanelProvider>
     <div className="gp-app-shell flex h-full flex-col lg:flex-row min-h-0 bg-gradient-to-br from-[#F0F5F6] to-white dark:from-slate-950 dark:to-slate-900">
       <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
@@ -98,13 +101,17 @@ function PuzzleGeneratorApp() {
             </div>
           </div>
         )}
-        <WordSearchSidebar />
+        <DiagRenderProbe label="WordSearchSidebar">
+          <WordSearchSidebar />
+        </DiagRenderProbe>
       </div>
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden w-full lg:w-auto min-h-0">
         <div className="flex-1 flex flex-col overflow-hidden p-0 sm:p-1 md:p-4 lg:p-6 min-h-0 max-lg:pt-0">
           <div className="flex-1 flex flex-col min-h-0 rounded-none md:rounded-2xl bg-white dark:bg-slate-800 shadow-none md:shadow-2xl ring-0 md:ring-1 md:ring-white/20 dark:ring-slate-700/20 overflow-hidden">
-            <PreviewCanvas />
+            <DiagRenderProbe label="PreviewCanvas">
+              <PreviewCanvas />
+            </DiagRenderProbe>
           </div>
         </div>
       </div>
@@ -147,6 +154,7 @@ function PuzzleGeneratorApp() {
       `}</style>
     </div>
     </CanvasEditPanelProvider>
+    </AiCopilotUiProvider>
   );
 }
 

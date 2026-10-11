@@ -10,6 +10,7 @@ export function buildAiSystemPrompt(): string {
     'Avoid duplicate titles, duplicate answers, and duplicate theme words across puzzles whenever practical.',
     'Answers and clues must match. Vocabulary must be clean and printable.',
     'Word lists must use real, correctly spelled words in the requested language.',
+    'Always preserve correct accents and diacritics for the requested language (é, è, ñ, ä, ö, ü, ß, ç, etc.). Never strip accents or transliterate to ASCII.',
     'Never concatenate words: write "Sea Animals" not "Seaanimals" or "SeaAnimals". Multi-word phrases must include a space between each word.',
   ].join(' ');
 }
@@ -199,9 +200,13 @@ export function buildAiUserPrompt(req: AiBatchRequest): string {
     req.typeConfig.useCustomThemeTitles
       ? 'Do not invent different titles for this batch.'
       : 'Avoid these already-used titles:',
-    req.typeConfig.useCustomThemeTitles ? '' : JSON.stringify(req.excludeTitles.slice(-80)),
+    req.typeConfig.useCustomThemeTitles
+      ? ''
+      : JSON.stringify(req.excludeTitles.slice(-40)),
     'Avoid these already-used words/answers where relevant:',
-    JSON.stringify([...req.excludeWords, ...req.excludeAnswers].slice(-200)),
+    JSON.stringify(
+      [...req.excludeWords.slice(-60), ...req.excludeAnswers.slice(-60)]
+    ),
     '',
     'JSON schema:',
     schemaForType(req.puzzleType, req.typeConfig),

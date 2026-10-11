@@ -15,8 +15,10 @@ import type {
 import {
   computeTriviaSolutionColumns,
   formatTriviaSolutionHeading,
-  resolveTriviaAnswerLabel,
+  resolveTriviaAnswerLetter,
 } from '@/lib/puzzles/trivia';
+import { CanvasSelectable } from '@/components/CanvasSelectable';
+import type { CanvasFormatTarget } from '@/lib/canvas-native-format';
 
 export interface TriviaSolutionSection {
   label: string;
@@ -31,10 +33,15 @@ interface TriviaDisplayProps {
   suggestionsColumns?: TriviaSuggestionsColumns;
   fontSize?: number;
   fontFamily?: string;
+  suggestionFontSize?: number;
+  suggestionFontFamily?: string;
+  suggestionItalic?: boolean;
   textColor?: string;
   maxWidthPx?: number;
   /** Vertical gap between question blocks (px). */
   questionGapPx?: number;
+  /** Horizontal gap between solution columns (px). */
+  solutionColumnGapPx?: number;
   /** Gap between suggestion rows (px). */
   suggestionGapPx?: number;
   /** Gap under question before suggestions (px). */
@@ -50,6 +57,8 @@ interface TriviaDisplayProps {
   solutionSections?: TriviaSolutionSection[];
   /** Starting trivia number when building a single-section fallback label. */
   puzzlesStartingNumber?: number;
+  selectedTarget?: CanvasFormatTarget | null;
+  onSelectTarget?: (target: CanvasFormatTarget) => void;
 }
 
 function CheckboxMark({
@@ -227,15 +236,21 @@ export function TriviaDisplay({
   suggestionsColumns = 'single',
   fontSize = 14,
   fontFamily = 'Arial',
+  suggestionFontSize,
+  suggestionFontFamily,
+  suggestionItalic = false,
   textColor = '#1f2937',
   maxWidthPx,
   questionGapPx,
+  solutionColumnGapPx,
   suggestionGapPx,
   afterQuestionGapPx,
   solutionColumns,
   answersPerColumn,
   solutionSections,
   puzzlesStartingNumber = 1,
+  selectedTarget = null,
+  onSelectTarget,
 }: TriviaDisplayProps) {
   const questions = puzzle.questions ?? [];
   // Each trivia game page numbers questions from 1.
@@ -243,7 +258,8 @@ export function TriviaDisplay({
   const gap =
     questionGapPx ??
     (layoutFormat === 'compact' ? fontSize * 1.1 : fontSize * 1.85);
-  const optionFontSize = Math.max(10, fontSize * 0.95);
+  const optionFontSize = Math.max(10, suggestionFontSize ?? fontSize * 0.95);
+  const optionFontFamily = suggestionFontFamily || fontFamily;
   const boxSize = Math.max(14, fontSize * 1.05);
   const isTwoCol = !showSolution && layoutFormat === 'two-column';
   const suggestionsTwoCol = !showSolution && suggestionsColumns === 'two';
@@ -258,18 +274,17 @@ export function TriviaDisplay({
     (layoutFormat === 'compact' ? fontSize * 0.35 : fontSize * 0.55);
 
   if (showSolution) {
-    const columns = computeTriviaSolutionColumns(solutionColumns);
+    const columns = Math.min(2, computeTriviaSolutionColumns(solutionColumns));
     const sections: TriviaSolutionSection[] =
       solutionSections && solutionSections.length > 0
         ? solutionSections
         : [
             {
               label: formatTriviaSolutionHeading(puzzle, 0, puzzlesStartingNumber),
-              answers: questions.map((q) => resolveTriviaAnswerLabel(q)),
+              answers: questions.map((q) => resolveTriviaAnswerLetter(q)),
             },
           ];
-    const numberColWidth = Math.max(22, fontSize * (columns >= 3 ? 1.55 : 1.9));
-    const sectionGapPx = Math.max(gap, fontSize * 1.1);
+    const sectionGapPx = Math.max(16, fontSize * 1.5);
 
     return (
       <div
@@ -281,21 +296,86 @@ export function TriviaDisplay({
           boxSizing: 'border-box',
         }}
       >
-        {sections.map((section, si) => {
-          return (
-            <SolutionSectionBlock
-              key={`trivia-sol-${si}-${section.label}`}
-              section={section}
-              columns={columns}
-              fontSize={fontSize}
-              optionFontSize={optionFontSize}
-              gap={gap}
-              textColor={textColor}
-              numberColWidth={numberColWidth}
-              sectionGapPx={si === sections.length - 1 ? 0 : sectionGapPx}
-            />
-          );
-        })}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+            columnGap: Math.max(0, solutionColumnGapPx ?? fontSize * 1.6),
+            rowGap: sectionGapPx,
+            alignItems: 'start',
+          }}
+        >
+          {Array.from({ length: columns }, (_, columnIndex) => {
+            const rowsPerColumn = Math.ceil(sections.length / columns);
+            const columnSections = sections.slice(
+              columnIndex * rowsPerColumn,
+              (columnIndex + 1) * rowsPerColumn
+            );
+            return (
+              <div key={`trivia-sol-column-${columnIndex}`} style={{ minWidth: 0 }}>
+                {columnSections.map((section, sectionIndex) => {
+                  const si = columnIndex * rowsPerColumn + sectionIndex;
+                  const rows = section.answers.map((answer, rowIndex) => ({
+                    number: rowIndex + 1,
+                    answer,
+                  }));
+
+                  return (
+                    <div
+                      key={`trivia-sol-${si}-${section.label}`}
+                      style={{
+                        width: '100%',
+                        breakInside: 'avoid',
+                        marginBottom: sectionGapPx,
+                      }}
+                    >
+                      <div
+                        style={{
+                          margin: '0 0 6px',
+                          fontSize: Math.max(10, fontSize * 0.92),
+                          fontWeight: 700,
+                          lineHeight: 1.3,
+                          color: textColor,
+                          whiteSpace: columns === 2 ? 'nowrap' : undefined,
+                        }}
+                      >
+                        {section.label}
+                      </div>
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          rowGap: Math.max(0, questionGapPx ?? fontSize * 0.25),
+                        }}
+                      >
+                        {rows.map((row) => (
+                          <div
+                            key={`sol-row-${si}-${row.number}`}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'baseline',
+                              gap: Math.max(4, fontSize * 0.4),
+                              fontSize,
+                              lineHeight: 1.35,
+                              color: textColor,
+                            }}
+                          >
+                            <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                              Q{row.number} - Answer:
+                            </span>
+                            <span style={{ fontWeight: 500 }}>
+                              {resolveTriviaAnswerLetter({ answer: row.answer, suggestions: [] })}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
       </div>
     );
   }
@@ -327,6 +407,12 @@ export function TriviaDisplay({
               breakInside: 'avoid',
             }}
           >
+            <CanvasSelectable
+              target="grid"
+              label="Question"
+              active={selectedTarget === 'grid'}
+              onSelect={onSelectTarget}
+            >
             <p
               style={{
                 margin: 0,
@@ -338,6 +424,13 @@ export function TriviaDisplay({
             >
               {number}. {q.prompt}
             </p>
+            </CanvasSelectable>
+            <CanvasSelectable
+              target="suggestions"
+              label="Suggestions"
+              active={selectedTarget === 'suggestions'}
+              onSelect={onSelectTarget}
+            >
             <div
               style={{
                 display: suggestionsTwoCol ? 'grid' : 'flex',
@@ -367,7 +460,9 @@ export function TriviaDisplay({
                   <span
                     style={{
                       fontSize: optionFontSize,
+                      fontFamily: optionFontFamily,
                       fontWeight: 400,
+                      fontStyle: suggestionItalic ? 'italic' : 'normal',
                       lineHeight: 1.35,
                       textAlign: 'left',
                     }}
@@ -377,6 +472,7 @@ export function TriviaDisplay({
                 </div>
               ))}
             </div>
+            </CanvasSelectable>
           </div>
         );
       })}

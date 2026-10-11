@@ -1,5 +1,9 @@
 import type { PuzzleModuleType } from '@/lib/document-model';
-import { AI_BATCH_MAX_RETRIES, getAiBatchSize } from './config';
+import {
+  AI_BATCH_MAX_RETRIES,
+  getAiBatchClientTimeoutMs,
+  getAiBatchSize,
+} from './config';
 import type {
   AiBatchRequest,
   AiFrontMatterCopy,
@@ -16,6 +20,7 @@ import {
   getAiChapterTopics,
   getAiPuzzleTypeLabel,
   isAiByChapter,
+  isAiEngineLocalPuzzleType,
   parseAiThemeTitles,
   supportsAiThemeTitles,
 } from './types';
@@ -44,23 +49,64 @@ function throwIfAborted(signal?: AbortSignal) {
   }
 }
 
+/** Keep the browser responsive between heavy AI / grid work. */
+export function yieldToUi(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
+      window.setTimeout(() => resolve(), 0);
+    } else {
+      resolve();
+    }
+  });
+}
+
+function linkAbortWithTimeout(
+  external: AbortSignal | undefined,
+  timeoutMs: number
+): { signal: AbortSignal; clear: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onExternalAbort = () => controller.abort();
+  external?.addEventListener('abort', onExternalAbort);
+  return {
+    signal: controller.signal,
+    clear: () => {
+      clearTimeout(timer);
+      external?.removeEventListener('abort', onExternalAbort);
+    },
+  };
+}
+
 async function requestBatch(
   body: AiBatchRequest,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  timeoutMs?: number
 ): Promise<{ ok: true; puzzles: AiPuzzleContent[] } | { ok: false; error: string }> {
   throwIfAborted(signal);
+  const linked = linkAbortWithTimeout(
+    signal,
+    timeoutMs ?? getAiBatchClientTimeoutMs(body.puzzleType)
+  );
   let response: Response;
   try {
     response = await fetch('/api/ai/generate-batch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal,
+      signal: linked.signal,
     });
   } catch (error) {
-    if (isAbortError(error)) throw error;
+    linked.clear();
+    if (isAbortError(error)) {
+      if (signal?.aborted) throw error;
+      return {
+        ok: false,
+        error: 'AI generation timed out on this batch. Retrying with a smaller request…',
+      };
+    }
     return { ok: false, error: 'AI generation could not be completed. Please try again.' };
   }
+  linked.clear();
   let json: { ok?: boolean; puzzles?: AiPuzzleContent[]; error?: string } = {};
   try {
     json = await response.json();
@@ -84,24 +130,33 @@ async function requestFrontMatterCopy(
   const fm = setup.frontMatter;
   if (!aiFrontMatterNeedsCopy(fm)) return {};
   throwIfAborted(signal);
-  const response = await fetch('/api/ai/generate-front-matter', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      setup: {
-        bookTitle: setup.bookTitle,
-        subtitle: setup.subtitle,
-        description: setup.description,
-        language: setup.language,
-        audience: setup.audience,
-        customAudience: setup.customAudience,
-      },
-      puzzleTypeLabels: setup.puzzleTypes.map((t) => getAiPuzzleTypeLabel(t.type)),
-      needIntroduction: Boolean(fm?.includeIntroduction),
-      needInstructions: Boolean(fm?.includeInstructions),
-    }),
-    signal,
-  });
+  const linked = linkAbortWithTimeout(signal, 60_000);
+  let response: Response;
+  try {
+    response = await fetch('/api/ai/generate-front-matter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        setup: {
+          bookTitle: setup.bookTitle,
+          subtitle: setup.subtitle,
+          description: setup.description,
+          language: setup.language,
+          audience: setup.audience,
+          customAudience: setup.customAudience,
+        },
+        puzzleTypeLabels: setup.puzzleTypes.map((t) => getAiPuzzleTypeLabel(t.type)),
+        needIntroduction: Boolean(fm?.includeIntroduction),
+        needInstructions: Boolean(fm?.includeInstructions),
+      }),
+      signal: linked.signal,
+    });
+  } catch (error) {
+    linked.clear();
+    if (isAbortError(error) && signal?.aborted) throw error;
+    return {};
+  }
+  linked.clear();
   try {
     const json = (await response.json()) as {
       ok?: boolean;
@@ -194,7 +249,118 @@ function collectExclusions(contentByType: Partial<Record<PuzzleModuleType, AiPuz
       }
     }
   }
-  return { excludeTitles, excludeWords, excludeAnswers };
+  // Keep prompts short — huge exclusion lists slow/hang DeepSeek on late batches.
+  return {
+    excludeTitles: excludeTitles.slice(-40),
+    excludeWords: excludeWords.slice(-80),
+    excludeAnswers: excludeAnswers.slice(-80),
+  };
+}
+
+async function requestBatchWithHeartbeat(
+  body: AiBatchRequest,
+  report: (message: string) => void,
+  baseMessage: string,
+  signal?: AbortSignal,
+  timeoutMs?: number
+): Promise<{ ok: true; puzzles: AiPuzzleContent[] } | { ok: false; error: string }> {
+  report(baseMessage);
+  let ticks = 0;
+  const heartbeat =
+    typeof window !== 'undefined'
+      ? window.setInterval(() => {
+          ticks += 1;
+          report(`${baseMessage.replace(/\…$/, '')} (still working${ticks > 1 ? ` · ${ticks * 10}s` : ''})…`);
+        }, 10_000)
+      : null;
+  try {
+    return await requestBatch(body, signal, timeoutMs);
+  } finally {
+    if (heartbeat != null) window.clearInterval(heartbeat);
+  }
+}
+
+/**
+ * Fetch a batch; on crossword failure/timeout with count>1, fall back to one puzzle at a time.
+ */
+async function generateBatchResilient(args: {
+  body: AiBatchRequest;
+  sliceConfig: AiPuzzleTypeConfig;
+  start: number;
+  report: (message: string) => void;
+  typeLabel: string;
+  chapterLabel: string;
+  globalStart: number;
+  signal?: AbortSignal;
+}): Promise<{ ok: true; puzzles: AiPuzzleContent[] } | { ok: false; error: string }> {
+  const { body, sliceConfig, start, report, typeLabel, chapterLabel, globalStart, signal } =
+    args;
+  const count = body.count;
+  const timeoutMs = getAiBatchClientTimeoutMs(body.puzzleType);
+
+  let lastError = 'AI generation could not be completed. Please try again.';
+  for (let attempt = 0; attempt <= AI_BATCH_MAX_RETRIES; attempt++) {
+    throwIfAborted(signal);
+    const baseMessage =
+      `Generating ${typeLabel} ${globalStart + 1}–${globalStart + count}${chapterLabel}` +
+      (attempt > 0 ? ` (retry ${attempt})` : '') +
+      '…';
+    const result = await requestBatchWithHeartbeat(
+      body,
+      report,
+      baseMessage,
+      signal,
+      timeoutMs
+    );
+    if (result.ok) {
+      return {
+        ok: true,
+        puzzles: applyCustomThemeTitles(result.puzzles, sliceConfig, start),
+      };
+    }
+    lastError = result.error;
+  }
+
+  // Crossword fallback: one puzzle at a time so a hung/oversized batch cannot stall the book.
+  if (body.puzzleType === 'crossword' && count > 1) {
+    const puzzles: AiPuzzleContent[] = [];
+    for (let i = 0; i < count; i++) {
+      throwIfAborted(signal);
+      await yieldToUi();
+      const single: AiBatchRequest = {
+        ...body,
+        startIndex: start + i,
+        count: 1,
+        assignedDifficulties: [body.assignedDifficulties[i] ?? 'medium'],
+      };
+      let got: AiPuzzleContent | null = null;
+      for (let attempt = 0; attempt <= AI_BATCH_MAX_RETRIES; attempt++) {
+        const baseMessage =
+          `Generating ${typeLabel} ${globalStart + i + 1}${chapterLabel}` +
+          (attempt > 0 ? ` (retry ${attempt})` : '') +
+          '…';
+        const result = await requestBatchWithHeartbeat(
+          single,
+          report,
+          baseMessage,
+          signal,
+          timeoutMs
+        );
+        if (result.ok && result.puzzles[0]) {
+          got = applyCustomThemeTitles(result.puzzles, sliceConfig, start + i)[0]!;
+          break;
+        }
+        lastError = result.ok ? lastError : result.error;
+      }
+      if (!got) {
+        return { ok: false, error: lastError };
+      }
+      puzzles.push(got);
+    }
+    return { ok: true, puzzles };
+  }
+
+  return { ok: false, error: lastError };
 }
 
 export async function runAiBookGeneration(
@@ -228,21 +394,22 @@ export async function runAiBookGeneration(
 
   for (const typeConfig of setup.puzzleTypes) {
     throwIfAborted(signal);
+    await yieldToUi();
     const type = typeConfig.type;
     const perChapter = typeConfig.count;
     const total = perChapter * chapterCount;
     const difficulties = difficultiesForType(typeConfig, total, chapterCount, perChapter);
     contentByType[type] = [];
 
-    // Sudoku / maze are built by the app engines — never ask AI for themes or titles.
-    if (type === 'sudoku' || type === 'maze') {
-      const label = type === 'sudoku' ? 'Sudoku' : 'Maze';
+    // Local engines (sudoku, maze, binairo, codewords, …) — never ask AI for grids.
+    if (isAiEngineLocalPuzzleType(type)) {
+      const label = getAiPuzzleTypeLabel(type);
       report(`Building ${total} ${label} puzzles…`);
-      contentByType[type] = difficulties.map((difficulty) =>
-        type === 'sudoku'
-          ? { type: 'sudoku' as const, title: 'Sudoku', difficulty }
-          : { type: 'maze' as const, title: 'Maze', difficulty }
-      );
+      contentByType[type] = difficulties.map((difficulty) => ({
+        type,
+        title: label,
+        difficulty,
+      })) as AiPuzzleContent[];
       byType[type]!.done = contentByType[type]!.length;
       report(`Built ${byType[type]!.done} / ${byType[type]!.total} ${byType[type]!.label}`);
       continue;
@@ -272,12 +439,16 @@ export async function runAiBookGeneration(
           throwIfAborted(signal);
           const chapterLabel =
             topic.trim() && chapterCount > 1 ? ` for “${topic.trim()}”` : '';
-          report(
+          const baseMessage =
             `Writing Murdoku case copy${chapterLabel}` +
-              (attempt > 0 ? ` (retry ${attempt})` : '') +
-              '…'
+            (attempt > 0 ? ` (retry ${attempt})` : '') +
+            '…';
+          const result = await requestBatchWithHeartbeat(
+            flavorBody,
+            report,
+            baseMessage,
+            signal
           );
-          const result = await requestBatch(flavorBody, signal);
           if (result.ok && result.puzzles[0]?.type === 'murdoku') {
             pack = result.puzzles[0];
             break;
@@ -305,6 +476,7 @@ export async function runAiBookGeneration(
         contentByType[type] = generated;
         byType[type]!.done = generated.length;
         report(`Prepared ${byType[type]!.done} / ${byType[type]!.total} ${byType[type]!.label}`);
+        await yieldToUi();
       }
       continue;
     }
@@ -319,6 +491,8 @@ export async function runAiBookGeneration(
         topic.trim() && chapterCount > 1 ? ` · ${topic.trim()}` : '';
 
       for (let start = 0; start < perChapter; start += batchSize) {
+        throwIfAborted(signal);
+        await yieldToUi();
         const count = Math.min(batchSize, perChapter - start);
         const globalStart = ch * perChapter + start;
         const exclusions = collectExclusions(contentByType);
@@ -332,30 +506,24 @@ export async function runAiBookGeneration(
           ...exclusions,
         };
 
-        let success = false;
-        let lastError = 'AI generation could not be completed. Please try again.';
-        for (let attempt = 0; attempt <= AI_BATCH_MAX_RETRIES; attempt++) {
-          throwIfAborted(signal);
-          report(
-            `Generating ${typeLabel} ${globalStart + 1}–${globalStart + count}${chapterLabel}` +
-              (attempt > 0 ? ` (retry ${attempt})` : '') +
-              '…'
-          );
-          const result = await requestBatch(body, signal);
-          if (result.ok) {
-            const puzzles = applyCustomThemeTitles(result.puzzles, sliceConfig, start);
-            contentByType[type]!.push(...puzzles);
-            byType[type]!.done = contentByType[type]!.length;
-            success = true;
-            report(`Generated ${byType[type]!.done} / ${byType[type]!.total} ${byType[type]!.label}`);
-            break;
-          }
-          lastError = result.error;
+        const result = await generateBatchResilient({
+          body,
+          sliceConfig,
+          start,
+          report,
+          typeLabel,
+          chapterLabel,
+          globalStart,
+          signal,
+        });
+
+        if (!result.ok) {
+          return { ok: false, error: result.error, partial: contentByType };
         }
 
-        if (!success) {
-          return { ok: false, error: lastError, partial: contentByType };
-        }
+        contentByType[type]!.push(...result.puzzles);
+        byType[type]!.done = contentByType[type]!.length;
+        report(`Generated ${byType[type]!.done} / ${byType[type]!.total} ${byType[type]!.label}`);
       }
     }
   }

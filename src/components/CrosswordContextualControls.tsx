@@ -22,6 +22,7 @@ import type {
   CrosswordTitleOption,
 } from '@/lib/crossword-settings';
 import { greyscaleToCss, normalizeCrosswordSettings } from '@/lib/crossword-settings';
+import { normalizeAnswersPerPage } from '@/lib/puzzles/types';
 import './canvas-contextual-controls.css';
 
 export type CrosswordEditTarget =
@@ -493,22 +494,20 @@ export function CrosswordContextualControls({
             <Label className="canvas-context-panel__section-label">Layout</Label>
             <div className="canvas-context-panel__card space-y-3">
               <div className="space-y-1">
-                <Label className="text-xs text-slate-500">Answers Per Page</Label>
+                <Label className="text-xs text-slate-500">Solutions Per Page</Label>
                 <Select
-                  value={(bookCanvas.answersPerPage || 1).toString()}
+                  value={String(normalizeAnswersPerPage(bookCanvas.answersPerPage))}
                   onValueChange={(value) =>
-                    patchBookCanvas({ answersPerPage: parseInt(value, 10) })
+                    patchBookCanvas({ answersPerPage: normalizeAnswersPerPage(value) })
                   }
                 >
                   <SelectTrigger className="h-8 text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {[1, 2, 4].map((n) => (
-                      <SelectItem key={n} value={n.toString()}>
-                        {n} Solution{n > 1 ? 's' : ''}
-                      </SelectItem>
-                    ))}
+                    <SelectItem value="1">1 Solution</SelectItem>
+                    <SelectItem value="2">2 Solutions</SelectItem>
+                    <SelectItem value="4">4 Solutions</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

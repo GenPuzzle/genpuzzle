@@ -327,12 +327,12 @@ export function MazeDisplay({
               className="w-4 h-4 bg-black"
               style={{ clipPath: 'polygon(50% 100%, 0 0, 100% 0)' }}
             />
-            <span>Start</span>
-          </div>
-          <div className="flex items-center gap-2">
+          <span>Start</span>
+        </div>
+        <div className="flex items-center gap-2">
             <div className="w-3 h-3 rounded-full bg-black" />
-            <span>End</span>
-          </div>
+          <span>End</span>
+        </div>
         </div>
       ) : null}
     </div>

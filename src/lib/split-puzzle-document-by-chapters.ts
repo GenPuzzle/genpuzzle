@@ -28,10 +28,17 @@ import {
 } from './chapter-titles-draft';
 import { getEffectiveWordsPerPuzzle } from './puzzle-word-list';
 import { parseCrosswordLines } from './crossword-settings';
+import {
+  defaultMixedMazeLevelCounts,
+  defaultMixedMazeShapeCounts,
+  isGenericPuzzleModuleType,
+} from './generic-puzzle-settings';
+import { sliceMazeStartEndImages } from './maze-start-end-images';
 
 export interface SplitIntoChaptersRequest {
   chapterCount: number;
   chapterTitles: string[];
+  customPuzzleCounts?: number[];
 }
 
 export interface ChapterSplitPlan {
@@ -121,6 +128,7 @@ export function resolveChapterSplitSource(
   preference: DivideListsPreference
 ): { chapterCount: number; chapterTitles: string[]; fromExistingPages: boolean; countIsLocked: boolean } {
   const existingTitles = getExistingChapterTitleLines(documents);
+  const draft = readChapterTitlesDraft();
   if (existingTitles.length >= 2) {
     return {
       chapterCount: existingTitles.length,
@@ -129,13 +137,21 @@ export function resolveChapterSplitSource(
       countIsLocked: true,
     };
   }
-  const draft = readChapterTitlesDraft();
   if (draft.touched && draft.titles.length >= 2) {
     return {
       chapterCount: draft.titles.length,
       chapterTitles: draft.titles,
       fromExistingPages: false,
       countIsLocked: true,
+    };
+  }
+  if (preference.enabled) {
+    const chapterCount = Math.max(2, Math.round(preference.chapterCount) || 2);
+    return {
+      chapterCount,
+      chapterTitles: ensureChapterTitles([], chapterCount),
+      fromExistingPages: false,
+      countIsLocked: false,
     };
   }
   const chapterCount = Math.max(2, Math.round(preference.chapterCount) || 2);
@@ -179,6 +195,7 @@ export function resolveActiveSplitRequest(args: {
   return {
     chapterCount: plan.chapterCount,
     chapterTitles: plan.chapterTitles,
+    customPuzzleCounts: plan.puzzleCounts,
   };
 }
 
@@ -210,6 +227,103 @@ export function buildChapterSplitPlan(args: {
     startingNumbers: chapterStartingNumbers(puzzleCounts, args.puzzlesStartingNumber ?? 1),
     chapterTitles: ensureChapterTitles(args.chapterTitles, chapterCount),
   };
+}
+
+function sliceOrderedCounts<K extends string>(
+  keys: readonly K[],
+  counts: Record<K, number>,
+  offset: number,
+  take: number
+): Record<K, number> {
+  const sequence: K[] = [];
+  for (const key of keys) {
+    const n = Math.max(0, Math.round(counts[key] ?? 0));
+    for (let i = 0; i < n; i += 1) sequence.push(key);
+  }
+  const slice = sequence.slice(Math.max(0, offset), Math.max(0, offset) + Math.max(0, take));
+  const next = {} as Record<K, number>;
+  for (const key of keys) next[key] = 0;
+  for (const key of slice) next[key] += 1;
+  return next;
+}
+
+function mazeMixedCountsForChapter(
+  core: {
+    mazeSize?: string;
+    mazeShape?: string;
+    mazeMixedEasyCount?: number;
+    mazeMixedMediumCount?: number;
+    mazeMixedHardCount?: number;
+    mazeMixedShapeSquare?: number;
+    mazeMixedShapeCircle?: number;
+    mazeMixedShapeDiamond?: number;
+    mazeMixedShapeHexagon?: number;
+    mazeMixedShapeTriangle?: number;
+    mazeMixedShapeCustomImage?: number;
+  },
+  puzzleCount: number,
+  puzzleOffset: number
+): Record<string, number> {
+  const patch: Record<string, number> = { numberOfPuzzles: puzzleCount };
+  if (core.mazeSize === 'mixed') {
+    const sliced = sliceOrderedCounts(
+      ['easy', 'medium', 'hard'] as const,
+      {
+        easy: core.mazeMixedEasyCount ?? 0,
+        medium: core.mazeMixedMediumCount ?? 0,
+        hard: core.mazeMixedHardCount ?? 0,
+      },
+      puzzleOffset,
+      puzzleCount
+    );
+    const sum = sliced.easy + sliced.medium + sliced.hard;
+    if (sum < puzzleCount) sliced.hard += puzzleCount - sum;
+    patch.mazeMixedEasyCount = sliced.easy;
+    patch.mazeMixedMediumCount = sliced.medium;
+    patch.mazeMixedHardCount = sliced.hard;
+    patch.numberOfPuzzles = sliced.easy + sliced.medium + sliced.hard;
+  } else {
+    const defaults = defaultMixedMazeLevelCounts(puzzleCount);
+    patch.mazeMixedEasyCount = defaults.easy;
+    patch.mazeMixedMediumCount = defaults.medium;
+    patch.mazeMixedHardCount = defaults.hard;
+  }
+  if (core.mazeShape === 'mixed') {
+    const sliced = sliceOrderedCounts(
+      ['square', 'circle', 'diamond', 'hexagon', 'triangle', 'custom_image'] as const,
+      {
+        square: core.mazeMixedShapeSquare ?? 0,
+        circle: core.mazeMixedShapeCircle ?? 0,
+        diamond: core.mazeMixedShapeDiamond ?? 0,
+        hexagon: core.mazeMixedShapeHexagon ?? 0,
+        triangle: core.mazeMixedShapeTriangle ?? 0,
+        custom_image: core.mazeMixedShapeCustomImage ?? 0,
+      },
+      puzzleOffset,
+      puzzleCount
+    );
+    const sum =
+      sliced.square + sliced.circle + sliced.diamond + sliced.hexagon + sliced.triangle + sliced.custom_image;
+    if (sum < puzzleCount) sliced.square += puzzleCount - sum;
+    patch.mazeMixedShapeSquare = sliced.square;
+    patch.mazeMixedShapeCircle = sliced.circle;
+    patch.mazeMixedShapeDiamond = sliced.diamond;
+    patch.mazeMixedShapeHexagon = sliced.hexagon;
+    patch.mazeMixedShapeTriangle = sliced.triangle;
+    patch.mazeMixedShapeCustomImage = sliced.custom_image;
+    if (core.mazeSize !== 'mixed') {
+      patch.numberOfPuzzles = sum < puzzleCount ? puzzleCount : sum;
+    }
+  } else {
+    const defaults = defaultMixedMazeShapeCounts(patch.numberOfPuzzles ?? puzzleCount);
+    patch.mazeMixedShapeSquare = defaults.square;
+    patch.mazeMixedShapeCircle = defaults.circle;
+    patch.mazeMixedShapeDiamond = defaults.diamond;
+    patch.mazeMixedShapeHexagon = defaults.hexagon;
+    patch.mazeMixedShapeTriangle = defaults.triangle;
+    patch.mazeMixedShapeCustomImage = defaults.custom_image;
+  }
+  return patch;
 }
 
 function clonePuzzleDocumentForChapter(
@@ -296,6 +410,62 @@ function clonePuzzleDocumentForChapter(
     }
   }
 
+  if (settings.genericPuzzleSettings) {
+    const gp = settings.genericPuzzleSettings;
+    const triviaQuestionsPerTheme = Math.max(1, gp.core.questionsPerPage || 1);
+    const mazeCounts =
+      source.moduleType === 'maze' ? mazeMixedCountsForChapter(gp.core, puzzleCount, puzzleOffset) : {};
+    gp.core = {
+      ...gp.core,
+      numberOfPuzzles: puzzleCount,
+      puzzlesStartingNumber: startingNumber,
+      ...mazeCounts,
+      mazeStartEndImages:
+        source.moduleType === 'maze'
+          ? sliceMazeStartEndImages(gp.core.mazeStartEndImages, puzzleOffset, puzzleCount)
+          : gp.core.mazeStartEndImages,
+      shapeMaskImages: gp.core.shapeMaskImages?.length
+        ? gp.core.shapeMaskImages.slice(puzzleOffset, puzzleOffset + puzzleCount)
+        : gp.core.shapeMaskImages,
+    };
+    gp.typography.funFactsText = sliceContentLines(gp.typography.funFactsText, puzzleOffset, puzzleCount);
+    if (gp.typography.selectTitleOption === 'custom_per_puzzle') {
+      gp.typography.differentTitles = sliceContentLines(
+        gp.typography.differentTitles,
+        puzzleOffset,
+        puzzleCount
+      );
+    }
+    if (source.moduleType === 'trivia') {
+      const suggestionsPerQuestion = Math.max(2, gp.core.suggestionsPerQuestion || 4);
+      const questionOffset = puzzleOffset * triviaQuestionsPerTheme;
+      gp.core.questionsText = sliceContentLines(
+        gp.core.questionsText,
+        questionOffset,
+        puzzleCount * triviaQuestionsPerTheme
+      );
+      gp.core.answersText = sliceContentLines(
+        gp.core.answersText,
+        questionOffset,
+        puzzleCount * triviaQuestionsPerTheme
+      );
+      gp.core.suggestionsText = sliceContentLines(
+        gp.core.suggestionsText,
+        questionOffset * suggestionsPerQuestion,
+        puzzleCount * triviaQuestionsPerTheme * suggestionsPerQuestion
+      );
+    } else if (source.moduleType === 'cryptogram') {
+      gp.core.cryptogramPhrases = sliceContentLines(gp.core.cryptogramPhrases, puzzleOffset, puzzleCount);
+    } else if (source.moduleType === 'word-scramble') {
+      const wordsPerPuzzle = Math.max(1, gp.core.wordsPerPuzzle || 1);
+      gp.core.scrambleWords = sliceContentLines(
+        gp.core.scrambleWords,
+        puzzleOffset * wordsPerPuzzle,
+        puzzleCount * wordsPerPuzzle
+      );
+    }
+  }
+
   page.settings = settings;
   return page;
 }
@@ -314,7 +484,11 @@ export function splitPuzzleDocumentByChapters(args: {
 }): SplitPuzzleByChaptersResult | null {
   const source = args.documents.find((doc) => doc.id === args.sourceDocumentId);
   if (!source || !isPuzzleModuleType(source.moduleType)) return null;
-  if (source.moduleType !== 'word-search' && source.moduleType !== 'crossword') return null;
+  if (
+    source.moduleType !== 'word-search' &&
+    source.moduleType !== 'crossword' &&
+    !isGenericPuzzleModuleType(source.moduleType)
+  ) return null;
 
   const { plan } = args;
   const style = args.chapterStyle ?? readStoredChapterStyle();

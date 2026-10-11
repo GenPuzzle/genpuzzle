@@ -1,0 +1,14 @@
+---
+description: Shared canvas, PDF, and PPTX page layout
+alwaysApply: true
+---
+
+Matching canvas previews, editable PDFs, and editable PowerPoint files is a permanent requirement. No feature that affects page content or layout is complete until it works in the preview and both exports and passes the relevant consistency checks.
+
+Every new Sudoku or maze option, and every new puzzle type, must use the shared layout engine so the change applies to all three outputs and stays editable. Do not flatten pages, outline text, or replace editable puzzle elements with images.
+
+If a feature needs a drawing element the renderers do not support yet, implement it in the canvas, PDF, and PPTX renderers in that same task. Register the primitive in `dispatchResolved` and the page kind in `EXPORT_ROUTES`.
+
+Run `npm run check:layout` from `genpuzzle` before marking the work complete. `NOT RUN` and `NOT PASSED` are not successes.
+
+How to extend it: `genpuzzle/src/lib/resolved-layout/README.md`.
