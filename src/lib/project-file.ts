@@ -54,23 +54,20 @@ export function downloadGpProject(project: GpProjectFile, filename?: string): vo
   URL.revokeObjectURL(url);
 }
 
-export function readGpProjectFromFile(file: File): Promise<GpProjectFile> {
-  return new Promise((resolve, reject) => {
-    if (!file.name.toLowerCase().endsWith(GP_FILE_EXTENSION)) {
-      reject(new Error(`Only ${GP_FILE_EXTENSION} project files are supported.`));
-      return;
+export async function readGpProjectFromFile(file: File): Promise<GpProjectFile> {
+  if (!file.name.toLowerCase().endsWith(GP_FILE_EXTENSION)) {
+    throw new Error(`Only ${GP_FILE_EXTENSION} project files are supported.`);
+  }
+  try {
+    // file.text() works in modern browsers and Node (no FileReader dependency).
+    const text = await file.text();
+    return parseGpProjectJson(text);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('Invalid GenPuzzle')) {
+      throw error;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        resolve(parseGpProjectJson(String(reader.result ?? '')));
-      } catch (error) {
-        reject(error instanceof Error ? error : new Error('Failed to read project file.'));
-      }
-    };
-    reader.onerror = () => reject(new Error('Failed to read project file.'));
-    reader.readAsText(file);
-  });
+    throw error instanceof Error ? error : new Error('Failed to read project file.');
+  }
 }
 
 /** Encode project for URL sharing (base64url). */

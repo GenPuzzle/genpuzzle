@@ -22,6 +22,7 @@ const tests = [
   'src/lib/ai/ai-copilot-structure.selftest.ts',
   'src/lib/ai/platform-settings.selftest.ts',
   'src/lib/ai/content-pack.selftest.ts',
+  'src/lib/open-project.selftest.ts',
 ];
 
 for (const rel of tests) {

@@ -10,10 +10,12 @@ import { TemplateLaunchHandler } from '@/components/app/TemplateLaunchHandler';
 import { TemplateUrlCapture } from '@/components/app/TemplateUrlCapture';
 import { LeavePagePromptProvider } from '@/lib/leave-page-prompt-context';
 import { useAuth } from '@/lib/auth-context';
+import { useApp } from '@/lib/app-context';
 
 export function AuthenticatedApp({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { session, isReady, inEditor, enterEditor } = useAuth();
+  const { settingsHydrated } = useApp();
   const isStandaloneTool = pathname.startsWith('/app/other-tools') || pathname.startsWith('/app/tools');
 
   useEffect(() => {
@@ -43,6 +45,18 @@ export function AuthenticatedApp({ children }: { children: React.ReactNode }) {
   }
 
   const showEditor = inEditor || isStandaloneTool;
+
+  // Wait for IndexedDB/localStorage hydrate so F5 never mounts the canvas with empty puzzles.
+  if (showEditor && !settingsHydrated) {
+    return (
+      <>
+        <TemplateUrlCapture />
+        <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#f0f5f6] via-white to-[#e8f1f8] dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
+          <Loader2 className="h-8 w-8 animate-spin text-[var(--gp-blue)]" />
+        </div>
+      </>
+    );
+  }
 
   return (
     <LeavePagePromptProvider>

@@ -12,8 +12,8 @@ import { useApp } from '@/lib/app-context';
 import {
   downloadGpProject,
   GP_FILE_EXTENSION,
-  readGpProjectFromFile,
 } from '@/lib/project-file';
+import { openProjectFromFile } from '@/lib/open-project';
 import { exportBookAsPdf, exportBookAsPpt, canExportBook } from '@/lib/book-export-actions';
 import { useBookExportInput } from '@/hooks/useBookExportInput';
 import { useOptionalAppBusy } from '@/lib/app-busy-context';
@@ -126,9 +126,8 @@ export function AppFileMenu({ onShare, shareEnabled = false }: AppFileMenuProps)
       step: 6,
     });
     try {
-      const project = await readGpProjectFromFile(file);
       updateBusy({ label: 'Loading project…', progress: 92 });
-      app.loadProjectSnapshot(project);
+      const project = await openProjectFromFile(file, app.loadProjectSnapshot);
       stopSoft();
       toast.success(`Opened "${project.projectName}"`);
     } catch (error) {

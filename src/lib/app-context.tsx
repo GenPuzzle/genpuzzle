@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import {
   PuzzleType,
   BookSettings,
@@ -76,6 +77,10 @@ import {
   extractSharedProjectFromLocation,
   type GpProjectFile,
 } from './project-file';
+import {
+  loadSessionProject,
+  saveSessionProject,
+} from './session-persistence';
 import {
   cloneEditHistorySnapshot,
   EDIT_HISTORY_LIMIT,
@@ -411,7 +416,8 @@ export interface AppContextType {
   setProjectName: (name: string) => void;
   isProjectDirty: boolean;
   buildProjectSnapshot: () => GpProjectFile;
-  loadProjectSnapshot: (file: GpProjectFile) => void;
+  /** Apply a .gp snapshot. Use `{ flush: true }` before entering the editor from Welcome. */
+  loadProjectSnapshot: (file: GpProjectFile, options?: { flush?: boolean }) => void;
   resetToNewProject: () => void;
   markProjectSaved: () => void;
   showEditorTutorial: boolean;
@@ -602,6 +608,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [projectName, setProjectName] = useState('Untitled Project');
   const [showEditorTutorial, setShowEditorTutorial] = useState(false);
   const hydrationDoneRef = useRef(false);
+  /** Set when a .gp is opened/applied so an in-flight IDB hydrate cannot overwrite it. */
+  const projectExplicitlyLoadedRef = useRef(false);
 
   useEffect(() => {
     ensureCrosswordDiag();
@@ -704,11 +712,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Hydrate global settings from localStorage or shared URL once (loadProjectSnapshot defined below)
-  const loadProjectSnapshotRef = useRef<(file: GpProjectFile) => void>(() => {});
+  const loadProjectSnapshotRef = useRef<
+    (file: GpProjectFile, options?: { flush?: boolean }) => void
+  >(() => {});
 
   const persistSettings = useDebouncedCallback(() => {
     savePersistedSettings(buildCurrentPersistedSnapshot());
   }, 300);
+
+  const persistSession = useDebouncedCallback(() => {
+    void saveSessionProject(buildProjectSnapshotRef.current());
+  }, 400);
+
+  const buildProjectSnapshotRef = useRef<() => GpProjectFile>(() => ({
+    format: 'genpuzzle-project',
+    formatVersion: 1,
+    savedAt: new Date().toISOString(),
+    projectName: 'Untitled Project',
+    settings: defaultPersistedSnapshot,
+    batchPuzzles: [],
+    crosswordBatchPuzzles: [],
+    genericBatchPuzzles: [],
+    murdokuBatchPuzzles: [],
+    currentPuzzle: null,
+    currentBatchIndex: 0,
+  }));
 
   const documentPagesForPersistence = useMemo(() => {
     // Each document tab keeps its own settings (no cross-doc layout overwrite).
@@ -984,9 +1012,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   });
 
   const loadProjectSnapshot = useCallback(
-    (file: GpProjectFile) => {
+    (file: GpProjectFile, options?: { flush?: boolean }) => {
+      projectExplicitlyLoadedRef.current = true;
       beginSuppressDirty();
-      React.startTransition(() => {
+      const apply = () => {
         applyPersistedSettings(file.settings);
         setBatchPuzzles(normalizeBatchPuzzleDocumentIndices(file.batchPuzzles ?? []));
         setCrosswordBatchPuzzles(file.crosswordBatchPuzzles ?? []);
@@ -1008,9 +1037,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setShowEditorTutorial(false);
         setEditHistoryPast([]);
         setEditHistoryFuture([]);
-      });
+      };
+      // Flush before Welcome → editor so the canvas never mounts on empty batches (Vercel race).
+      // Hydration must not flushSync (React lifecycle warning); editor is gated on settingsHydrated.
+      if (options?.flush) flushSync(apply);
+      else apply();
       scheduleBaselineCapture();
       clearShareHashFromUrl();
+      void saveSessionProject(file);
       requestAnimationFrame(() => {
         endSuppressDirty();
       });
@@ -1085,32 +1119,65 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [loadProjectSnapshot]);
 
   useEffect(() => {
+    buildProjectSnapshotRef.current = buildProjectSnapshot;
+  }, [buildProjectSnapshot]);
+
+  useEffect(() => {
     if (hydrationDoneRef.current) return;
     hydrationDoneRef.current = true;
 
-    const sharedProject = extractSharedProjectFromLocation();
-    if (sharedProject) {
-      loadProjectSnapshotRef.current(sharedProject);
-      setSettingsHydrated(true);
-      return;
-    }
+    let cancelled = false;
 
-    const stored = loadPersistedSettings(defaultPersistedSnapshot);
-    if (stored) {
-      applyPersistedSettings(stored);
-    }
-    setSettingsHydrated(true);
+    const hydrate = async () => {
+      const sharedProject = extractSharedProjectFromLocation();
+      if (sharedProject) {
+        if (!cancelled && !projectExplicitlyLoadedRef.current) {
+          loadProjectSnapshotRef.current(sharedProject);
+        }
+        if (!cancelled) setSettingsHydrated(true);
+        return;
+      }
+
+      // Full session first (puzzles + settings). Settings-only localStorage is fallback.
+      const sessionProject = await loadSessionProject();
+      if (cancelled) return;
+      if (projectExplicitlyLoadedRef.current) {
+        setSettingsHydrated(true);
+        return;
+      }
+      if (sessionProject) {
+        loadProjectSnapshotRef.current(sessionProject);
+        setSettingsHydrated(true);
+        return;
+      }
+
+      if (!projectExplicitlyLoadedRef.current) {
+        const stored = loadPersistedSettings(defaultPersistedSnapshot);
+        if (stored) {
+          applyPersistedSettings(stored);
+        }
+      }
+      setSettingsHydrated(true);
+    };
+
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
   }, [defaultPersistedSnapshot, applyPersistedSettings]);
 
-  // Debounced localStorage sync + cross-tab consistency
+  // Debounced localStorage settings + IndexedDB full session (puzzles survive F5)
   useEffect(() => {
     if (!settingsHydrated) return;
 
     persistSettings();
+    persistSession();
   }, [
     settingsHydrated,
     buildCurrentPersistedSnapshot,
+    buildProjectSnapshot,
     persistSettings,
+    persistSession,
   ]);
 
   // Apply remote tab updates from other browser windows

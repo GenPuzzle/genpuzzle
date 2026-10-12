@@ -1,11 +1,17 @@
 .next
+.open-next
+.wrangler
 node_modules
 .DS_Store
 .claude
 
-# local env files
+# local env files / Worker secrets
 .env*
 !.env.example
+.dev.vars
+
+# build / IDE caches
+*.tsbuildinfo
 
 # local scratch / temp artifacts
 .trace-debug
@@ -13,7 +19,10 @@ node_modules
 temp-*
 tsc-*.txt
 tmp*
+*.bak
 border-radius-diff.txt
 extracted_user_request.txt
 frontend_demo.html
 worker.js
+scripts/*-repro.png
+scripts/_*.broken.*

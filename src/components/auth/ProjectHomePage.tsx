@@ -7,7 +7,10 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth-context';
 import { useLeavePagePrompt } from '@/lib/leave-page-prompt-context';
 import { useApp } from '@/lib/app-context';
-import { GP_FILE_EXTENSION, readGpProjectFromFile } from '@/lib/project-file';
+import { GP_FILE_EXTENSION } from '@/lib/project-file';
+import { openProjectFromFile } from '@/lib/open-project';
+import { useOptionalAppBusy } from '@/lib/app-busy-context';
+import { startSoftProgress } from '@/lib/busy-progress';
 import { toast } from 'sonner';
 import { AiProjectWizard } from '@/components/ai/AiProjectWizard';
 
@@ -19,6 +22,7 @@ export function ProjectHomePage({ onEnterEditor }: ProjectHomePageProps) {
   const { session, logout } = useAuth();
   const { promptLeave } = useLeavePagePrompt();
   const app = useApp();
+  const { showBusy, updateBusy, hideBusy } = useOptionalAppBusy();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [aiWizardOpen, setAiWizardOpen] = useState(false);
 
@@ -41,13 +45,25 @@ export function ProjectHomePage({ onEnterEditor }: ProjectHomePageProps) {
     event.target.value = '';
     if (!file) return;
 
+    // Same reliable path as File → Open Project: import → sync load → then enter editor.
+    showBusy(`Opening “${file.name}”…`, 8);
+    const stopSoft = startSoftProgress((p) => updateBusy({ progress: p }), {
+      start: 8,
+      cap: 88,
+      stepMs: 90,
+      step: 6,
+    });
     try {
-      const project = await readGpProjectFromFile(file);
-      app.loadProjectSnapshot(project);
+      updateBusy({ label: 'Loading project…', progress: 92 });
+      const project = await openProjectFromFile(file, app.loadProjectSnapshot);
+      stopSoft();
       onEnterEditor();
       toast.success(`Opened "${project.projectName}"`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to open project');
+    } finally {
+      stopSoft();
+      hideBusy();
     }
   };
 
